@@ -17,7 +17,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // 2. GCS config
 const storage = new Storage();
-const bucket = storage.bucket("your-bucket-name"); // Replace with your GCS bucket name
+const bucket = storage.bucket("deposition-files"); // Replace with your GCS bucket name
 
 // 3. Protected Upload Endpoint (includes userId)
 router.post(
@@ -58,7 +58,7 @@ router.post(
           data: {
             fileName: originalName,
             fileUrl: publicUrl,
-            userId, // <-- store the userId here
+            userId,
           },
         });
 
