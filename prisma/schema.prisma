@@ -20,12 +20,14 @@ model User {
 }
 
 model File {
-  id        String   @id @default(uuid())
-  fileName  String
-  fileUrl   String
-  createdAt DateTime @default(now())
+  id              String   @id @default(uuid())
+  fileName        String
+  fileUrl         String
+  summaryFileName String?  // New optional field for the summary file name
+  summaryUrl      String?  // New optional field for the summary download URL
+  createdAt       DateTime @default(now())
 
   // Relation to User
-  userId    String?  // The foreign key
-  user      User?    @relation(fields: [userId], references: [id])
+  userId          String?  
+  user            User?    @relation(fields: [userId], references: [id])
 }
