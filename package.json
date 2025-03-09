@@ -15,6 +15,7 @@
   "dependencies": {
     "@google-cloud/storage": "^7.15.2",
     "@prisma/client": "^6.4.1",
+    "@sendgrid/mail": "^8.1.4",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

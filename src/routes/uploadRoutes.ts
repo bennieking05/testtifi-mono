@@ -1,6 +1,6 @@
-// src/routes/upload.ts
+// src/routes/uploadRoutes.ts
 /// <reference path="../types/pdf-parse.d.ts" />
-import express, { Response } from "express";
+import express, { Request, Response } from "express";
 import multer from "multer";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
@@ -9,7 +9,7 @@ import OpenAI from "openai";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 
-interface MulterRequest extends express.Request {
+interface MulterRequest extends Request {
   file?: Express.Multer.File;
   user?: { userId: string; email: string }; // populated by JWT middleware
 }
@@ -22,18 +22,22 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // 2. Google Cloud Storage config
 const storage = new Storage();
-const bucket = storage.bucket("deposition-files"); // Replace with your actual GCS bucket name
+const depositionBucket = storage.bucket("deposition-files"); // Bucket for original files
+const summaryBucket = storage.bucket("deposition-summaries"); // Bucket for summaries
+
+console.log("Using deposition bucket:", depositionBucket.name);
+console.log("Using summary bucket:", summaryBucket.name);
 
 // 3. OpenAI API setup using Chat Completions API
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 4. Protected Upload Endpoint
+// POST /upload — upload a file, generate a summary, and store metadata
 router.post(
   "/upload",
-  authenticateToken, // ensures user is authenticated
-  upload.single("file"), // handle a single file upload
+  authenticateToken,
+  upload.single("file"),
   async (req: MulterRequest, res: Response): Promise<void> => {
     try {
       if (!req.file) {
@@ -41,12 +45,12 @@ router.post(
         return;
       }
 
-      // Get the file details from multer
+      // Get file details from multer
       const fileBuffer = req.file.buffer;
       const originalName = req.file.originalname;
 
-      // --- Step 1: Upload Original File to GCS ---
-      const originalBlob = bucket.file(originalName);
+      // --- Step 1: Upload Original File to Deposition Bucket ---
+      const originalBlob = depositionBucket.file(originalName);
       const originalBlobStream = originalBlob.createWriteStream({
         resumable: false,
       });
@@ -55,24 +59,23 @@ router.post(
         originalBlobStream.on("finish", resolve);
         originalBlobStream.end(fileBuffer);
       });
-      console.log(`Original file ${originalName} uploaded to GCS.`);
-      const originalUrl = `https://storage.googleapis.com/${bucket.name}/${originalBlob.name}`;
+      console.log(
+        `Original file ${originalName} uploaded to ${depositionBucket.name}.`
+      );
+      const originalUrl = `https://storage.googleapis.com/${depositionBucket.name}/${originalBlob.name}`;
 
       // --- Step 2: Extract text from the document ---
       let fileText: string;
       if (originalName.toLowerCase().endsWith(".pdf")) {
-        // Extract text from PDF
         const pdfData = await pdfParse(fileBuffer);
         fileText = pdfData.text;
       } else if (
         originalName.toLowerCase().endsWith(".doc") ||
         originalName.toLowerCase().endsWith(".docx")
       ) {
-        // Extract text from DOC/DOCX using mammoth
         const result = await mammoth.extractRawText({ buffer: fileBuffer });
         fileText = result.value;
       } else {
-        // Fallback to plain text
         fileText = fileBuffer.toString("utf-8");
       }
 
@@ -87,16 +90,15 @@ router.post(
         max_tokens: 150,
       });
 
-      // Safely extract and trim the summary text
       const rawSummary = summaryResponse.choices[0].message?.content;
       const summaryText = rawSummary
         ? rawSummary.trim()
         : "No summary generated.";
       console.log("Summary generated:", summaryText);
 
-      // --- Step 3: Upload the Summary to GCS ---
+      // --- Step 3: Upload the Summary to the Summaries Bucket ---
       const summaryFileName = `summary-${originalName}`;
-      const summaryBlob = bucket.file(summaryFileName);
+      const summaryBlob = summaryBucket.file(summaryFileName);
       const summaryBlobStream = summaryBlob.createWriteStream({
         resumable: false,
         contentType: "text/plain",
@@ -106,10 +108,11 @@ router.post(
         summaryBlobStream.on("finish", resolve);
         summaryBlobStream.end(summaryText);
       });
-      console.log(`Summary file ${summaryFileName} uploaded to GCS.`);
+      console.log(
+        `Summary file ${summaryFileName} uploaded to ${summaryBucket.name}.`
+      );
 
-      // --- Step 4: Generate a Signed URL for the Summary ---
-      // The URL will be valid for 3 days.
+      // --- Step 4: Generate a Signed URL for the Summary (valid for 3 days) ---
       const options = {
         version: "v4" as const,
         action: "read" as const,
@@ -118,12 +121,12 @@ router.post(
       const [summaryUrl] = await summaryBlob.getSignedUrl(options);
 
       // --- Step 5: Store File Metadata in Database ---
-      const userId = req.user?.userId; // from JWT
+      const userId = req.user?.userId;
       const savedFile = await prisma.file.create({
         data: {
           fileName: originalName,
           fileUrl: originalUrl,
-          summaryFileName: summaryFileName, // optional
+          summaryFileName: summaryFileName,
           summaryUrl: summaryUrl,
           userId,
         },
@@ -138,6 +141,40 @@ router.post(
       });
     } catch (err) {
       console.error("Upload route error:", err);
+      res.status(500).json({ error: "Something went wrong" });
+    }
+  }
+);
+
+// GET /summaries — return all summaries for the logged-in user
+router.get(
+  "/summaries",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).user?.userId;
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      // Retrieve file records that have a summary for this user
+      const summaries = await prisma.file.findMany({
+        where: {
+          userId,
+          summaryUrl: { not: null },
+        },
+        select: {
+          id: true,
+          fileName: true,
+          fileUrl: true,
+          summaryFileName: true,
+          summaryUrl: true,
+          createdAt: true,
+        },
+      });
+      res.json(summaries);
+    } catch (err) {
+      console.error("Error fetching summaries:", err);
       res.status(500).json({ error: "Something went wrong" });
     }
   }
