@@ -8,8 +8,8 @@ datasource db {
 }
 
 model User {
-  id             String  @id @default(uuid())
-  email          String  @unique
+  id             String   @id @default(uuid())
+  email          String   @unique
   password       String
   name           String
   createdAt      DateTime @default(now())
@@ -24,10 +24,10 @@ model File {
   fileName        String
   fileUrl         String
   summaryFileName String?  // New optional field for the summary file name
-  summaryUrl      String?  // New optional field for the summary download URL
+  summaryUrl      String?  @db.Text // New optional field for the summary download URL, using TEXT type
   createdAt       DateTime @default(now())
 
   // Relation to User
-  userId          String?  
+  userId          String?
   user            User?    @relation(fields: [userId], references: [id])
 }

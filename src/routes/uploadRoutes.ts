@@ -1,11 +1,13 @@
 // src/routes/upload.ts
-
+/// <reference path="../types/pdf-parse.d.ts" />
 import express, { Response } from "express";
 import multer from "multer";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import OpenAI from "openai";
+import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
 
 interface MulterRequest extends express.Request {
   file?: Express.Multer.File;
@@ -22,7 +24,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const storage = new Storage();
 const bucket = storage.bucket("deposition-files"); // Replace with your actual GCS bucket name
 
-// 3. OpenAI API setup
+// 3. OpenAI API setup using Chat Completions API
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -56,19 +58,40 @@ router.post(
       console.log(`Original file ${originalName} uploaded to GCS.`);
       const originalUrl = `https://storage.googleapis.com/${bucket.name}/${originalBlob.name}`;
 
-      // --- Step 2: Summarize the Document using OpenAI ---
-      // Here we assume the file content is plain text.
-      // For PDFs or DOC/DOCX files, you’ll need to extract text before summarizing.
-      const fileText = fileBuffer.toString("utf-8");
+      // --- Step 2: Extract text from the document ---
+      let fileText: string;
+      if (originalName.toLowerCase().endsWith(".pdf")) {
+        // Extract text from PDF
+        const pdfData = await pdfParse(fileBuffer);
+        fileText = pdfData.text;
+      } else if (
+        originalName.toLowerCase().endsWith(".doc") ||
+        originalName.toLowerCase().endsWith(".docx")
+      ) {
+        // Extract text from DOC/DOCX using mammoth
+        const result = await mammoth.extractRawText({ buffer: fileBuffer });
+        fileText = result.value;
+      } else {
+        // Fallback to plain text
+        fileText = fileBuffer.toString("utf-8");
+      }
+
       const prompt = `Summarize the following deposition text in a concise manner:\n\n${fileText}`;
 
-      const summaryResponse = await openai.completions.create({
-        model: "text-davinci-003",
-        prompt,
+      const summaryResponse = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          { role: "system", content: "You are a helpful summarizer." },
+          { role: "user", content: prompt },
+        ],
         max_tokens: 150,
       });
-      const summaryText =
-        summaryResponse.choices[0].text?.trim() || "No summary generated.";
+
+      // Safely extract and trim the summary text
+      const rawSummary = summaryResponse.choices[0].message?.content;
+      const summaryText = rawSummary
+        ? rawSummary.trim()
+        : "No summary generated.";
       console.log("Summary generated:", summaryText);
 
       // --- Step 3: Upload the Summary to GCS ---

@@ -40,6 +40,6 @@
     "noImplicitReturns": true, // Ensure all code paths return values
     "noFallthroughCasesInSwitch": true // Prevent fallthrough in switch statements
   },
-  "include": ["src"], // Include only the `src` directory
+  "include": ["src", "src/types"], // Include `src` and `src/types` folders
   "exclude": ["node_modules", "dist"] // Exclude `node_modules` and `dist` folders
 }
