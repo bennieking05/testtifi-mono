@@ -50,13 +50,19 @@ export const login = async (
       return;
     }
 
-    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, {
-      expiresIn: "1h",
-    });
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, credits: user.credits },
+      JWT_SECRET,
+      {
+        expiresIn: "1h",
+      }
+    );
 
     res.json({
       token,
       userName: user.name || user.email,
+      email: user.email,
+      credits: user.credits,
     });
   } catch (error) {
     next(error);
