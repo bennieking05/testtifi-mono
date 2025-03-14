@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: default
+spec:
+  selector:
+    app: backend
+  ports:
+    - protocol: TCP
+      port: 80 # External port
+      targetPort: 4000 # Internal port the backend application is listening on
+  type: ClusterIP

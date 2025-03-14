@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        # 1) Cloud SQL Proxy sidecar
+        - name: cloud-sql-proxy
+          image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
+          command:
+            - "/cloud_sql_proxy"
+            - "-instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306"
+            # ^ Replace with your actual instance name, for example:
+            # <PROJECT_ID>:<REGION>:<INSTANCE_NAME>=tcp:3306
+            - "-credential_file=/secrets/cloudsql/credentials.json"
+          volumeMounts:
+            - name: cloudsql-instance-credentials
+              mountPath: /secrets/cloudsql
+              readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+        # 2) Main backend container
+        - name: backend
+          image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          env:
+            - name: NODE_ENV
+              value: production
+
+            # This references the secret's DATABASE_URL key
+            # which should look like:
+            # mysql://system:<PASSWORD>@127.0.0.1:3306/deposition_ai
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DATABASE_URL
+
+            # Optional: If you also store DB_HOST/DB_USER/DB_PASSWORD/DB_NAME separately
+            - name: DB_HOST
+              value: "127.0.0.1"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DB_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DB_NAME
+
+            # Other environment variables
+            - name: SENDGRID_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: SENDGRID_API_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: OPENAI_API_KEY
+            - name: BREVO_SENDER_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: EMAIL_USER
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: JWT_SECRET
+            - name: BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: BASE_URL
+            - name: BACKEND_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: BACKEND_URL
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+      volumes:
+        - name: cloudsql-instance-credentials
+          secret:
+            secretName: your-cloudsql-credentials

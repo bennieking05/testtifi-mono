@@ -1,0 +1,45 @@
+steps:
+  # Step 1: Build the Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+      - "."
+
+  # Step 2: Push the image to GCR
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+
+  # Step 3: Authenticate and deploy to GKE
+  - name: "gcr.io/cloud-builders/gke-deploy"
+    args:
+      - "run"
+      - "--filename=backend-deployment.yaml"
+      - "--image=gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+      - "--location=us-central1-c"
+      - "--cluster=testifi"
+
+  # Step 4: Update the Kubernetes deployment to use the new image
+  - name: "gcr.io/cloud-builders/kubectl"
+    args:
+      - "set"
+      - "image"
+      - "deployment/backend"
+      - "backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+    env:
+      - "CLOUDSDK_COMPUTE_ZONE=us-central1-c"
+      - "CLOUDSDK_CONTAINER_CLUSTER=testifi"
+
+substitutions:
+  _DB_HOST: "127.0.0.1" # Cloud SQL Proxy runs on localhost
+
+images:
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+serviceAccount: "748916208557-compute@developer.gserviceaccount.com"

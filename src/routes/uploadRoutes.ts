@@ -97,7 +97,9 @@ router.post(
       console.log("Summary generated:", summaryText);
 
       // --- Step 3: Upload the Summary to the Summaries Bucket ---
-      const summaryFileName = `summary-${originalName}`;
+      // Sanitize the file name to remove spaces
+      const safeName = originalName.replace(/\s+/g, "-");
+      const summaryFileName = `summary-${safeName}`;
       const summaryBlob = summaryBucket.file(summaryFileName);
       const summaryBlobStream = summaryBlob.createWriteStream({
         resumable: false,
@@ -116,9 +118,10 @@ router.post(
       const options = {
         version: "v4" as const,
         action: "read" as const,
-        expires: Date.now() + 3 * 24 * 60 * 60 * 1000, // 3 days in milliseconds
+        expires: Date.now() + 3 * 24 * 60 * 60 * 1000,
       };
       const [summaryUrl] = await summaryBlob.getSignedUrl(options);
+      console.log("Generated summary URL:", summaryUrl);
 
       // --- Step 5: Store File Metadata in Database ---
       const userId = req.user?.userId;
@@ -157,7 +160,6 @@ router.get(
         res.status(401).json({ error: "Unauthorized" });
         return;
       }
-      // Retrieve file records that have a summary for this user
       const summaries = await prisma.file.findMany({
         where: {
           userId,
