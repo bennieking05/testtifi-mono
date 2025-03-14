@@ -46,3 +46,9 @@ model Purchase {
   amount     Float
   createdAt  DateTime @default(now())
 }
+
+model Email {
+  id      Int    @id @default(autoincrement())
+  subject String
+  body    String
+}

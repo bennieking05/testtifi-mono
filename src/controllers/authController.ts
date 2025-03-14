@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
-import sgMail from "@sendgrid/mail";
+import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -13,12 +13,33 @@ const JWT_SECRET = process.env.JWT_SECRET as string;
 sgMail.setApiKey(process.env.SENDGRID_API_KEY as string);
 const senderEmail: string = process.env.EMAIL_USER || "admin@thenexgen.ai";
 
-// Register User
+/**
+ * A helper function to send an email via SendGrid.
+ */
+async function sendEmail(
+  to: string,
+  subject: string,
+  text: string,
+  html: string
+) {
+  const msg: MailDataRequired = {
+    to,
+    from: senderEmail,
+    subject,
+    text,
+    html,
+  };
+
+  await sgMail.send(msg);
+  console.log(`Email sent to ${to} with subject "${subject}"`);
+}
+
+// **Register User**
 export const register = async (
   req: Request,
   res: Response,
   next: NextFunction
-): Promise<void> => {
+) => {
   try {
     const { email, password, name } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -26,6 +47,21 @@ export const register = async (
     const user = await prisma.user.create({
       data: { email, password: hashedPassword, name },
     });
+
+    // Fetch the registration email template
+    const registrationEmail = await prisma.email.findUnique({
+      where: { id: 1 }, // Replace with a valid unique identifier
+    });
+
+    // Send email if a template exists
+    if (registrationEmail) {
+      await sendEmail(
+        user.email,
+        registrationEmail.subject,
+        "Welcome to Testifi-A! Your journey starts here.",
+        registrationEmail.body
+      );
+    }
 
     res
       .status(201)
@@ -35,7 +71,7 @@ export const register = async (
   }
 };
 
-// Login User
+// **Login User**
 export const login = async (
   req: Request,
   res: Response,
@@ -53,9 +89,7 @@ export const login = async (
     const token = jwt.sign(
       { userId: user.id, email: user.email, credits: user.credits },
       JWT_SECRET,
-      {
-        expiresIn: "1h",
-      }
+      { expiresIn: "1h" }
     );
 
     res.json({
@@ -69,7 +103,7 @@ export const login = async (
   }
 };
 
-// Forgot Password using SendGrid
+// **Forgot Password using SendGrid**
 export const forgotPassword = async (
   req: Request,
   res: Response,
@@ -94,15 +128,13 @@ export const forgotPassword = async (
 
     const baseUrl = process.env.BASE_URL || "http://localhost:3000";
     const resetLink = `${baseUrl}/reset-password/${resetToken}`;
-    const msg = {
-      to: email,
-      from: senderEmail,
-      subject: "Password Reset",
-      text: `Click the link to reset your password: ${resetLink}`,
-      html: `<p>Click <a href="${resetLink}">here</a> to reset your password</p>`,
-    };
 
-    await sgMail.send(msg);
+    await sendEmail(
+      email,
+      "Password Reset",
+      `Click the link to reset your password: ${resetLink}`,
+      `<p>Click <a href="${resetLink}">here</a> to reset your password</p>`
+    );
 
     res.json({ message: "Password reset link sent to email" });
   } catch (error) {
@@ -110,14 +142,13 @@ export const forgotPassword = async (
   }
 };
 
-// New Endpoint: Get Reset Email (using a path parameter)
+// **Get Reset Email (using a path parameter)**
 export const getResetEmail = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
-    // Unwrap token if it comes as an array
     let token = req.query.token;
     if (Array.isArray(token)) {
       token = token[0];
@@ -139,7 +170,8 @@ export const getResetEmail = async (
     next(error);
   }
 };
-// Reset Password
+
+// **Reset Password**
 export const resetPassword = async (
   req: Request,
   res: Response,
