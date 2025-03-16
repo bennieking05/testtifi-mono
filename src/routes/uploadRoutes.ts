@@ -11,45 +11,78 @@ import mammoth from "mammoth";
 
 interface MulterRequest extends Request {
   file?: Express.Multer.File;
-  user?: { userId: string; email: string }; // populated by JWT middleware
+  user?: { userId: string; email: string }; // from JWT
 }
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// 1. Multer setup for file parsing (in-memory storage)
+// Multer setup
 const upload = multer({ storage: multer.memoryStorage() });
 
-// 2. Google Cloud Storage config
+// GCS config
 const storage = new Storage();
-const depositionBucket = storage.bucket("deposition-files"); // Bucket for original files
-const summaryBucket = storage.bucket("deposition-summaries"); // Bucket for summaries
+const depositionBucket = storage.bucket("deposition-files");
+const summaryBucket = storage.bucket("deposition-summaries");
 
 console.log("Using deposition bucket:", depositionBucket.name);
 console.log("Using summary bucket:", summaryBucket.name);
 
-// 3. OpenAI API setup using Chat Completions API
+// OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// POST /upload — upload a file, generate a summary, and store metadata
+// POST /upload
 router.post(
   "/upload",
   authenticateToken,
   upload.single("file"),
   async (req: MulterRequest, res: Response): Promise<void> => {
     try {
+      // 1) Check if file is provided
       if (!req.file) {
         res.status(400).json({ error: "No file uploaded" });
         return;
       }
 
-      // Get file details from multer
+      // 2) Identify user from token
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      // 3) Fetch user from DB
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+
+      // 4) Check if user has credits
+      if (user.credits < 1) {
+        // Instead of `return res.status(...)`:
+        res.status(403).json({
+          error: "Not enough credits",
+          redirectTo: "/dashboard/checkout/packages",
+        });
+        return; // Return void here
+      }
+
+      // 5) Subtract 1 credit
+      await prisma.user.update({
+        where: { id: userId },
+        data: { credits: user.credits - 1 },
+      });
+
+      // ---- Proceed with your existing logic ----
+
+      // Get file details
       const fileBuffer = req.file.buffer;
       const originalName = req.file.originalname;
 
-      // --- Step 1: Upload Original File to Deposition Bucket ---
+      // 5A) Upload original file to GCS
       const originalBlob = depositionBucket.file(originalName);
       const originalBlobStream = originalBlob.createWriteStream({
         resumable: false,
@@ -64,7 +97,7 @@ router.post(
       );
       const originalUrl = `https://storage.googleapis.com/${depositionBucket.name}/${originalBlob.name}`;
 
-      // --- Step 2: Extract text from the document ---
+      // 5B) Extract text from doc
       let fileText: string;
       if (originalName.toLowerCase().endsWith(".pdf")) {
         const pdfData = await pdfParse(fileBuffer);
@@ -79,8 +112,8 @@ router.post(
         fileText = fileBuffer.toString("utf-8");
       }
 
-      const prompt = `Summarize the following deposition text in a concise manner:\n\n${fileText}`;
-
+      // 5C) Summarize with OpenAI
+      const prompt = `Summarize the following deposition text:\n\n${fileText}`;
       const summaryResponse = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
         messages: [
@@ -89,15 +122,14 @@ router.post(
         ],
         max_tokens: 150,
       });
-
       const rawSummary = summaryResponse.choices[0].message?.content;
       const summaryText = rawSummary
         ? rawSummary.trim()
         : "No summary generated.";
+
       console.log("Summary generated:", summaryText);
 
-      // --- Step 3: Upload the Summary to the Summaries Bucket ---
-      // Sanitize the file name to remove spaces
+      // 5D) Upload summary to GCS
       const safeName = originalName.replace(/\s+/g, "-");
       const summaryFileName = `summary-${safeName}`;
       const summaryBlob = summaryBucket.file(summaryFileName);
@@ -114,27 +146,26 @@ router.post(
         `Summary file ${summaryFileName} uploaded to ${summaryBucket.name}.`
       );
 
-      // --- Step 4: Generate a Signed URL for the Summary (valid for 3 days) ---
+      // 5E) Generate a Signed URL for the Summary (3 days)
       const options = {
         version: "v4" as const,
         action: "read" as const,
         expires: Date.now() + 3 * 24 * 60 * 60 * 1000,
       };
       const [summaryUrl] = await summaryBlob.getSignedUrl(options);
-      console.log("Generated summary URL:", summaryUrl);
 
-      // --- Step 5: Store File Metadata in Database ---
-      const userId = req.user?.userId;
+      // 5F) Store file record in DB
       const savedFile = await prisma.file.create({
         data: {
           fileName: originalName,
           fileUrl: originalUrl,
-          summaryFileName: summaryFileName,
-          summaryUrl: summaryUrl,
+          summaryFileName,
+          summaryUrl,
           userId,
         },
       });
 
+      // 6) Return success
       res.json({
         message: "File uploaded and summarized successfully",
         fileName: savedFile.fileName,
@@ -149,7 +180,7 @@ router.post(
   }
 );
 
-// GET /summaries — return all summaries for the logged-in user
+// GET /summaries
 router.get(
   "/summaries",
   authenticateToken,
