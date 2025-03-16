@@ -1,5 +1,4 @@
 // src/routes/uploadRoutes.ts
-/// <reference path="../types/pdf-parse.d.ts" />
 import express, { Request, Response } from "express";
 import multer from "multer";
 import { Storage } from "@google-cloud/storage";
@@ -11,13 +10,13 @@ import mammoth from "mammoth";
 
 interface MulterRequest extends Request {
   file?: Express.Multer.File;
-  user?: { userId: string; email: string }; // from JWT
+  user?: { userId: string; email: string };
 }
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Multer setup
+// Multer in-memory
 const upload = multer({ storage: multer.memoryStorage() });
 
 // GCS config
@@ -33,6 +32,57 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Helper to chunk text for large docs
+function splitIntoChunks(text: string, chunkSizeChars = 4000): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const end = Math.min(start + chunkSizeChars, text.length);
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
+async function summarizeChunk(chunk: string): Promise<string> {
+  const prompt = `Summarize the following text:\n\n${chunk}`;
+  try {
+    const resp = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "You are a helpful summarizer." },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: 700,
+    });
+    const raw = resp.choices[0].message?.content;
+    return raw ? raw.trim() : "";
+  } catch (err) {
+    console.error("Chunk summarization error:", err);
+    return "";
+  }
+}
+
+async function summarizeAll(partials: string[]): Promise<string> {
+  const joined = partials.join("\n\n");
+  const prompt = `Combine and summarize these partial summaries:\n\n${joined}`;
+  try {
+    const resp = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "You are a helpful summarizer." },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: 700,
+    });
+    const raw = resp.choices[0].message?.content;
+    return raw ? raw.trim() : "No final summary generated.";
+  } catch (err) {
+    console.error("Final summary error:", err);
+    return partials.join("\n\n");
+  }
+}
+
 // POST /upload
 router.post(
   "/upload",
@@ -40,49 +90,42 @@ router.post(
   upload.single("file"),
   async (req: MulterRequest, res: Response): Promise<void> => {
     try {
-      // 1) Check if file is provided
       if (!req.file) {
         res.status(400).json({ error: "No file uploaded" });
         return;
       }
 
-      // 2) Identify user from token
       const userId = req.user?.userId;
       if (!userId) {
         res.status(401).json({ error: "Unauthorized" });
         return;
       }
 
-      // 3) Fetch user from DB
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user) {
         res.status(404).json({ error: "User not found" });
         return;
       }
 
-      // 4) Check if user has credits
+      // Check credits
       if (user.credits < 1) {
-        // Instead of `return res.status(...)`:
         res.status(403).json({
           error: "Not enough credits",
           redirectTo: "/dashboard/checkout/packages",
         });
-        return; // Return void here
+        return;
       }
 
-      // 5) Subtract 1 credit
+      // Subtract 1 credit
       await prisma.user.update({
         where: { id: userId },
         data: { credits: user.credits - 1 },
       });
 
-      // ---- Proceed with your existing logic ----
-
-      // Get file details
+      // Upload original file to GCS
       const fileBuffer = req.file.buffer;
       const originalName = req.file.originalname;
 
-      // 5A) Upload original file to GCS
       const originalBlob = depositionBucket.file(originalName);
       const originalBlobStream = originalBlob.createWriteStream({
         resumable: false,
@@ -92,12 +135,11 @@ router.post(
         originalBlobStream.on("finish", resolve);
         originalBlobStream.end(fileBuffer);
       });
-      console.log(
-        `Original file ${originalName} uploaded to ${depositionBucket.name}.`
-      );
+      console.log(`Original file ${originalName} uploaded.`);
+
       const originalUrl = `https://storage.googleapis.com/${depositionBucket.name}/${originalBlob.name}`;
 
-      // 5B) Extract text from doc
+      // Extract text
       let fileText: string;
       if (originalName.toLowerCase().endsWith(".pdf")) {
         const pdfData = await pdfParse(fileBuffer);
@@ -112,24 +154,44 @@ router.post(
         fileText = fileBuffer.toString("utf-8");
       }
 
-      // 5C) Summarize with OpenAI
-      const prompt = `Summarize the following deposition text:\n\n${fileText}`;
-      const summaryResponse = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          { role: "system", content: "You are a helpful summarizer." },
-          { role: "user", content: prompt },
-        ],
-        max_tokens: 150,
-      });
-      const rawSummary = summaryResponse.choices[0].message?.content;
-      const summaryText = rawSummary
-        ? rawSummary.trim()
-        : "No summary generated.";
+      if (!fileText || fileText.trim().length === 0) {
+        fileText = "No text extracted. Possibly a scanned doc.";
+      }
 
-      console.log("Summary generated:", summaryText);
+      // Summarize with chunking
+      let finalSummary = "";
+      if (fileText.length < 14000) {
+        // single chunk
+        try {
+          const prompt = `Summarize the following deposition text:\n\n${fileText}`;
+          const summaryResp = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+              { role: "system", content: "You are a helpful summarizer." },
+              { role: "user", content: prompt },
+            ],
+            max_tokens: 700,
+          });
+          const raw = summaryResp.choices[0].message?.content;
+          finalSummary = raw ? raw.trim() : "No summary generated.";
+        } catch (err) {
+          console.error("Single-chunk error:", err);
+          finalSummary = "Failed to summarize. Possibly too large or error.";
+        }
+      } else {
+        // chunk approach
+        const chunks = splitIntoChunks(fileText, 3000);
+        const partials: string[] = [];
+        for (let i = 0; i < chunks.length; i++) {
+          const csum = await summarizeChunk(chunks[i]);
+          partials.push(csum);
+        }
+        finalSummary = await summarizeAll(partials);
+      }
 
-      // 5D) Upload summary to GCS
+      console.log("Final summary generated:", finalSummary);
+
+      // Upload summary as text
       const safeName = originalName.replace(/\s+/g, "-");
       const summaryFileName = `summary-${safeName}`;
       const summaryBlob = summaryBucket.file(summaryFileName);
@@ -140,21 +202,18 @@ router.post(
       await new Promise<void>((resolve, reject) => {
         summaryBlobStream.on("error", reject);
         summaryBlobStream.on("finish", resolve);
-        summaryBlobStream.end(summaryText);
+        summaryBlobStream.end(finalSummary);
       });
-      console.log(
-        `Summary file ${summaryFileName} uploaded to ${summaryBucket.name}.`
-      );
+      console.log(`Summary file ${summaryFileName} uploaded.`);
 
-      // 5E) Generate a Signed URL for the Summary (3 days)
-      const options = {
-        version: "v4" as const,
-        action: "read" as const,
+      // Signed URL for raw text
+      const [summaryUrl] = await summaryBlob.getSignedUrl({
+        version: "v4",
+        action: "read",
         expires: Date.now() + 3 * 24 * 60 * 60 * 1000,
-      };
-      const [summaryUrl] = await summaryBlob.getSignedUrl(options);
+      });
 
-      // 5F) Store file record in DB
+      // Save DB record
       const savedFile = await prisma.file.create({
         data: {
           fileName: originalName,
@@ -165,7 +224,6 @@ router.post(
         },
       });
 
-      // 6) Return success
       res.json({
         message: "File uploaded and summarized successfully",
         fileName: savedFile.fileName,
