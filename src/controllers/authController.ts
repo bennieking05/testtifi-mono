@@ -58,7 +58,7 @@ export const register = async (
       await sendEmail(
         user.email,
         registrationEmail.subject,
-        "Welcome to Testifi-A! Your journey starts here.",
+        "Welcome to Testifi-AI! Your journey starts here.",
         registrationEmail.body
       );
     }
