@@ -1,15 +1,13 @@
-// src/routes/downloadRoutes.ts
 import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
-import PDFDocument from "pdfkit"; // npm install pdfkit @types/pdfkit
-import { Document, Packer, Paragraph } from "docx"; // npm install docx
-import fetch from "node-fetch"; // npm install node-fetch
+import PDFDocument from "pdfkit";
+import { Document, Packer, Paragraph } from "docx";
+import fetch from "node-fetch";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// GET /api/summaries/download?fileId=xxx&format=pdf|docx|txt
 router.get(
   "/download",
   authenticateToken,
@@ -24,7 +22,6 @@ router.get(
         return;
       }
 
-      // 1) Find the file in DB
       const fileRecord = await prisma.file.findUnique({
         where: { id: fileId },
       });
@@ -39,7 +36,6 @@ router.get(
         return;
       }
 
-      // 2) Retrieve the raw text from GCS (the .txt you stored)
       const rawSummaryResp = await fetch(summaryUrl);
       if (!rawSummaryResp.ok) {
         res
@@ -49,9 +45,7 @@ router.get(
       }
       const rawSummary = await rawSummaryResp.text();
 
-      // 3) Convert based on 'format'
       if (format === "txt") {
-        // Send plain text
         res.setHeader("Content-Type", "text/plain");
         res.setHeader(
           "Content-Disposition",
@@ -62,7 +56,6 @@ router.get(
       }
 
       if (format === "pdf") {
-        // Generate PDF with pdfkit
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader(
           "Content-Disposition",
@@ -77,13 +70,8 @@ router.get(
       }
 
       if (format === "docx") {
-        // Generate DOCX with docx
         const doc = new Document({
-          sections: [
-            {
-              children: [new Paragraph(rawSummary)],
-            },
-          ],
+          sections: [{ children: [new Paragraph(rawSummary)] }],
         });
 
         const buffer = await Packer.toBuffer(doc);
@@ -100,13 +88,10 @@ router.get(
         return;
       }
 
-      // Otherwise, invalid format
       res.status(400).json({ error: "Invalid format" });
-      return;
     } catch (error) {
       console.error("Download error:", error);
       res.status(500).json({ error: "Something went wrong" });
-      return;
     }
   }
 );
