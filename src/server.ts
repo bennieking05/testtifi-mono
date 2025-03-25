@@ -5,6 +5,7 @@ import authRoutes from "./routes/authRoutes";
 import uploadRoutes from "./routes/uploadRoutes";
 import purchaseRoutes from "./routes/purchaseRoutes";
 import downloadRoutes from "./routes/downloadRoutes";
+import userRoutes from "./routes/userRoutes";
 
 dotenv.config();
 const app = express();
@@ -21,5 +22,6 @@ app.use("/api/auth", authRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api/purchase", purchaseRoutes);
 app.use("/api/summaries", downloadRoutes);
+app.use("/api/user", userRoutes);
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
