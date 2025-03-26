@@ -239,7 +239,6 @@ router.post(
 );
 
 // GET /summaries
-// GET /summaries
 router.get(
   "/summaries",
   authenticateToken,
@@ -266,12 +265,11 @@ router.get(
         },
       });
 
-      // Compute status based on creation date
+      // Compute status based on creation date (active if within 3 days)
       const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
       const now = Date.now();
       const enhancedSummaries = summaries.map((file) => {
         const fileTime = new Date(file.createdAt).getTime();
-        // If the file was created within the last 3 days, status is "Active", otherwise "Expired"
         const status = now - fileTime <= threeDaysMs ? "Active" : "Expired";
         return { ...file, status };
       });
@@ -283,4 +281,5 @@ router.get(
     }
   }
 );
+
 export default router;
