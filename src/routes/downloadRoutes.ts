@@ -22,7 +22,7 @@ router.get(
         return;
       }
 
-      // Retrieve the file record (if your summary is stored in a file record)
+      // Retrieve the file record
       const fileRecord = await prisma.file.findUnique({
         where: { id: fileId },
       });
@@ -31,9 +31,22 @@ router.get(
         return;
       }
 
+      // Check if the file was created within the last 3 days
+      const fileCreatedAt = new Date(fileRecord.createdAt);
+      const now = new Date();
+      const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+      if (now.getTime() - fileCreatedAt.getTime() > threeDaysMs) {
+        res
+          .status(400)
+          .json({
+            error:
+              "File is older than 3 days and is no longer available for download",
+          });
+        return;
+      }
+
       // Check the authenticated user's credits.
-      // The auth middleware attaches the decoded token to req.user.
-      const userId = (req as any).user?.userId; // cast req to any or extend the Request type
+      const userId = (req as any).user?.userId;
       const user = await prisma.user.findUnique({
         where: { id: userId },
       });
@@ -42,7 +55,7 @@ router.get(
         return;
       }
 
-      const requiredCredits = 1; // For example, one credit per summary download.
+      const requiredCredits = 1; // One credit per download
       if (user.credits < requiredCredits) {
         res.status(400).json({ error: "Insufficient credits" });
         return;
@@ -60,7 +73,7 @@ router.get(
         return;
       }
 
-      // Continue with fetching the summary text...
+      // Fetch the summary text from the storage URL
       const nodeFetch = await import("node-fetch").then(
         ({ default: nodeFetch }) => nodeFetch
       );
@@ -68,12 +81,24 @@ router.get(
       if (!rawSummaryResp.ok) {
         res
           .status(500)
-          .json({ error: "Unable to fetch summary text from GCS" });
+          .json({ error: "Unable to fetch summary text from storage" });
         return;
       }
       const rawSummary = await rawSummaryResp.text();
 
-      // Respond based on requested format
+      // If pages haven't been counted yet, estimate and update the file record.
+      let estimatedPages = fileRecord.pages;
+      if (!estimatedPages) {
+        // Simple estimation: assume ~300 words per page.
+        const words = rawSummary.split(/\s+/).length;
+        estimatedPages = Math.ceil(words / 300);
+        await prisma.file.update({
+          where: { id: fileId },
+          data: { pages: estimatedPages },
+        });
+      }
+
+      // Respond based on the requested format
       if (format === "txt") {
         res.setHeader("Content-Type", "text/plain");
         res.setHeader(

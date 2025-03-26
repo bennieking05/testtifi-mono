@@ -239,6 +239,7 @@ router.post(
 );
 
 // GET /summaries
+// GET /summaries
 router.get(
   "/summaries",
   authenticateToken,
@@ -261,14 +262,25 @@ router.get(
           summaryFileName: true,
           summaryUrl: true,
           createdAt: true,
+          pages: true,
         },
       });
-      res.json(summaries);
+
+      // Compute status based on creation date
+      const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const enhancedSummaries = summaries.map((file) => {
+        const fileTime = new Date(file.createdAt).getTime();
+        // If the file was created within the last 3 days, status is "Active", otherwise "Expired"
+        const status = now - fileTime <= threeDaysMs ? "Active" : "Expired";
+        return { ...file, status };
+      });
+
+      res.json(enhancedSummaries);
     } catch (err) {
       console.error("Error fetching summaries:", err);
       res.status(500).json({ error: "Something went wrong" });
     }
   }
 );
-
 export default router;

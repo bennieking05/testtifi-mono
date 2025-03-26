@@ -9,19 +9,17 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
-
 model User {
   id             String   @id @default(uuid())
   email          String   @unique
   password       String
   name           String
-  credits        Int      @default(0) 
+  credits        Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   resetToken     String?
   resetTokenExp  DateTime?
-  files          File[]   
+  files          File[]
   purchases      Purchase[]
 }
 
@@ -31,6 +29,7 @@ model File {
   fileUrl         String
   summaryFileName String?  // New optional field for the summary file name
   summaryUrl      String?  @db.Text // New optional field for the summary download URL, using TEXT type
+  pages           Int?     @default(0) // New optional field for the page count
   createdAt       DateTime @default(now())
 
   // Relation to User
@@ -50,5 +49,5 @@ model Purchase {
 model Email {
   id      Int    @id @default(autoincrement())
   subject String
-  body    String
+  body    String @db.VarChar(10000)
 }
