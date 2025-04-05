@@ -34,14 +34,12 @@ router.get(
       // Check if the file was created within the last 3 days
       const fileCreatedAt = new Date(fileRecord.createdAt);
       const now = new Date();
-      const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+      const threeDaysMs = 3 * 24 * 60 * 60 * 1;
       if (now.getTime() - fileCreatedAt.getTime() > threeDaysMs) {
-        res
-          .status(400)
-          .json({
-            error:
-              "File is older than 3 days and is no longer available for download",
-          });
+        res.status(400).json({
+          error:
+            "File is older than 3 days and is no longer available for download",
+        });
         return;
       }
 

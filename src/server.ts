@@ -18,6 +18,12 @@ app.get("/health", (_req, res) => {
 app.use(cors());
 app.use(express.json());
 
+// Middleware to log every incoming API call
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api/purchase", purchaseRoutes);

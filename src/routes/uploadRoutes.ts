@@ -1,12 +1,13 @@
-// src/routes/uploadRoutes.ts
 import express, { Request, Response } from "express";
 import multer from "multer";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
-import OpenAI from "openai";
+// Removed the OpenAI import since we're using Azure OpenAI via axios
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
+import axios from "axios";
+import { encode } from "gpt-3-encoder"; // Import gpt-3-encoder for token counting
 
 interface MulterRequest extends Request {
   file?: Express.Multer.File;
@@ -15,6 +16,12 @@ interface MulterRequest extends Request {
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Logging middleware: logs every incoming request
+router.use((req: Request, _res: Response, next: Function) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
 
 // Multer in-memory
 const upload = multer({ storage: multer.memoryStorage() });
@@ -27,13 +34,51 @@ const summaryBucket = storage.bucket("deposition-summaries");
 console.log("Using deposition bucket:", depositionBucket.name);
 console.log("Using summary bucket:", summaryBucket.name);
 
-// OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Azure OpenAI Custom Request Function with retry logic
+async function azureChatCompletion(
+  messages: { role: string; content: string }[],
+  max_tokens: number,
+  retries = 3
+): Promise<any> {
+  const endpoint = `${process.env.AZURE_OPENAI_ENDPOINT}/openai/deployments/${process.env.AZURE_OPENAI_DEPLOYMENT_NAME}/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
+  const payload = {
+    messages,
+    max_tokens,
+    temperature: 0.3,
+  };
+  const headers = {
+    "Content-Type": "application/json",
+    "api-key": process.env.AZURE_OPENAI_API_KEY,
+  };
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const response = await axios.post(endpoint, payload, { headers });
+      return response.data;
+    } catch (err: any) {
+      if (err.response && err.response.status === 429) {
+        const retryAfter = parseInt(
+          err.response.headers["retry-after"] || "5",
+          10
+        );
+        console.warn(
+          `Rate limited. Retrying after ${retryAfter} seconds... (attempt ${
+            attempt + 1
+          } of ${retries})`
+        );
+        await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+      } else {
+        console.error("Azure OpenAI error:", err);
+        throw err;
+      }
+    }
+  }
+  throw new Error("Failed to complete request after retries.");
+}
 
 // Helper to chunk text for large docs
-function splitIntoChunks(text: string, chunkSizeChars = 4000): string[] {
+function splitIntoChunks(text: string, chunkSizeChars = 1000): string[] {
+  // Reduced chunk size for better token management
   const chunks: string[] = [];
   let start = 0;
   while (start < text.length) {
@@ -46,15 +91,17 @@ function splitIntoChunks(text: string, chunkSizeChars = 4000): string[] {
 
 async function summarizeChunk(chunk: string): Promise<string> {
   const prompt = `Summarize the following text:\n\n${chunk}`;
+  // Log token count using gpt-3-encoder
+  const tokenCount = encode(prompt).length;
+  console.log("Token count for chunk prompt:", tokenCount);
   try {
-    const resp = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
+    const resp = await azureChatCompletion(
+      [
         { role: "system", content: "You are a helpful summarizer." },
         { role: "user", content: prompt },
       ],
-      max_tokens: 700,
-    });
+      700
+    );
     const raw = resp.choices[0].message?.content;
     return raw ? raw.trim() : "";
   } catch (err) {
@@ -66,21 +113,42 @@ async function summarizeChunk(chunk: string): Promise<string> {
 async function summarizeAll(partials: string[]): Promise<string> {
   const joined = partials.join("\n\n");
   const prompt = `Combine and summarize these partial summaries:\n\n${joined}`;
+  // Log token count for combined prompt
+  const tokenCount = encode(prompt).length;
+  console.log("Token count for combined prompt:", tokenCount);
   try {
-    const resp = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
+    const resp = await azureChatCompletion(
+      [
         { role: "system", content: "You are a helpful summarizer." },
         { role: "user", content: prompt },
       ],
-      max_tokens: 700,
-    });
+      700
+    );
     const raw = resp.choices[0].message?.content;
     return raw ? raw.trim() : "No final summary generated.";
   } catch (err) {
     console.error("Final summary error:", err);
     return partials.join("\n\n");
   }
+}
+
+// Optionally, process chunks concurrently with limited concurrency
+async function summarizeChunksConcurrently(
+  chunks: string[]
+): Promise<string[]> {
+  // If you have a strict rate limit (e.g. 1 request per minute), concurrency may be set to 1.
+  // You could increase this number if your quota allows.
+  const concurrencyLimit = 1;
+  const partials: string[] = [];
+  for (let i = 0; i < chunks.length; i += concurrencyLimit) {
+    const batch = chunks.slice(i, i + concurrencyLimit);
+    // Process a batch concurrently:
+    const batchResults = await Promise.all(
+      batch.map((chunk) => summarizeChunk(chunk))
+    );
+    partials.push(...batchResults);
+  }
+  return partials;
 }
 
 // POST /upload
@@ -161,17 +229,19 @@ router.post(
       // Summarize with chunking
       let finalSummary = "";
       if (fileText.length < 14000) {
-        // single chunk
+        // Single chunk summarization
         try {
           const prompt = `Summarize the following deposition text:\n\n${fileText}`;
-          const summaryResp = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [
+          // Log token count for single-chunk prompt
+          const tokenCount = encode(prompt).length;
+          console.log("Token count for single-chunk prompt:", tokenCount);
+          const summaryResp = await azureChatCompletion(
+            [
               { role: "system", content: "You are a helpful summarizer." },
               { role: "user", content: prompt },
             ],
-            max_tokens: 700,
-          });
+            700
+          );
           const raw = summaryResp.choices[0].message?.content;
           finalSummary = raw ? raw.trim() : "No summary generated.";
         } catch (err) {
@@ -179,13 +249,9 @@ router.post(
           finalSummary = "Failed to summarize. Possibly too large or error.";
         }
       } else {
-        // chunk approach
-        const chunks = splitIntoChunks(fileText, 3000);
-        const partials: string[] = [];
-        for (let i = 0; i < chunks.length; i++) {
-          const csum = await summarizeChunk(chunks[i]);
-          partials.push(csum);
-        }
+        // Chunk approach: split text into smaller pieces, process concurrently
+        const chunks = splitIntoChunks(fileText, 1000); // Reduced chunk size for efficiency
+        const partials = await summarizeChunksConcurrently(chunks);
         finalSummary = await summarizeAll(partials);
       }
 

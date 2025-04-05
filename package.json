@@ -21,6 +21,7 @@
     "docx": "^9.3.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "gpt-3-encoder": "^1.1.4",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.9.0",
     "multer": "^1.4.5-lts.1",
