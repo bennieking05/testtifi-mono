@@ -86,14 +86,32 @@ export const login = async (
       return;
     }
 
-    const token = jwt.sign(
+    // Generate access token (expires in 15 minutes)
+    const accessToken = jwt.sign(
       { userId: user.id, email: user.email, credits: user.credits },
       JWT_SECRET,
-      { expiresIn: "1h" }
+      { expiresIn: "15m" }
     );
 
+    // Generate refresh token (expires in 7 days)
+    const refreshToken = jwt.sign(
+      { userId: user.id, email: user.email, credits: user.credits },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // Store the refresh token in the database
+    await prisma.refreshToken.create({
+      data: {
+        token: refreshToken,
+        userId: user.id,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days in ms
+      },
+    });
+
     res.json({
-      token,
+      accessToken,
+      refreshToken,
       userName: user.name || user.email,
       email: user.email,
       credits: user.credits,
@@ -195,6 +213,66 @@ export const resetPassword = async (
     });
 
     res.json({ message: "Password reset successfully" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// **Refresh Token Endpoint**
+export const refreshAccessToken = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    // Expect the refresh token to be sent in the request body
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      res.status(401).json({ error: "Refresh token required" });
+      return;
+    }
+
+    let decoded: {
+      userId: string;
+      email: string;
+      credits: number;
+      exp: number;
+      iat: number;
+    };
+    try {
+      // Synchronously verify the refresh token
+      decoded = jwt.verify(refreshToken, JWT_SECRET) as typeof decoded;
+    } catch (err) {
+      res.status(403).json({ error: "Invalid refresh token" });
+      return;
+    }
+
+    // Check if the refresh token exists in the database and is valid
+    const storedToken = await prisma.refreshToken.findUnique({
+      where: { token: refreshToken },
+    });
+
+    if (
+      !storedToken ||
+      storedToken.revoked ||
+      new Date() > storedToken.expiresAt
+    ) {
+      res.status(403).json({ error: "Refresh token is invalid or expired" });
+      return;
+    }
+
+    // Generate a new access token
+    const newAccessToken = jwt.sign(
+      {
+        userId: decoded.userId,
+        email: decoded.email,
+        credits: decoded.credits,
+      },
+      JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    res.json({ accessToken: newAccessToken });
   } catch (error) {
     next(error);
   }

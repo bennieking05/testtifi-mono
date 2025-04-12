@@ -10,17 +10,18 @@ datasource db {
 }
 
 model User {
-  id             String   @id @default(uuid())
-  email          String   @unique
+  id             String          @id @default(uuid())
+  email          String          @unique
   password       String
   name           String
-  credits        Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  credits        Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
   resetToken     String?
   resetTokenExp  DateTime?
   files          File[]
   purchases      Purchase[]
+  refreshTokens  RefreshToken[]  // New field added to complete the relation
 }
 
 model File {
@@ -50,4 +51,16 @@ model Email {
   id      Int    @id @default(autoincrement())
   subject String
   body    String @db.VarChar(10000)
+}
+
+model RefreshToken {
+  id              String   @id @default(uuid())
+  token           String   @unique @db.VarChar(512)
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
+  revoked         Boolean  @default(false)
+  revokedAt       DateTime?
+  replacedByToken String?  @db.VarChar(512) // Optional, if you implement token rotation
 }
