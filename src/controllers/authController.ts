@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 dotenv.config();
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET as string;
+console.log("JWT_SECRET loaded:", JWT_SECRET); // Debug log (remove in production)
 
 // Set up SendGrid
 sgMail.setApiKey(process.env.SENDGRID_API_KEY as string);
@@ -41,16 +42,16 @@ export const register = async (
   next: NextFunction
 ) => {
   try {
-    const { email, password, name } = req.body;
+    const { email, password, name, companyName } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
-      data: { email, password: hashedPassword, name },
+      data: { email, password: hashedPassword, name, companyName },
     });
 
     // Fetch the registration email template
     const registrationEmail = await prisma.email.findUnique({
-      where: { id: 1 }, // Replace with a valid unique identifier
+      where: { id: 1 },
     });
 
     // Send email if a template exists
@@ -100,14 +101,28 @@ export const login = async (
       { expiresIn: "7d" }
     );
 
-    // Store the refresh token in the database
-    await prisma.refreshToken.create({
-      data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days in ms
-      },
+    // Instead of upsert (which requires a unique key that includes userId), do a findFirst and update
+    const existingToken = await prisma.refreshToken.findFirst({
+      where: { userId: user.id },
     });
+    if (existingToken) {
+      await prisma.refreshToken.update({
+        where: { id: existingToken.id },
+        data: {
+          token: refreshToken,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          revoked: false,
+        },
+      });
+    } else {
+      await prisma.refreshToken.create({
+        data: {
+          token: refreshToken,
+          userId: user.id,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
+    }
 
     res.json({
       accessToken,
@@ -232,6 +247,11 @@ export const refreshAccessToken = async (
       return;
     }
 
+    // Trim the token to remove any extra whitespace
+    const tokenToVerify = refreshToken.trim();
+    console.log("Refresh token received for verification:", tokenToVerify);
+    console.log("Token length:", tokenToVerify.length);
+
     let decoded: {
       userId: string;
       email: string;
@@ -241,23 +261,31 @@ export const refreshAccessToken = async (
     };
     try {
       // Synchronously verify the refresh token
-      decoded = jwt.verify(refreshToken, JWT_SECRET) as typeof decoded;
-    } catch (err) {
-      res.status(403).json({ error: "Invalid refresh token" });
+      decoded = jwt.verify(tokenToVerify, JWT_SECRET) as typeof decoded;
+    } catch (err: any) {
+      console.error("Error verifying refresh token:", err.message);
+      res.status(403).json({ error: "Invalid refresh token: " + err.message });
       return;
     }
 
-    // Check if the refresh token exists in the database and is valid
+    // Retrieve the stored refresh token from the database
     const storedToken = await prisma.refreshToken.findUnique({
-      where: { token: refreshToken },
+      where: { token: tokenToVerify },
     });
+    console.log("Stored refresh token from DB:", storedToken?.token);
 
-    if (
-      !storedToken ||
-      storedToken.revoked ||
-      new Date() > storedToken.expiresAt
-    ) {
-      res.status(403).json({ error: "Refresh token is invalid or expired" });
+    if (!storedToken) {
+      res.status(403).json({ error: "Refresh token not found in database" });
+      return;
+    }
+
+    if (storedToken.revoked) {
+      res.status(403).json({ error: "Refresh token has been revoked" });
+      return;
+    }
+
+    if (new Date() > storedToken.expiresAt) {
+      res.status(403).json({ error: "Refresh token has expired" });
       return;
     }
 

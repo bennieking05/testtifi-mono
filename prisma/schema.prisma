@@ -14,6 +14,7 @@ model User {
   email          String          @unique
   password       String
   name           String
+  companyName    String?         // New optional field for company name; remove "?" if required
   credits        Int             @default(0)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
@@ -21,7 +22,7 @@ model User {
   resetTokenExp  DateTime?
   files          File[]
   purchases      Purchase[]
-  refreshTokens  RefreshToken[]  // New field added to complete the relation
+  refreshTokens  RefreshToken[]
 }
 
 model File {
@@ -56,11 +57,11 @@ model Email {
 model RefreshToken {
   id              String   @id @default(uuid())
   token           String   @unique @db.VarChar(512)
-  userId          String
+  userId          String   @unique
   user            User     @relation(fields: [userId], references: [id])
   createdAt       DateTime @default(now())
   expiresAt       DateTime
   revoked         Boolean  @default(false)
   revokedAt       DateTime?
-  replacedByToken String?  @db.VarChar(512) // Optional, if you implement token rotation
+  replacedByToken String?  @db.VarChar(512)
 }
