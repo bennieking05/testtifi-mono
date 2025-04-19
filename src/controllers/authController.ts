@@ -89,7 +89,12 @@ export const login = async (
 
     // Generate access token (expires in 15 minutes)
     const accessToken = jwt.sign(
-      { userId: user.id, email: user.email, credits: user.credits },
+      {
+        userId: user.id,
+        email: user.email,
+        credits: user.credits,
+        role: user.role || "user",
+      },
       JWT_SECRET,
       { expiresIn: "15m" }
     );
@@ -130,6 +135,7 @@ export const login = async (
       userName: user.name || user.email,
       email: user.email,
       credits: user.credits,
+      role: user.role || "user",
     });
   } catch (error) {
     next(error);

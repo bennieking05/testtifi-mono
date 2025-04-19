@@ -8,6 +8,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  user
+  admin
+}
+
 model User {
   id             String          @id @default(uuid())
   email          String          @unique
@@ -19,6 +24,7 @@ model User {
   updatedAt      DateTime        @updatedAt
   resetToken     String?
   resetTokenExp  DateTime?
+  role           Role            @default(user) // ← added role enum
   files          File[]
   purchases      Purchase[]
   refreshTokens  RefreshToken[]
@@ -28,12 +34,11 @@ model File {
   id              String   @id @default(uuid())
   fileName        String
   fileUrl         String
-  summaryFileName String?       // existing
+  summaryFileName String?
   summaryUrl      String? @db.Text
   pages           Int?     @default(0)
-  title           String        // ← newly added: user’s “summaryName”
-  deponent        String?       // ← newly added
-
+  title           String
+  deponent        String?
   createdAt       DateTime @default(now())
   userId          String?
   user            User?    @relation(fields: [userId], references: [id])
