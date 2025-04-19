@@ -2,12 +2,14 @@
 import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
+import { Storage } from "@google-cloud/storage";
 import PDFDocument from "pdfkit";
 import { Document, Packer, Paragraph } from "docx";
-import type { RequestInfo as NodeRequestInfo } from "node-fetch";
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const storage = new Storage();
+const summaryBucket = storage.bucket("deposition-summaries");
 
 router.get(
   "/download",
@@ -23,96 +25,44 @@ router.get(
         return;
       }
 
-      // Retrieve the file record
       const fileRecord = await prisma.file.findUnique({
         where: { id: fileId },
       });
-      if (!fileRecord) {
-        res.status(404).json({ error: "File not found" });
+      if (!fileRecord || !fileRecord.summaryFileName) {
+        res.status(404).json({ error: "File not found or missing summary" });
         return;
       }
 
-      // Build a safe filename from the user’s custom title
       const safeTitle = fileRecord.title
         .trim()
         .replace(/\s+/g, "-")
         .toLowerCase();
 
-      // Check if the file was created within the last 3 days
-      const fileCreatedAt = new Date(fileRecord.createdAt);
-      const now = new Date();
-      const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
-      if (now.getTime() - fileCreatedAt.getTime() > threeDaysMs) {
-        res.status(400).json({
-          error:
-            "File is older than 3 days and is no longer available for download",
-        });
-        return;
-      }
+      const [summaryBuffer] = await summaryBucket
+        .file(fileRecord.summaryFileName)
+        .download();
+      const parsed = JSON.parse(summaryBuffer.toString());
 
-      // (Optional) credit check removed for demo
+      // Determine if summary is legacy array or single object with 'summary'
+      const isLegacy = Array.isArray(parsed);
+      const summaryText = isLegacy
+        ? parsed.map((s: any) => `Page ${s.page}: ${s.mainPoint}`).join("\n")
+        : parsed.summary;
 
-      const summaryUrl = fileRecord.summaryUrl;
-      if (!summaryUrl) {
-        res.status(404).json({ error: "No summary URL" });
-        return;
-      }
-
-      // Fetch the summary text from storage
-      const nodeFetch = await import("node-fetch").then(
-        ({ default: nodeFetch }) => nodeFetch
-      );
-      const rawSummaryResp = await nodeFetch(summaryUrl as NodeRequestInfo);
-      if (!rawSummaryResp.ok) {
-        res
-          .status(500)
-          .json({ error: "Unable to fetch summary text from storage" });
-        return;
-      }
-      const rawSummary = await rawSummaryResp.text();
-
-      // Estimate pages if missing
-      let estimatedPages = fileRecord.pages;
-      if (!estimatedPages) {
-        const words = rawSummary.split(/\s+/).length;
-        estimatedPages = Math.ceil(words / 300);
-        await prisma.file.update({
-          where: { id: fileId },
-          data: { pages: estimatedPages },
-        });
-      }
-
-      // Respond based on the requested format
-      if (format === "txt") {
-        res.setHeader("Content-Type", "text/plain");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${safeTitle}.txt"`
-        );
-        res.send(rawSummary);
-        return;
-      }
-
-      if (format === "pdf") {
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${safeTitle}.pdf"`
-        );
-
-        const doc = new PDFDocument();
-        doc.pipe(res);
-        // NOTE: call fontSize on the PDFDocument instance, not on res
-        doc.fontSize(12).text(rawSummary, { align: "left" });
-        doc.end();
+      if (!summaryText) {
+        res.status(422).json({ error: "Summary content is empty." });
         return;
       }
 
       if (format === "docx") {
-        const docx = new Document({
-          sections: [{ children: [new Paragraph(rawSummary)] }],
+        const doc = new Document({
+          sections: [
+            {
+              children: [new Paragraph(summaryText)],
+            },
+          ],
         });
-        const buffer = await Packer.toBuffer(docx);
+        const buffer = await Packer.toBuffer(doc);
         res.setHeader(
           "Content-Type",
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -125,10 +75,69 @@ router.get(
         return;
       }
 
+      if (format === "txt") {
+        res.setHeader("Content-Type", "text/plain");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeTitle}.txt"`
+        );
+        res.send(summaryText);
+        return;
+      }
+
+      if (format === "pdf") {
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeTitle}.pdf"`
+        );
+        const pdf = new PDFDocument();
+        pdf.pipe(res);
+        pdf.fontSize(12).text(summaryText, { align: "left" });
+        pdf.end();
+        return;
+      }
+
       res.status(400).json({ error: "Invalid format" });
     } catch (error) {
       console.error("Download error:", error);
-      res.status(500).json({ error: "Something went wrong" });
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+router.get(
+  "/",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).user?.userId;
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const files = await prisma.file.findMany({
+        where: { userId, summaryUrl: { not: null } },
+        select: { id: true, title: true, summaryUrl: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const payload = files.map((file) => ({
+        id: file.id,
+        title: file.title,
+        summaryUrl: file.summaryUrl,
+        date: file.createdAt.toISOString(),
+        status:
+          Date.now() - file.createdAt.getTime() <= 259200000
+            ? "Active"
+            : "Expired",
+      }));
+
+      res.json(payload);
+    } catch (error) {
+      console.error("Summaries error:", error);
+      res.status(500).json({ error: "Internal server error" });
     }
   }
 );

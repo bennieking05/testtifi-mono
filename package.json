@@ -14,6 +14,7 @@
   "description": "",
   "dependencies": {
     "@google-cloud/storage": "^7.15.2",
+    "@google-cloud/vision": "^5.1.0",
     "@prisma/client": "^6.4.1",
     "@sendgrid/mail": "^8.1.4",
     "bcryptjs": "^3.0.2",
@@ -30,9 +31,11 @@
     "nodemailer": "^6.10.0",
     "openai": "^4.86.2",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^5.1.91",
     "pdfkit": "^0.16.0",
     "prisma": "^6.4.1",
-    "stripe": "^18.0.0"
+    "stripe": "^18.0.0",
+    "tesseract.js": "^6.0.1"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -44,7 +47,9 @@
     "@types/node-fetch": "^2.6.12",
     "@types/nodemailer": "^6.4.17",
     "@types/pdf-parse": "^1.1.4",
+    "@types/pdfjs-dist": "^2.10.378",
     "@types/pdfkit": "^0.13.9",
+    "@types/tesseract.js": "^2.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3"
   }
