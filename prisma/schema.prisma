@@ -1,6 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
-  // Add the relevant binary targets here
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
@@ -14,7 +13,7 @@ model User {
   email          String          @unique
   password       String
   name           String
-  companyName    String?         // New optional field for company name; remove "?" if required
+  companyName    String?         // optional
   credits        Int             @default(0)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
@@ -29,12 +28,13 @@ model File {
   id              String   @id @default(uuid())
   fileName        String
   fileUrl         String
-  summaryFileName String?  // New optional field for the summary file name
-  summaryUrl      String?  @db.Text // New optional field for the summary download URL, using TEXT type
-  pages           Int?     @default(0) // New optional field for the page count
-  createdAt       DateTime @default(now())
+  summaryFileName String?       // existing
+  summaryUrl      String? @db.Text
+  pages           Int?     @default(0)
+  title           String        // ← newly added: user’s “summaryName”
+  deponent        String?       // ← newly added
 
-  // Relation to User
+  createdAt       DateTime @default(now())
   userId          String?
   user            User?    @relation(fields: [userId], references: [id])
 }
@@ -45,6 +45,7 @@ model Purchase {
   user       User     @relation(fields: [userId], references: [id])
   credits    Int
   amount     Float
+  success    Boolean
   createdAt  DateTime @default(now())
 }
 

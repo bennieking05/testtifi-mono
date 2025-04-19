@@ -31,7 +31,8 @@
     "openai": "^4.86.2",
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.16.0",
-    "prisma": "^6.4.1"
+    "prisma": "^6.4.1",
+    "stripe": "^18.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

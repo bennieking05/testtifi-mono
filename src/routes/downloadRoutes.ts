@@ -1,3 +1,4 @@
+// File: src/routes/downloadRoutes.ts
 import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
@@ -31,10 +32,16 @@ router.get(
         return;
       }
 
+      // Build a safe filename from the user’s custom title
+      const safeTitle = fileRecord.title
+        .trim()
+        .replace(/\s+/g, "-")
+        .toLowerCase();
+
       // Check if the file was created within the last 3 days
       const fileCreatedAt = new Date(fileRecord.createdAt);
       const now = new Date();
-      const threeDaysMs = 3 * 24 * 60 * 60 * 1;
+      const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
       if (now.getTime() - fileCreatedAt.getTime() > threeDaysMs) {
         res.status(400).json({
           error:
@@ -43,27 +50,7 @@ router.get(
         return;
       }
 
-      // Check the authenticated user's credits.
-      const userId = (req as any).user?.userId;
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-      });
-      if (!user) {
-        res.status(404).json({ error: "User not found" });
-        return;
-      }
-
-      const requiredCredits = 1; // One credit per download
-      if (user.credits < requiredCredits) {
-        res.status(400).json({ error: "Insufficient credits" });
-        return;
-      }
-
-      // Deduct the required credits from the user
-      await prisma.user.update({
-        where: { id: userId },
-        data: { credits: user.credits - requiredCredits },
-      });
+      // (Optional) credit check removed for demo
 
       const summaryUrl = fileRecord.summaryUrl;
       if (!summaryUrl) {
@@ -71,7 +58,7 @@ router.get(
         return;
       }
 
-      // Fetch the summary text from the storage URL
+      // Fetch the summary text from storage
       const nodeFetch = await import("node-fetch").then(
         ({ default: nodeFetch }) => nodeFetch
       );
@@ -84,10 +71,9 @@ router.get(
       }
       const rawSummary = await rawSummaryResp.text();
 
-      // If pages haven't been counted yet, estimate and update the file record.
+      // Estimate pages if missing
       let estimatedPages = fileRecord.pages;
       if (!estimatedPages) {
-        // Simple estimation: assume ~300 words per page.
         const words = rawSummary.split(/\s+/).length;
         estimatedPages = Math.ceil(words / 300);
         await prisma.file.update({
@@ -101,7 +87,7 @@ router.get(
         res.setHeader("Content-Type", "text/plain");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="summary-${fileId}.txt"`
+          `attachment; filename="${safeTitle}.txt"`
         );
         res.send(rawSummary);
         return;
@@ -111,27 +97,29 @@ router.get(
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="summary-${fileId}.pdf"`
+          `attachment; filename="${safeTitle}.pdf"`
         );
+
         const doc = new PDFDocument();
         doc.pipe(res);
+        // NOTE: call fontSize on the PDFDocument instance, not on res
         doc.fontSize(12).text(rawSummary, { align: "left" });
         doc.end();
         return;
       }
 
       if (format === "docx") {
-        const doc = new Document({
+        const docx = new Document({
           sections: [{ children: [new Paragraph(rawSummary)] }],
         });
-        const buffer = await Packer.toBuffer(doc);
+        const buffer = await Packer.toBuffer(docx);
         res.setHeader(
           "Content-Type",
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="summary-${fileId}.docx"`
+          `attachment; filename="${safeTitle}.docx"`
         );
         res.send(buffer);
         return;
