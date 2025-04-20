@@ -13,6 +13,41 @@ const storage = new Storage();
 const summaryBucket = storage.bucket("deposition-summaries");
 
 router.get(
+  "/",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).user?.userId;
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const files = await prisma.file.findMany({
+        where: { userId, summaryUrl: { not: null } },
+        select: { id: true, title: true, summaryUrl: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const payload = files.map((file) => ({
+        id: file.id,
+        title: file.title,
+        summaryUrl: file.summaryUrl,
+        date: file.createdAt.toISOString(),
+        status:
+          Date.now() - file.createdAt.getTime() <= 259200000
+            ? "Active"
+            : "Expired",
+      }));
+
+      res.json(payload);
+    } catch (error) {
+      console.error("Summaries error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+router.get(
   "/download",
   authenticateToken,
   async (req: Request, res: Response): Promise<void> => {
