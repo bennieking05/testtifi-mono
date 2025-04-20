@@ -174,26 +174,35 @@ export const stripeWebhookHandler = async (
  * GET /api/purchase/history
  *   – admin only: return all past purchases with user info
  */
+
+/**
+ * GET /api/purchase/history
+ *   – admin only: return all past purchases with user info
+ */
 router.get(
   "/history",
   authenticateToken,
   requireAdmin,
-  asyncHandler(async (_req: Request, res: Response) => {
-    const raw = await prisma.purchase.findMany({
-      orderBy: { createdAt: "desc" },
-      include: { user: { select: { name: true, email: true } } },
-    });
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const raw = await prisma.purchase.findMany({
+        orderBy: { createdAt: "desc" },
+        include: { user: { select: { name: true, email: true } } },
+      });
 
-    const history = raw.map((p) => ({
-      id: p.id,
-      user: p.user.name,
-      email: p.user.email,
-      date: p.createdAt.toISOString(),
-      plan: `${p.credits} Credits`,
-      amount: `$${p.amount}`,
-    }));
+      const history = raw.map((p) => ({
+        id: p.id,
+        user: p.user.name,
+        email: p.user.email,
+        date: p.createdAt.toISOString(),
+        plan: `${p.credits} Credits`,
+        amount: p.amount, // <–– keep as number
+      }));
 
-    res.json(history);
-  })
+      res.json(history);
+    } catch (err) {
+      next(err);
+    }
+  }
 );
 export default router;

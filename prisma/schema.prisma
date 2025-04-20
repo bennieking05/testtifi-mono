@@ -44,6 +44,7 @@ model User {
   purchases      Purchase[]
   refreshTokens  RefreshToken[]
   supportTickets SupportTicket[]
+  downloads      DownloadHistory[]
 }
 
 model File {
@@ -58,6 +59,7 @@ model File {
   createdAt       DateTime @default(now())
   userId          String?
   user            User?    @relation(fields: [userId], references: [id])
+  downloads       DownloadHistory[]
 }
 
 model Purchase {
@@ -110,4 +112,14 @@ model SupportReply {
   from      ReplyAuthor
   message   String
   createdAt DateTime      @default(now())
+}
+
+model DownloadHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  fileId     String
+  file       File     @relation(fields: [fileId], references: [id])
+  format     String
+  createdAt  DateTime @default(now())
 }
