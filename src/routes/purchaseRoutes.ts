@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import { PrismaClient } from "@prisma/client";
-import { authenticateToken } from "../middlewares/authMiddleware";
+import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 import Stripe from "stripe";
 
 const router = express.Router();
@@ -170,4 +170,30 @@ export const stripeWebhookHandler = async (
   res.json({ received: true });
 };
 
+/**
+ * GET /api/purchase/history
+ *   – admin only: return all past purchases with user info
+ */
+router.get(
+  "/history",
+  authenticateToken,
+  requireAdmin,
+  asyncHandler(async (_req: Request, res: Response) => {
+    const raw = await prisma.purchase.findMany({
+      orderBy: { createdAt: "desc" },
+      include: { user: { select: { name: true, email: true } } },
+    });
+
+    const history = raw.map((p) => ({
+      id: p.id,
+      user: p.user.name,
+      email: p.user.email,
+      date: p.createdAt.toISOString(),
+      plan: `${p.credits} Credits`,
+      amount: `$${p.amount}`,
+    }));
+
+    res.json(history);
+  })
+);
 export default router;

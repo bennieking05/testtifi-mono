@@ -8,33 +8,23 @@ import dotenv from "dotenv";
 dotenv.config();
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET as string;
-console.log("JWT_SECRET loaded:", JWT_SECRET); // Debug log (remove in production)
+const senderEmail = process.env.EMAIL_USER ?? "admin@thenexgen.ai";
 
-// Set up SendGrid
 sgMail.setApiKey(process.env.SENDGRID_API_KEY as string);
-const senderEmail: string = process.env.EMAIL_USER || "admin@thenexgen.ai";
 
-/**
- * A helper function to send an email via SendGrid.
- */
-async function sendEmail(
+/* ----------------------------------------------------------------------- */
+/*                        SHARED  –  EMAIL HELPER                          */
+/* ----------------------------------------------------------------------- */
+export async function sendEmail(
   to: string,
   subject: string,
   text: string,
   html: string
 ) {
-  const msg: MailDataRequired = {
-    to,
-    from: senderEmail,
-    subject,
-    text,
-    html,
-  };
-
+  const msg: MailDataRequired = { to, from: senderEmail, subject, text, html };
   await sgMail.send(msg);
-  console.log(`Email sent to ${to} with subject "${subject}"`);
+  console.log(`Email sent → ${to} : "${subject}"`);
 }
-
 // **Register User**
 export const register = async (
   req: Request,
@@ -101,7 +91,12 @@ export const login = async (
 
     // Generate refresh token (expires in 7 days)
     const refreshToken = jwt.sign(
-      { userId: user.id, email: user.email, credits: user.credits },
+      {
+        userId: user.id,
+        email: user.email,
+        credits: user.credits,
+        role: user.role,
+      },
       JWT_SECRET,
       { expiresIn: "7d" }
     );

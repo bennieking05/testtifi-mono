@@ -1,36 +1,99 @@
-import express, { Request, Response, NextFunction } from "express";
+// src/routes/userRoutes.ts
+
+import express, { Response, NextFunction } from "express";
 import { PrismaClient } from "@prisma/client";
-import { authenticateToken } from "../middlewares/authMiddleware";
+import {
+  authenticateToken,
+  requireAdmin,
+  AuthRequest,
+} from "../middlewares/authMiddleware";
 
-const router = express.Router();
 const prisma = new PrismaClient();
+const router = express.Router();
 
+/**
+ * GET /api/user
+ * Returns the current user’s public profile.
+ * ------------------------------------------------------------------
+ * Response: { credits: number, name: string | null, email: string, role: "admin" | "user" }
+ */
 router.get(
   "/",
   authenticateToken,
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
     try {
-      // The auth middleware should attach the user info (like userId) to req.user
-      const userId = (req as any).user?.userId;
+      const userId = req.user?.userId;
       if (!userId) {
         res.status(401).json({ error: "Unauthorized" });
         return;
       }
+
       const user = await prisma.user.findUnique({
         where: { id: userId },
+        select: { credits: true, name: true, email: true, role: true },
       });
+
       if (!user) {
         res.status(404).json({ error: "User not found" });
         return;
       }
-      // Return only the necessary fields (e.g., credits, name, email)
-      res.json({
-        credits: user.credits,
-        name: user.name,
-        email: user.email,
+
+      res.json(user);
+    } catch (err) {
+      next(err as Error);
+    }
+  }
+);
+
+/**
+ * GET /api/users/signups
+ * Admin only: returns all user sign‑ups.
+ * ------------------------------------------------------------------
+ * Response: Array<{
+ *   id: string;
+ *   name: string;
+ *   email: string;
+ *   company: string;
+ *   date: string;      // ISO timestamp of creation
+ *   status: "active";  // future: can reflect other statuses
+ * }>
+ */
+router.get(
+  "/signups",
+  authenticateToken,
+  requireAdmin,
+  async (
+    _req: AuthRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const users = await prisma.user.findMany({
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          companyName: true,
+          createdAt: true,
+        },
       });
-    } catch (error) {
-      next(error);
+
+      const payload = users.map((u) => ({
+        id: u.id,
+        name: u.name ?? "",
+        email: u.email,
+        company: u.companyName ?? "",
+        date: u.createdAt.toISOString(),
+        status: "active" as const,
+      }));
+
+      res.json(payload);
+    } catch (err) {
+      next(err as Error);
     }
   }
 );

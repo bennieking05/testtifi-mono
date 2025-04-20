@@ -1,35 +1,70 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
-const JWT_SECRET = process.env.JWT_SECRET as string;
+/* ───────────────────────── constants ───────────────────────── */
+export const JWT_SECRET = process.env.JWT_SECRET as string;
 
-// ✅ Extend Express Request to include `user`
-interface AuthRequest extends Request {
-  user?: { userId: string; email: string };
+/* ───────────────────────── types ───────────────────────────── */
+export interface AuthPayload {
+  userId: string;
+  email: string;
+  role: "admin" | "user";
 }
 
-export const authenticateToken = (
+export interface AuthRequest extends Request {
+  user?: AuthPayload;
+}
+
+/* ───────────────── strict auth (blocks) ───────────────────── */
+export function authenticateToken(
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): void => {
-  const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.split(" ")[1]; // Extract token from "Bearer <token>"
+): void {
+  const token = req.headers.authorization?.split(" ")[1]; // Bearer <token>
 
   if (!token) {
     res.status(401).json({ error: "Access denied, no token provided" });
-    return; // ✅ Ensure function exits after sending response
+    return;
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as {
-      userId: string;
-      email: string;
-    };
-    req.user = decoded; // ✅ Attach decoded user to request
-    next(); // ✅ Move to the next middleware/route
-  } catch (error) {
+    req.user = jwt.verify(token, JWT_SECRET) as AuthPayload;
+    next();
+  } catch {
     res.status(403).json({ error: "Invalid token" });
-    return; // ✅ Ensure function exits after sending response
   }
-};
+}
+
+/* ───────────── optional auth (never blocks) ───────────── */
+export function optionalAuth(
+  req: AuthRequest,
+  _res: Response,
+  next: NextFunction
+): void {
+  const token = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.split(" ")[1]
+    : undefined;
+
+  if (token) {
+    try {
+      req.user = jwt.verify(token, JWT_SECRET) as AuthPayload;
+    } catch {
+      /* bad/expired token → act as guest */
+    }
+  }
+  next();
+}
+
+/* ───────────────── admin guard ─────────────────────────── */
+export function requireAdmin(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  if (req.user?.role !== "admin") {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+  next();
+}

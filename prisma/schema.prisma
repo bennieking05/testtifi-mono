@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
@@ -8,26 +10,40 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/* ───────────────────────── enums ───────────────────────── */
 enum Role {
   user
   admin
 }
 
+enum SupportStatus {
+  OPEN
+  IN_PROGRESS   // ← keep this exactly
+  CLOSED
+}
+
+enum ReplyAuthor {
+  support
+  user
+}
+
+/* ───────────────────────── models ──────────────────────── */
 model User {
   id             String          @id @default(uuid())
   email          String          @unique
   password       String
   name           String
-  companyName    String?         // optional
+  companyName    String?
   credits        Int             @default(0)
+  role           Role            @default(user)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   resetToken     String?
   resetTokenExp  DateTime?
-  role           Role            @default(user) // ← added role enum
   files          File[]
   purchases      Purchase[]
   refreshTokens  RefreshToken[]
+  supportTickets SupportTicket[]
 }
 
 model File {
@@ -35,7 +51,7 @@ model File {
   fileName        String
   fileUrl         String
   summaryFileName String?
-  summaryUrl      String? @db.Text
+  summaryUrl      String?  @db.Text
   pages           Int?     @default(0)
   title           String
   deponent        String?
@@ -70,4 +86,28 @@ model RefreshToken {
   revoked         Boolean  @default(false)
   revokedAt       DateTime?
   replacedByToken String?  @db.VarChar(512)
+}
+
+/* ──────────────────────── support ─────────────────────── */
+model SupportTicket {
+  id        String         @id @default(cuid())
+  userId    String?
+  user      User?          @relation(fields: [userId], references: [id])
+  name      String
+  email     String
+  subject   String
+  message   String         @db.Text
+  status    SupportStatus  @default(OPEN)
+  replies   SupportReply[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model SupportReply {
+  id        String        @id @default(cuid())
+  ticketId  String
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id])
+  from      ReplyAuthor
+  message   String
+  createdAt DateTime      @default(now())
 }
