@@ -29,8 +29,9 @@ app.post(
 );
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-// ┏━ 2) All other payloads should be JSON ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+// ┏━ 2) All other payloads should be parsed as JSON and URL‑encoded ━━━━┓
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 // ┏━ 3) Log all requests ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓

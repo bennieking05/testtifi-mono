@@ -5,7 +5,15 @@ import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { Storage } from "@google-cloud/storage";
 import PDFDocument from "pdfkit";
-import { Document, Packer, Paragraph } from "docx";
+import {
+  Document,
+  Packer,
+  Paragraph,
+  Table,
+  TableRow,
+  TableCell,
+  TextRun,
+} from "docx";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -24,21 +32,39 @@ router.get(
       }
 
       const files = await prisma.file.findMany({
-        where: { userId, summaryUrl: { not: null } },
-        select: { id: true, title: true, summaryUrl: true, createdAt: true },
+        where: { userId },
+        select: {
+          id: true,
+          title: true,
+          summaryUrl: true,
+          createdAt: true,
+          pages: true,
+        },
         orderBy: { createdAt: "desc" },
       });
 
-      const payload = files.map((file) => ({
-        id: file.id,
-        title: file.title,
-        summaryUrl: file.summaryUrl,
-        date: file.createdAt.toISOString(),
-        status:
-          Date.now() - file.createdAt.getTime() <= 259200000
-            ? "Active"
-            : "Expired",
-      }));
+      const payload = files.map((file) => {
+        const now = Date.now();
+        const createdTime = new Date(file.createdAt).getTime();
+
+        let status: "processing" | "active" | "inactive";
+        if (!file.summaryUrl) {
+          status = "processing";
+        } else if (now - createdTime <= 3 * 24 * 60 * 60 * 1000) {
+          status = "active";
+        } else {
+          status = "inactive";
+        }
+
+        return {
+          id: file.id,
+          title: file.title,
+          summaryUrl: file.summaryUrl,
+          date: file.createdAt.toISOString(),
+          pages: file.pages ?? 0,
+          status,
+        };
+      });
 
       res.json(payload);
     } catch (error) {
@@ -47,6 +73,7 @@ router.get(
     }
   }
 );
+
 router.get(
   "/download",
   authenticateToken,
@@ -60,7 +87,6 @@ router.get(
       return;
     }
 
-    // fetch summary
     const fileRecord = await prisma.file.findUnique({
       where: { id: fileId },
     });
@@ -79,25 +105,45 @@ router.get(
       .download();
     const parsed = JSON.parse(summaryBuffer.toString());
     const isLegacy = Array.isArray(parsed);
-    const summaryText = isLegacy
-      ? parsed.map((s: any) => `Page ${s.page}: ${s.mainPoint}`).join("\n")
-      : parsed.summary;
+    const summaryData = isLegacy ? parsed : parsed.sections;
 
-    if (!summaryText) {
+    if (!summaryData || summaryData.length === 0) {
       res.status(422).json({ error: "Summary content is empty." });
       return;
     }
 
-    // record download in DB
     const userId = (req as any).user.userId as string;
     await prisma.downloadHistory.create({
       data: { userId, fileId, format },
     });
 
-    // now send the file
     if (format === "docx") {
+      const rows = summaryData.map(
+        (s: any) =>
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [new Paragraph(String(s.page || ""))],
+              }),
+              new TableCell({
+                children: [new Paragraph(s.mainPoint)],
+              }),
+            ],
+          })
+      );
       const doc = new Document({
-        sections: [{ children: [new Paragraph(summaryText)] }],
+        sections: [
+          {
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: fileRecord.title, bold: true, size: 28 }),
+                ],
+              }),
+              new Table({ rows }),
+            ],
+          },
+        ],
       });
       const buffer = await Packer.toBuffer(doc);
       res.setHeader(
@@ -106,33 +152,36 @@ router.get(
       );
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${safeTitle}.docx"`
+        `attachment; filename=\"${safeTitle}.docx\"`
       );
       res.send(buffer);
       return;
     }
 
     if (format === "txt") {
+      const textOutput = summaryData
+        .map((s: any) => `| Page ${s.page} | ${s.mainPoint} |`)
+        .join("\n");
       res.setHeader("Content-Type", "text/plain");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${safeTitle}.txt"`
+        `attachment; filename=\"${safeTitle}.txt\"`
       );
-      res.send(summaryText);
+      res.send(textOutput);
       return;
     }
 
     if (format === "pdf") {
+      const pdf = new PDFDocument();
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${safeTitle}.pdf"`
+        `attachment; filename=\"${safeTitle}.pdf\"`
       );
-
-      // Create PDFDocument and pipe to response
-      const pdf = new PDFDocument();
       pdf.pipe(res);
-      pdf.fontSize(12).text(summaryText);
+      summaryData.forEach((s: any) => {
+        pdf.text(`| Page ${s.page} | ${s.mainPoint} |`, { lineGap: 4 });
+      });
       pdf.end();
       return;
     }
@@ -141,7 +190,6 @@ router.get(
   }
 );
 
-// new endpoint: list download history for current user
 router.get(
   "/download/history",
   authenticateToken,
@@ -156,7 +204,7 @@ router.get(
     res.json(
       downloads.map((d) => ({
         id: d.id,
-        user: userId, // or join with User for name/email
+        user: userId,
         document: d.file.title,
         date: d.createdAt.toISOString(),
         format: d.format.toUpperCase(),

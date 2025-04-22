@@ -18,7 +18,7 @@ enum Role {
 
 enum SupportStatus {
   OPEN
-  IN_PROGRESS   // ← keep this exactly
+  IN_PROGRESS
   CLOSED
 }
 
@@ -80,17 +80,16 @@ model Email {
 
 model RefreshToken {
   id              String   @id @default(uuid())
-  token           String   @unique @db.VarChar(512)
-  userId          String   @unique
+  token           String   @db.Text          // ← drop @unique
+  userId          String   @unique           // ← keep one‑per‑user
   user            User     @relation(fields: [userId], references: [id])
   createdAt       DateTime @default(now())
   expiresAt       DateTime
   revoked         Boolean  @default(false)
   revokedAt       DateTime?
-  replacedByToken String?  @db.VarChar(512)
+  replacedByToken String?  @db.Text
 }
 
-/* ──────────────────────── support ─────────────────────── */
 model SupportTicket {
   id        String         @id @default(cuid())
   userId    String?

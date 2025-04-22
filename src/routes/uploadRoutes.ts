@@ -111,16 +111,33 @@ async function extractFullText(
 // Summarize the full document contextually
 async function summarizeFullText(text: string): Promise<string> {
   const prompt = [
-    { role: "system", content: "You are a helpful legal summarizer." },
+    {
+      role: "system",
+      content: `You are a legal assistant tasked with summarizing depositions in a clear and professional table format.`,
+    },
     {
       role: "user",
-      content: `Summarize the following legal deposition in detail. Capture key events, persons, and legal context:\n\n${text}`,
+      content: `
+You are given the full text of a legal deposition.
+
+Generate a **structured summary** in a **two-column table** format:
+- **Column 1: Page Number(s)** (e.g., "9–11", "12", "16–18", etc.)
+- **Column 2: Summary of key topics discussed** (legal arguments, roles of individuals, references to exhibits or emails, etc.)
+
+Additional instructions:
+- Start with **case metadata** at the top (CIVIL ACTION NUMBER, COURT, PLAINTIFFS, DEFENDANTS, DEPOSITION TITLE, DATE).
+- Then output the **summary table**.
+- Format the table using markdown syntax.
+
+Here is the deposition text:
+${text}
+    `.trim(),
     },
   ];
-  const resp = await azureChatCompletion(prompt, 1500);
+
+  const resp = await azureChatCompletion(prompt, 1800);
   return resp.choices[0].message.content.trim();
 }
-
 // Upload route with GCS-based OCR + summarization
 router.post(
   "/upload",

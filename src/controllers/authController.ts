@@ -270,7 +270,8 @@ export const refreshAccessToken = async (
     }
 
     // Retrieve the stored refresh token from the database
-    const storedToken = await prisma.refreshToken.findUnique({
+    // → use findFirst() instead of findUnique() now that token is not unique
+    const storedToken = await prisma.refreshToken.findFirst({
       where: { token: tokenToVerify },
     });
     console.log("Stored refresh token from DB:", storedToken?.token);
