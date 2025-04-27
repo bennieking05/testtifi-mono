@@ -9,7 +9,7 @@ spec:
     name: letsencrypt
     kind: ClusterIssuer
   dnsNames:
-    - testifi.thenexgen.ai
+    - app.testifi.ai
   usages:
     - digital signature
     - key encipherment

@@ -8,10 +8,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - testifi.thenexgen.ai
+        - app.testifi.ai
       secretName: testifi-tls
   rules:
-    - host: testifi.thenexgen.ai
+    - host: app.testifi.ai
       http:
         paths:
           # 1) Route /api to your backend
