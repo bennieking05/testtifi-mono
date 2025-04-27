@@ -14,7 +14,6 @@ spec:
     - host: app.testifi.ai
       http:
         paths:
-          # 1) Route /api to your backend
           - path: /api
             pathType: Prefix
             backend:
@@ -23,7 +22,6 @@ spec:
                 port:
                   number: 80
 
-          # 2) Route everything else to your frontend
           - path: /
             pathType: Prefix
             backend:

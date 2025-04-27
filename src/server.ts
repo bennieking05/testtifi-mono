@@ -41,7 +41,9 @@ app.use((req, _res, next) => {
   next();
 });
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-
+app.get("/api/test", (_req, res) => {
+  res.send("Test route OK");
+});
 // ┏━ 4) Mount your routes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 app.use("/api/auth", authRoutes);
 app.use("/api", uploadRoutes);
