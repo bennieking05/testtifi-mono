@@ -194,23 +194,39 @@ router.get(
   "/download/history",
   authenticateToken,
   async (req: Request, res: Response): Promise<void> => {
-    const userId = (req as any).user.userId as string;
-    const downloads = await prisma.downloadHistory.findMany({
-      where: { userId },
-      include: { file: { select: { title: true } } },
-      orderBy: { createdAt: "desc" },
-    });
+    const user = (req as any).user;
+    const userId = user?.userId;
+    const isAdmin = user?.role === "admin"; // assuming this is set in your JWT
 
-    res.json(
-      downloads.map((d) => ({
-        id: d.id,
-        user: userId,
-        document: d.file.title,
-        date: d.createdAt.toISOString(),
-        format: d.format.toUpperCase(),
-      }))
-    );
+    try {
+      const downloads = await prisma.downloadHistory.findMany({
+        where: isAdmin ? {} : { userId },
+        include: {
+          user: { select: { email: true } },
+          file: { select: { title: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!downloads.length) {
+        console.log(
+          `No downloads found for ${isAdmin ? "admin" : "userId: " + userId}`
+        );
+      }
+
+      res.json(
+        downloads.map((d) => ({
+          id: d.id,
+          user: d.user?.email ?? userId,
+          document: d.file?.title ?? "(missing file)",
+          date: d.createdAt.toISOString(),
+          format: d.format.toUpperCase(),
+        }))
+      );
+    } catch (error) {
+      console.error("Failed to fetch download history:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 );
-
 export default router;

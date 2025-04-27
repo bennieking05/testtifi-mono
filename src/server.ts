@@ -9,6 +9,7 @@ import purchaseRoutes, { stripeWebhookHandler } from "./routes/purchaseRoutes";
 import downloadRoutes from "./routes/downloadRoutes";
 import userRoutes from "./routes/userRoutes";
 import supportRoutes from "./routes/supportRoutes";
+import fineTineRoutes from "./routes/fineTuneRoutes";
 
 dotenv.config();
 const app = express();
@@ -48,6 +49,7 @@ app.use("/api/purchase", purchaseRoutes);
 app.use("/api/summaries", downloadRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/support", supportRoutes);
+app.use("/api/fine-tune", fineTineRoutes);
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

@@ -45,6 +45,7 @@ model User {
   refreshTokens  RefreshToken[]
   supportTickets SupportTicket[]
   downloads      DownloadHistory[]
+  trainingAssets  TrainingAsset[]
 }
 
 model File {
@@ -121,4 +122,21 @@ model DownloadHistory {
   file       File     @relation(fields: [fileId], references: [id])
   format     String
   createdAt  DateTime @default(now())
+}
+
+model TrainingAsset {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  type        AssetType // "human_summary" | "training_pair" | "generated_pair"
+  filename    String
+  fileSize    Int
+  uploadedAt  DateTime @default(now())
+  description String?  // optional instructions or context
+}
+
+enum AssetType {
+  human_summary
+  training_pair
+  generated_pair
 }
