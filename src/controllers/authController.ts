@@ -86,7 +86,7 @@ export const login = async (
         role: user.role || "user",
       },
       JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1m" }
     );
 
     // Generate refresh token (expires in 7 days)
@@ -127,7 +127,7 @@ export const login = async (
     res.json({
       accessToken,
       refreshToken,
-      userName: user.name || user.email,
+      name: user.name || user.email,
       email: user.email,
       credits: user.credits,
       role: user.role || "user",
