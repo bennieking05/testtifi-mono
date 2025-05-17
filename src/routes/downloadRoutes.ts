@@ -21,6 +21,26 @@ const prisma = new PrismaClient();
 const storage = new Storage();
 const summaryBucket = storage.bucket("deposition-summaries");
 
+// Helper to parse Markdown tables into array of { page, mainPoint }
+function parseMarkdownTable(md: string): Array<{ page: string; mainPoint: string }> {
+  const rows: Array<{ page: string; mainPoint: string }> = [];
+  const tableLines = md
+    .split('\n')
+    .filter(line => /^\|.*\|$/.test(line)) // lines starting and ending with |
+    .map(line => line.trim());
+
+  // skip the header and separator line
+  for (let i = 2; i < tableLines.length; i++) {
+    const cols = tableLines[i].split('|').map(s => s.trim());
+    if (cols.length < 4) continue;
+    rows.push({
+      page: cols[1],
+      mainPoint: cols[2],
+    });
+  }
+  return rows;
+}
+
 router.get(
   "/",
   authenticateToken,
@@ -123,7 +143,12 @@ router.get(
       return;
     }
 
-    if ((!summaryData || summaryData.length === 0) && !markdownContent) {
+    // If no structured data but have markdown, parse the markdown table
+    if ((!summaryData || summaryData.length === 0) && markdownContent) {
+      summaryData = parseMarkdownTable(markdownContent);
+    }
+
+    if (!summaryData || summaryData.length === 0) {
       res.status(422).json({ error: "Summary content is empty." });
       return;
     }
@@ -190,22 +215,56 @@ router.get(
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.pdf"`);
       pdf.pipe(res);
-
-      pdf.fontSize(14).text(fileRecord.title, { align: "center" }).moveDown(1);
-      pdf.fontSize(12).text("Page", { continued: true, width: 80 });
-      pdf.text("| Testimony", { continued: false }).moveDown(0.3);
-
-      summaryData.forEach((s: any) => {
-        pdf
-          .fontSize(10)
-          .text(`${s.page || ""}`, { continued: true, width: 80 })
-          .text(`| ${s.mainPoint || ""}`);
+    
+      // Set up table column widths
+      const pageColWidth = 90;
+      const totalWidth = pdf.page.width - pdf.page.margins.left - pdf.page.margins.right;
+      const testimonyColWidth = totalWidth - pageColWidth - 10; // 10px for gap
+    
+      // Title
+      pdf.fontSize(16).font("Helvetica-Bold").text(fileRecord.title, {
+        align: "center",
       });
-
+      pdf.moveDown(1);
+    
+      // Table headers
+      let y = pdf.y;
+      const xPage = pdf.page.margins.left;
+      const xTestimony = xPage + pageColWidth + 10;
+    
+      pdf.fontSize(12).font("Helvetica-Bold");
+      pdf.text("Page", xPage, y, { width: pageColWidth, continued: false });
+      pdf.text("Testimony", xTestimony, y, { width: testimonyColWidth, continued: false });
+      y = pdf.y + 4;
+    
+      // Draw header line
+      pdf.moveTo(xPage, y)
+        .lineTo(xPage + pageColWidth + 10 + testimonyColWidth, y)
+        .strokeColor("#BBBBBB")
+        .lineWidth(1)
+        .stroke();
+      y += 6;
+    
+      // Table rows
+      pdf.fontSize(10).font("Helvetica");
+      summaryData.forEach((s: any) => {
+        // Print page number (top-aligned)
+        pdf.text(s.page || "", xPage, y, { width: pageColWidth });
+        // Print testimony, wrapping as needed
+        pdf.text(s.mainPoint || "", xTestimony, y, { width: testimonyColWidth });
+        // Get height of the row (use max height of either cell)
+        const testimonyHeight = pdf.heightOfString(s.mainPoint || "", { width: testimonyColWidth });
+        const rowHeight = Math.max(
+          pdf.heightOfString(s.page || "", { width: pageColWidth }),
+          testimonyHeight
+        );
+        y += rowHeight + 8; // Add spacing between rows
+        pdf.y = y;
+      });
+    
       pdf.end();
       return;
     }
-
     res.status(400).json({ error: "Invalid format" });
   }
 );
@@ -249,4 +308,5 @@ router.get(
     }
   }
 );
+
 export default router;
