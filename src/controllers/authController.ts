@@ -4,11 +4,12 @@ import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
 import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
+import { fillTemplate } from "../utils/emailTemplate"; // New
 
 dotenv.config();
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET as string;
-const senderEmail = process.env.EMAIL_USER ?? "admin@thenexgen.ai";
+const senderEmail = process.env.EMAIL_USER ?? "admin@testifi.ai"
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY as string);
 
@@ -21,10 +22,17 @@ export async function sendEmail(
   text: string,
   html: string
 ) {
-  const msg: MailDataRequired = { to, from: senderEmail, subject, text, html };
+  const msg: MailDataRequired = {
+    to,
+    from: senderEmail,
+    subject,
+    text: text && text.trim().length > 0 ? text : "This is a transactional email from Testifi-AI.",
+    html: html && html.trim().length > 0 ? html : undefined
+  };
   await sgMail.send(msg);
   console.log(`Email sent → ${to} : "${subject}"`);
 }
+
 // **Register User**
 export const register = async (
   req: Request,
@@ -39,99 +47,25 @@ export const register = async (
       data: { email, password: hashedPassword, name, companyName },
     });
 
-    // Fetch the registration email template
+    // Fetch the registration email template (ID: 1)
     const registrationEmail = await prisma.email.findUnique({
       where: { id: 1 },
     });
 
     // Send email if a template exists
     if (registrationEmail) {
+      const html = fillTemplate(registrationEmail.body, { name: user.name ?? user.email });
       await sendEmail(
         user.email,
         registrationEmail.subject,
         "Welcome to Testifi-AI! Your journey starts here.",
-        registrationEmail.body
+        html
       );
     }
 
     res
       .status(201)
       .json({ message: "User registered successfully", userId: user.id });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// **Login User**
-export const login = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    const { email, password } = req.body;
-    const user = await prisma.user.findUnique({ where: { email } });
-
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      res.status(400).json({ error: "Invalid email or password" });
-      return;
-    }
-
-    // Generate access token (expires in 15 minutes)
-    const accessToken = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        credits: user.credits,
-        role: user.role || "user",
-      },
-      JWT_SECRET,
-      { expiresIn: "1m" }
-    );
-
-    // Generate refresh token (expires in 7 days)
-    const refreshToken = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        credits: user.credits,
-        role: user.role,
-      },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    // Instead of upsert (which requires a unique key that includes userId), do a findFirst and update
-    const existingToken = await prisma.refreshToken.findFirst({
-      where: { userId: user.id },
-    });
-    if (existingToken) {
-      await prisma.refreshToken.update({
-        where: { id: existingToken.id },
-        data: {
-          token: refreshToken,
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-          revoked: false,
-        },
-      });
-    } else {
-      await prisma.refreshToken.create({
-        data: {
-          token: refreshToken,
-          userId: user.id,
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        },
-      });
-    }
-
-    res.json({
-      accessToken,
-      refreshToken,
-      name: user.name || user.email,
-      email: user.email,
-      credits: user.credits,
-      role: user.role || "user",
-    });
   } catch (error) {
     next(error);
   }
@@ -163,12 +97,26 @@ export const forgotPassword = async (
     const baseUrl = process.env.BASE_URL || "http://localhost:3000";
     const resetLink = `${baseUrl}/reset-password/${resetToken}`;
 
-    await sendEmail(
-      email,
-      "Password Reset",
-      `Click the link to reset your password: ${resetLink}`,
-      `<p>Click <a href="${resetLink}">here</a> to reset your password</p>`
-    );
+    // Fetch the forgot-password email template (ID: 2)
+    const fpTemplate = await prisma.email.findUnique({
+      where: { id: 2 },
+    });
+
+    if (fpTemplate) {
+      const html = fillTemplate(fpTemplate.body, {
+        name: user.name ?? user.email,
+        reset_link: resetLink,
+      });
+      await sendEmail(email, fpTemplate.subject, "", html);
+    } else {
+      // fallback plain‑text
+      await sendEmail(
+        email,
+        "Password Reset",
+        `Click the link to reset your password: ${resetLink}`,
+        `<p>Click <a href="${resetLink}">here</a> to reset your password</p>`
+      );
+    }
 
     res.json({ message: "Password reset link sent to email" });
   } catch (error) {
@@ -228,6 +176,18 @@ export const resetPassword = async (
       data: { password: hashedPassword, resetToken: null, resetTokenExp: null },
     });
 
+    // Fetch the reset confirmation email template (ID: 3)
+    const confTemplate = await prisma.email.findUnique({
+      where: { id: 3 },
+    });
+    if (confTemplate) {
+      const html = fillTemplate(confTemplate.body, {
+        name: user.name ?? user.email,
+        support_url: "mailto:support@thenexgen.ai",
+      });
+      await sendEmail(user.email, confTemplate.subject, "", html);
+    }
+
     res.json({ message: "Password reset successfully" });
   } catch (error) {
     next(error);
@@ -270,7 +230,6 @@ export const refreshAccessToken = async (
     }
 
     // Retrieve the stored refresh token from the database
-    // → use findFirst() instead of findUnique() now that token is not unique
     const storedToken = await prisma.refreshToken.findFirst({
       where: { token: tokenToVerify },
     });
@@ -303,6 +262,81 @@ export const refreshAccessToken = async (
     );
 
     res.json({ accessToken: newAccessToken });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// **Login User**
+export const login = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      res.status(400).json({ error: "Invalid email or password" });
+      return;
+    }
+
+    // Generate access token (expires in 15 minutes)
+    const accessToken = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        credits: user.credits,
+        role: user.role || "user",
+      },
+      JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    // Generate refresh token (expires in 7 days)
+    const refreshToken = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        credits: user.credits,
+        role: user.role,
+      },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // Find and update (or create) the refresh token in the database
+    const existingToken = await prisma.refreshToken.findFirst({
+      where: { userId: user.id },
+    });
+    if (existingToken) {
+      await prisma.refreshToken.update({
+        where: { id: existingToken.id },
+        data: {
+          token: refreshToken,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          revoked: false,
+        },
+      });
+    } else {
+      await prisma.refreshToken.create({
+        data: {
+          token: refreshToken,
+          userId: user.id,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
+    }
+
+    res.json({
+      accessToken,
+      refreshToken,
+      name: user.name || user.email,
+      email: user.email,
+      credits: user.credits,
+      role: user.role || "user",
+    });
   } catch (error) {
     next(error);
   }

@@ -13,6 +13,7 @@ import {
   TableRow,
   TableCell,
   TextRun,
+  WidthType,
 } from "docx";
 
 const router = express.Router();
@@ -77,11 +78,12 @@ router.get(
 router.get(
   "/download",
   authenticateToken,
-  async (req: Request, res: Response): Promise<void> => {
+  async (req: Request, res: Response) => {
     const { fileId, format } = req.query as {
       fileId?: string;
       format?: string;
     };
+
     if (!fileId || !format) {
       res.status(400).json({ error: "Missing fileId or format" });
       return;
@@ -90,98 +92,116 @@ router.get(
     const fileRecord = await prisma.file.findUnique({
       where: { id: fileId },
     });
+
     if (!fileRecord || !fileRecord.summaryFileName) {
       res.status(404).json({ error: "File not found or no summary" });
       return;
     }
 
-    const safeTitle = fileRecord.title
+    const safeTitle = (fileRecord.title || "summary")
       .trim()
       .replace(/\s+/g, "-")
       .toLowerCase();
 
-    const [summaryBuffer] = await summaryBucket
-      .file(fileRecord.summaryFileName)
-      .download();
-    const parsed = JSON.parse(summaryBuffer.toString());
-    const isLegacy = Array.isArray(parsed);
-    const summaryData = isLegacy ? parsed : parsed.sections;
+    let summaryData: any[] = [];
+    let markdownContent: string | null = null;
 
-    if (!summaryData || summaryData.length === 0) {
+    try {
+      const [summaryBuffer] = await summaryBucket
+        .file(fileRecord.summaryFileName)
+        .download();
+
+      const parsed = JSON.parse(summaryBuffer.toString());
+
+      if (Array.isArray(parsed)) summaryData = parsed;
+      else if (Array.isArray(parsed.sections)) summaryData = parsed.sections;
+      else if (typeof parsed.summary === "string")
+        markdownContent = parsed.summary;
+    } catch (err) {
+      console.error("Summary parse error:", err);
+      res.status(500).json({ error: "Failed to retrieve summary content." });
+      return;
+    }
+
+    if ((!summaryData || summaryData.length === 0) && !markdownContent) {
       res.status(422).json({ error: "Summary content is empty." });
       return;
     }
 
-    const userId = (req as any).user.userId as string;
-    await prisma.downloadHistory.create({
-      data: { userId, fileId, format },
-    });
-
     if (format === "docx") {
+      const headerRow = new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: "Page", bold: true })] })],
+            width: { size: 2000, type: WidthType.DXA },
+          }),
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: "Testimony", bold: true })] })],
+            width: { size: 10000, type: WidthType.DXA },
+          }),
+        ],
+      });
+
       const rows = summaryData.map(
         (s: any) =>
           new TableRow({
             children: [
-              new TableCell({
-                children: [new Paragraph(String(s.page || ""))],
-              }),
-              new TableCell({
-                children: [new Paragraph(s.mainPoint)],
-              }),
+              new TableCell({ children: [new Paragraph(s.page || "")] }),
+              new TableCell({ children: [new Paragraph(s.mainPoint || "")] }),
             ],
           })
       );
+
       const doc = new Document({
         sections: [
           {
             children: [
-              new Paragraph({
-                children: [
-                  new TextRun({ text: fileRecord.title, bold: true, size: 28 }),
-                ],
+              new Paragraph({ children: [new TextRun({ text: fileRecord.title, bold: true, size: 28 })] }),
+              new Table({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                rows: [headerRow, ...rows],
               }),
-              new Table({ rows }),
             ],
           },
         ],
       });
+
       const buffer = await Packer.toBuffer(doc);
-      res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      );
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename=\"${safeTitle}.docx\"`
-      );
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.docx"`);
       res.send(buffer);
       return;
     }
 
     if (format === "txt") {
-      const textOutput = summaryData
-        .map((s: any) => `| Page ${s.page} | ${s.mainPoint} |`)
-        .join("\n");
+      const lines = [
+        "| Page | Testimony |",
+        "|------|-----------|",
+        ...summaryData.map((s: any) => `| ${s.page || ""} | ${s.mainPoint || ""} |`),
+      ];
       res.setHeader("Content-Type", "text/plain");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename=\"${safeTitle}.txt\"`
-      );
-      res.send(textOutput);
+      res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.txt"`);
+      res.send(lines.join("\n"));
       return;
     }
 
     if (format === "pdf") {
-      const pdf = new PDFDocument();
+      const pdf = new PDFDocument({ margin: 40 });
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename=\"${safeTitle}.pdf\"`
-      );
+      res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.pdf"`);
       pdf.pipe(res);
+
+      pdf.fontSize(14).text(fileRecord.title, { align: "center" }).moveDown(1);
+      pdf.fontSize(12).text("Page", { continued: true, width: 80 });
+      pdf.text("| Testimony", { continued: false }).moveDown(0.3);
+
       summaryData.forEach((s: any) => {
-        pdf.text(`| Page ${s.page} | ${s.mainPoint} |`, { lineGap: 4 });
+        pdf
+          .fontSize(10)
+          .text(`${s.page || ""}`, { continued: true, width: 80 })
+          .text(`| ${s.mainPoint || ""}`);
       });
+
       pdf.end();
       return;
     }
