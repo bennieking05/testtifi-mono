@@ -10,6 +10,8 @@ import downloadRoutes from "./routes/downloadRoutes";
 import userRoutes from "./routes/userRoutes";
 import supportRoutes from "./routes/supportRoutes";
 import fineTineRoutes from "./routes/fineTuneRoutes";
+import summariesRoutes from "./routes/summariesRoutes";
+import summaryJobRoutes from "./routes/summaryJobRoutes";
 
 dotenv.config();
 const app = express();
@@ -48,10 +50,13 @@ app.get("/api/test", (_req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api/purchase", purchaseRoutes);
-app.use("/api/summaries", downloadRoutes);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/summaries", summariesRoutes);
+app.use("/api/download", downloadRoutes); 
 app.use("/api/user", userRoutes);
 app.use("/api/support", supportRoutes);
 app.use("/api/fine-tune", fineTineRoutes);
+app.use("/api/summary-jobs", summaryJobRoutes);
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

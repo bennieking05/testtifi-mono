@@ -15,10 +15,11 @@
   "dependencies": {
     "@google-cloud/storage": "^7.15.2",
     "@google-cloud/vision": "^5.1.0",
-    "@prisma/client": "^6.4.1",
+    "@prisma/client": "^6.8.2",
     "@sendgrid/mail": "^8.1.4",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
+    "csv-stringify": "^6.5.2",
     "docx": "^9.3.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -49,7 +50,7 @@
     "@types/pdfjs-dist": "^2.10.378",
     "@types/pdfkit": "^0.13.9",
     "@types/tesseract.js": "^2.0.0",
-    "prisma": "^6.4.1",
+    "prisma": "^6.8.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3"
   }
