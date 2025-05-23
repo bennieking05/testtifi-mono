@@ -4,7 +4,7 @@ metadata:
   name: summarize-worker
   namespace: default
 spec:
-  replicas: 1 # Increase if you want more parallelism
+  replicas: 1
   selector:
     matchLabels:
       app: summarize-worker
@@ -14,7 +14,6 @@ spec:
         app: summarize-worker
     spec:
       containers:
-        # 1) Cloud SQL Proxy sidecar
         - name: cloud-sql-proxy
           image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
           command:
@@ -33,28 +32,24 @@ spec:
               memory: "256Mi"
               cpu: "200m"
 
-        # 2) The summarize worker container
         - name: summarize-worker
           image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
-          # IMPORTANT: This is the command to run your worker!
-          command: ["npx", "ts-node", "src/worker/summarizeWorker.ts"]
+          command: ["node", "dist/worker/summarizeWorker.js"]
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "500m"
+              memory: "192Mi"
+              cpu: "150m"
             limits:
-              memory: "1Gi"
-              cpu: "1"
+              memory: "384Mi"
+              cpu: "300m"
           env:
             - name: NODE_ENV
               value: production
-
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
                   key: DATABASE_URL
-
             - name: DB_HOST
               value: "127.0.0.1"
             - name: DB_USER
@@ -72,7 +67,6 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: DB_NAME
-
             - name: SENDGRID_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -103,8 +97,6 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: BACKEND_URL
-
-            # Stripe secrets (if needed by worker, else can omit)
             - name: STRIPE_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -115,8 +107,6 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: STRIPE_WEBHOOK_SECRET
-
-            # Azure OpenAI secrets
             - name: AZURE_OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -137,7 +127,6 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: AZURE_API_VERSION
-
           volumeMounts:
             - name: cloudsql-instance-credentials
               mountPath: /secrets/cloudsql

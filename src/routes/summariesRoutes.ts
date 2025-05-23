@@ -7,7 +7,6 @@ import { authenticateToken } from "../middlewares/authMiddleware";
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Returns all summary jobs for this user
 router.get(
   "/",
   authenticateToken,
@@ -19,28 +18,49 @@ router.get(
         return;
       }
 
+      // Fetch all jobs for this user, including the File relation if fileId exists
       const jobs = await prisma.summaryJob.findMany({
         where: { userId },
         orderBy: { createdAt: "desc" },
+        include: { file: true },
       });
 
-      // Adapt payload to match old /api/summaries for frontend compatibility:
-      // id, title, summaryUrl, date, pages, status
-      const summaries = jobs.map(job => ({
-        id: job.id,
-        title: job.fileName, // or job.title if you use that
-        summaryUrl: job.summaryCsvUrl || undefined,
-        date: job.createdAt.toISOString(),
-        pages: job.totalPages,
-        status:
-          job.status === "complete"
-            ? "active"
-            : job.status === "error"
-            ? "error"
-            : "processing",
-        error: job.error || undefined,
-        progress: `${job.lastPageProcessed}/${job.totalPages}`,
-      }));
+      // For jobs with no file relation (missing fileId), fallback by fileName
+      const fallbackFileNames = jobs
+        .filter(j => !j.file)
+        .map(j => j.fileName);
+
+      let fileNameLookup: Record<string, any> = {};
+      if (fallbackFileNames.length > 0) {
+        const files = await prisma.file.findMany({
+          where: { fileName: { in: fallbackFileNames } },
+        });
+        fileNameLookup = Object.fromEntries(
+          files.map(f => [f.fileName, f])
+        );
+      }
+
+      const summaries = jobs.map(job => {
+        // Priority: joined file → fallback file by fileName → fallback to fileName as last resort
+        const file = job.file || fileNameLookup[job.fileName];
+
+        return {
+          id: job.id,
+          title: file?.title || "Untitled Document",
+          fileName: file?.fileName || job.fileName || "",
+          summaryUrl: job.summaryCsvUrl || undefined,
+          date: job.createdAt.toISOString(),
+          pages: file?.pages ?? job.totalPages,
+          status:
+            job.status === "complete"
+              ? "active"
+              : job.status === "error"
+              ? "error"
+              : "processing",
+          error: job.error || undefined,
+          progress: `${job.lastPageProcessed}/${job.totalPages}`,
+        };
+      });
 
       res.json(summaries);
     } catch (err) {

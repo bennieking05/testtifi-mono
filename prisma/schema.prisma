@@ -42,8 +42,27 @@ model File {
   title           String
   downloads       DownloadHistory[]
   user            User?             @relation(fields: [userId], references: [id])
+  summaryJobs     SummaryJob[]      @relation("FileToSummaryJob")
 
   @@index([userId], map: "File_userId_fkey")
+}
+
+model SummaryJob {
+  id                String   @id @default(uuid())
+  userId            String
+  fileName          String
+  fileUrl           String
+  summaryCsvUrl     String?  @db.Text
+  status            String
+  lastPageProcessed Int
+  totalPages        Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+  error             String?  @db.Text
+  fileId            String?
+  file              File?    @relation("FileToSummaryJob", fields: [fileId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_SummaryJob_file")
+
+  @@index([fileId], map: "fk_SummaryJob_file")
 }
 
 model Purchase {
@@ -127,20 +146,6 @@ model TrainingAsset {
   user        User      @relation(fields: [userId], references: [id])
 
   @@index([userId], map: "TrainingAsset_userId_fkey")
-}
-
-model SummaryJob {
-  id                String   @id @default(uuid())
-  userId            String
-  fileName          String
-  fileUrl           String
-  summaryCsvUrl     String?  @db.Text
-  status            String
-  lastPageProcessed Int
-  totalPages        Int
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @default(now()) @updatedAt
-  error             String?  @db.Text
 }
 
 /// ───────────────────────── enums ─────────────────────────

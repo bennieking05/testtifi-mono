@@ -12,6 +12,17 @@ const router = express.Router();
 const prisma = new PrismaClient();
 const summaryBucket = new Storage().bucket("deposition-summaries");
 
+function sanitizeFilename(name: string) {
+  return name
+    .replace(/[^a-z0-9_\-\.]/gi, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function stripExtension(fileName: string) {
+  return fileName.replace(/\.[^/.]+$/, "");
+}
+
 // Helper to parse metadata and markdown table
 function parseSummaryMarkdown(markdown: string) {
   const lines = markdown.split(/\r?\n/);
@@ -49,11 +60,49 @@ router.get(
       return;
     }
 
+    // --- STEP 1: Fetch the SummaryJob ---
     const job = await prisma.summaryJob.findUnique({ where: { id: jobId } });
     if (!job || !job.summaryCsvUrl) {
       res.status(404).json({ error: "Summary job not found or summary file not available" });
       return;
     }
+
+    // --- STEP 2: Lookup the File by fileName ---
+    let safeTitle = "untitled-summary";
+    let debugInfo = {};
+    let file: any = null;
+
+    if (job.fileName) {
+      // Try to match the File with the same fileName as SummaryJob
+      file = await prisma.file.findFirst({
+        where: { fileName: job.fileName }
+      });
+
+      debugInfo = {
+        jobFileName: job.fileName,
+        fileFound: !!file,
+        fileTitle: file?.title,
+        fileDeponent: file?.deponent,
+        fileSummaryFileName: file?.summaryFileName,
+      };
+
+      // DEBUG: Print to server console
+      console.log("Download Debug Info:", debugInfo);
+
+      // Priority: file.title → file.deponent + title → file.summaryFileName → job.fileName
+      if (file?.title) {
+        safeTitle = sanitizeFilename(stripExtension(file.title));
+      } else if (file?.deponent && file?.title) {
+        safeTitle = sanitizeFilename(`${file.deponent}-${stripExtension(file.title)}`);
+      } else if (file?.summaryFileName) {
+        safeTitle = sanitizeFilename(stripExtension(file.summaryFileName));
+      } else if (job.fileName) {
+        safeTitle = sanitizeFilename(stripExtension(job.fileName));
+      }
+    }
+
+    // Fallback if still empty
+    if (!safeTitle || safeTitle === "") safeTitle = "untitled-summary";
 
     try {
       const fileName = new URL(job.summaryCsvUrl).pathname.split('/').pop();
@@ -72,7 +121,7 @@ router.get(
         }
         txt += "---------------------------------------------------------\n";
         res.setHeader("Content-Type", "text/plain");
-        res.setHeader("Content-Disposition", `attachment; filename="summary-${jobId}.txt"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.txt"`);
         res.send(txt);
         return;
       }
@@ -111,7 +160,7 @@ router.get(
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="summary-${jobId}.docx"`
+          `attachment; filename="${safeTitle}.docx"`
         );
         res.send(docBuffer);
         return;
@@ -122,7 +171,7 @@ router.get(
         const { meta, tableRows } = parseSummaryMarkdown(summaryBuffer.toString("utf-8"));
         const doc = new PDFDocument({ margin: 40, size: "LETTER" });
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", `attachment; filename="summary-${jobId}.pdf"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.pdf"`);
         const passthrough = new stream.PassThrough();
         doc.pipe(passthrough);
         passthrough.pipe(res);
@@ -152,7 +201,7 @@ router.get(
       // CSV download (default/fallback)
       if (format === "csv") {
         res.setHeader("Content-Type", "text/csv");
-        res.setHeader("Content-Disposition", `attachment; filename="summary-${jobId}.csv"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.csv"`);
         res.send(summaryBuffer);
         return;
       }
