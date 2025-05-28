@@ -1,15 +1,18 @@
+// ─── src/controllers/authController.ts ────────────────────────────────────────
 import { Request, Response, NextFunction } from "express";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
-import sgMail, { MailDataRequired } from "@sendgrid/mail";
-import dotenv from "dotenv";
-import { fillTemplate } from "../utils/emailTemplate"; // New
+import bcrypt                                from "bcryptjs";
+import jwt                                   from "jsonwebtoken";
+import { PrismaClient }                      from "@prisma/client";
+import sgMail, { MailDataRequired }          from "@sendgrid/mail";
+import dotenv                                from "dotenv";
+import { fillTemplate }                      from "../utils/emailTemplate";
 
 dotenv.config();
-const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET as string;
-const senderEmail = process.env.EMAIL_USER ?? "admin@testifi.ai"
+
+const prisma        = new PrismaClient();
+const JWT_SECRET    = process.env.JWT_SECRET  as string;
+const senderEmail   = process.env.EMAIL_USER ?? "admin@testifi.ai";
+const frontendUrl   = process.env.FRONTEND_URL ?? "http://localhost:3000"; // ← NEW
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY as string);
 
@@ -26,14 +29,16 @@ export async function sendEmail(
     to,
     from: senderEmail,
     subject,
-    text: text && text.trim().length > 0 ? text : "This is a transactional email from Testifi-AI.",
-    html: html && html.trim().length > 0 ? html : undefined
+    text: text?.trim() || "This is a transactional email from Testifi AI.",
+    html: html?.trim() || undefined,
   };
   await sgMail.send(msg);
   console.log(`Email sent → ${to} : "${subject}"`);
 }
 
-// **Register User**
+/* ----------------------------------------------------------------------- */
+/*                               REGISTER USER                             */
+/* ----------------------------------------------------------------------- */
 export const register = async (
   req: Request,
   res: Response,
@@ -47,31 +52,31 @@ export const register = async (
       data: { email, password: hashedPassword, name, companyName },
     });
 
-    // Fetch the registration email template (ID: 1)
-    const registrationEmail = await prisma.email.findUnique({
-      where: { id: 1 },
-    });
+    const registrationEmail = await prisma.email.findUnique({ where: { id: 1 } });
 
-    // Send email if a template exists
     if (registrationEmail) {
-      const html = fillTemplate(registrationEmail.body, { name: user.name ?? user.email });
+      const html = fillTemplate(registrationEmail.body, {
+        name: user.name ?? user.email,
+        dashboard_link: `${frontendUrl}/dashboard`,
+      });
+
       await sendEmail(
         user.email,
         registrationEmail.subject,
-        "Welcome to Testifi-AI! Your journey starts here.",
+        "Welcome to Testifi AI! Your journey starts here.",
         html
       );
     }
 
-    res
-      .status(201)
-      .json({ message: "User registered successfully", userId: user.id });
+    res.status(201).json({ message: "User registered successfully", userId: user.id });
   } catch (error) {
     next(error);
   }
 };
 
-// **Forgot Password using SendGrid**
+/* ----------------------------------------------------------------------- */
+/*                       FORGOT‑PASSWORD (SendGrid)                        */
+/* ----------------------------------------------------------------------- */
 export const forgotPassword = async (
   req: Request,
   res: Response,
@@ -80,41 +85,34 @@ export const forgotPassword = async (
   try {
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email } });
-
     if (!user) {
       res.status(404).json({ error: "User not found" });
       return;
     }
 
-    const resetToken = Math.random().toString(36).substring(2);
-    const resetTokenExp = new Date(Date.now() + 3600000); // 1 hour expiry
+    const resetToken    = Math.random().toString(36).substring(2);
+    const resetTokenExp = new Date(Date.now() + 3_600_000); // 1 h
 
     await prisma.user.update({
       where: { email },
-      data: { resetToken, resetTokenExp },
+      data : { resetToken, resetTokenExp },
     });
 
-    const baseUrl = process.env.BASE_URL || "http://localhost:3000";
-    const resetLink = `${baseUrl}/reset-password/${resetToken}`;
-
-    // Fetch the forgot-password email template (ID: 2)
-    const fpTemplate = await prisma.email.findUnique({
-      where: { id: 2 },
-    });
+    const resetLink  = `${frontendUrl}/reset-password/${resetToken}`;
+    const fpTemplate = await prisma.email.findUnique({ where: { id: 2 } });
 
     if (fpTemplate) {
       const html = fillTemplate(fpTemplate.body, {
-        name: user.name ?? user.email,
+        name      : user.name ?? user.email,
         reset_link: resetLink,
       });
       await sendEmail(email, fpTemplate.subject, "", html);
     } else {
-      // fallback plain‑text
       await sendEmail(
         email,
         "Password Reset",
         `Click the link to reset your password: ${resetLink}`,
-        `<p>Click <a href="${resetLink}">here</a> to reset your password</p>`
+        `<p>Click <a href="${resetLink}">here</a> to reset your password.</p>`
       );
     }
 
@@ -124,7 +122,9 @@ export const forgotPassword = async (
   }
 };
 
-// **Get Reset Email (using a path parameter)**
+/* ----------------------------------------------------------------------- */
+/*                       GET EMAIL BY RESET TOKEN                          */
+/* ----------------------------------------------------------------------- */
 export const getResetEmail = async (
   req: Request,
   res: Response,
@@ -132,28 +132,32 @@ export const getResetEmail = async (
 ): Promise<void> => {
   try {
     let token = req.query.token;
-    if (Array.isArray(token)) {
-      token = token[0];
-    }
+    if (Array.isArray(token)) token = token[0];
+
     if (!token || typeof token !== "string") {
       res.status(400).json({ error: "Missing or invalid token" });
       return;
     }
+
     const user = await prisma.user.findFirst({
-      where: { resetToken: token, resetTokenExp: { gt: new Date() } },
+      where : { resetToken: token, resetTokenExp: { gt: new Date() } },
       select: { email: true },
     });
+
     if (!user) {
       res.status(404).json({ error: "Invalid or expired token" });
       return;
     }
+
     res.json({ email: user.email });
   } catch (error) {
     next(error);
   }
 };
 
-// **Reset Password**
+/* ----------------------------------------------------------------------- */
+/*                          RESET PASSWORD FLOW                            */
+/* ----------------------------------------------------------------------- */
 export const resetPassword = async (
   req: Request,
   res: Response,
@@ -161,10 +165,10 @@ export const resetPassword = async (
 ): Promise<void> => {
   try {
     const { token, newPassword } = req.body;
+
     const user = await prisma.user.findFirst({
       where: { resetToken: token, resetTokenExp: { gt: new Date() } },
     });
-
     if (!user) {
       res.status(400).json({ error: "Invalid or expired token" });
       return;
@@ -173,16 +177,13 @@ export const resetPassword = async (
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({
       where: { id: user.id },
-      data: { password: hashedPassword, resetToken: null, resetTokenExp: null },
+      data : { password: hashedPassword, resetToken: null, resetTokenExp: null },
     });
 
-    // Fetch the reset confirmation email template (ID: 3)
-    const confTemplate = await prisma.email.findUnique({
-      where: { id: 3 },
-    });
+    const confTemplate = await prisma.email.findUnique({ where: { id: 3 } });
     if (confTemplate) {
       const html = fillTemplate(confTemplate.body, {
-        name: user.name ?? user.email,
+        name       : user.name ?? user.email,
         support_url: "mailto:support@thenexgen.ai",
       });
       await sendEmail(user.email, confTemplate.subject, "", html);
@@ -194,69 +195,45 @@ export const resetPassword = async (
   }
 };
 
-// **Refresh Token Endpoint**
+/* ----------------------------------------------------------------------- */
+/*                        REFRESH ACCESS TOKEN                             */
+/* ----------------------------------------------------------------------- */
 export const refreshAccessToken = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
-    // Expect the refresh token to be sent in the request body
     const { refreshToken } = req.body;
     if (!refreshToken) {
       res.status(401).json({ error: "Refresh token required" });
       return;
     }
 
-    // Trim the token to remove any extra whitespace
     const tokenToVerify = refreshToken.trim();
-    console.log("Refresh token received for verification:", tokenToVerify);
-    console.log("Token length:", tokenToVerify.length);
 
     let decoded: {
-      userId: string;
-      email: string;
+      userId : string;
+      email  : string;
       credits: number;
-      exp: number;
-      iat: number;
+      exp    : number;
+      iat    : number;
     };
     try {
-      // Synchronously verify the refresh token
       decoded = jwt.verify(tokenToVerify, JWT_SECRET) as typeof decoded;
     } catch (err: any) {
-      console.error("Error verifying refresh token:", err.message);
       res.status(403).json({ error: "Invalid refresh token: " + err.message });
       return;
     }
 
-    // Retrieve the stored refresh token from the database
-    const storedToken = await prisma.refreshToken.findFirst({
-      where: { token: tokenToVerify },
-    });
-    console.log("Stored refresh token from DB:", storedToken?.token);
-
-    if (!storedToken) {
-      res.status(403).json({ error: "Refresh token not found in database" });
+    const storedToken = await prisma.refreshToken.findFirst({ where: { token: tokenToVerify } });
+    if (!storedToken || storedToken.revoked || new Date() > storedToken.expiresAt) {
+      res.status(403).json({ error: "Refresh token is invalid, revoked, or expired" });
       return;
     }
 
-    if (storedToken.revoked) {
-      res.status(403).json({ error: "Refresh token has been revoked" });
-      return;
-    }
-
-    if (new Date() > storedToken.expiresAt) {
-      res.status(403).json({ error: "Refresh token has expired" });
-      return;
-    }
-
-    // Generate a new access token
     const newAccessToken = jwt.sign(
-      {
-        userId: decoded.userId,
-        email: decoded.email,
-        credits: decoded.credits,
-      },
+      { userId: decoded.userId, email: decoded.email, credits: decoded.credits },
       JWT_SECRET,
       { expiresIn: "115m" }
     );
@@ -267,7 +244,9 @@ export const refreshAccessToken = async (
   }
 };
 
-// **Login User**
+/* ----------------------------------------------------------------------- */
+/*                               LOGIN USER                                */
+/* ----------------------------------------------------------------------- */
 export const login = async (
   req: Request,
   res: Response,
@@ -276,54 +255,38 @@ export const login = async (
   try {
     const { email, password } = req.body;
     const user = await prisma.user.findUnique({ where: { email } });
-
     if (!user || !(await bcrypt.compare(password, user.password))) {
       res.status(400).json({ error: "Invalid email or password" });
       return;
     }
 
-    // Generate access token (expires in 15 minutes)
     const accessToken = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        credits: user.credits,
-        role: user.role || "user",
-      },
+      { userId: user.id, email: user.email, credits: user.credits, role: user.role || "user" },
       JWT_SECRET,
       { expiresIn: "115m" }
     );
 
-    // Generate refresh token (expires in 7 days)
     const refreshToken = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        credits: user.credits,
-        role: user.role,
-      },
+      { userId: user.id, email: user.email, credits: user.credits, role: user.role },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    // Find and update (or create) the refresh token in the database
-    const existingToken = await prisma.refreshToken.findFirst({
-      where: { userId: user.id },
-    });
+    const existingToken = await prisma.refreshToken.findFirst({ where: { userId: user.id } });
     if (existingToken) {
       await prisma.refreshToken.update({
         where: { id: existingToken.id },
-        data: {
-          token: refreshToken,
+        data : {
+          token    : refreshToken,
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-          revoked: false,
+          revoked  : false,
         },
       });
     } else {
       await prisma.refreshToken.create({
         data: {
-          token: refreshToken,
-          userId: user.id,
+          token    : refreshToken,
+          userId   : user.id,
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         },
       });
@@ -332,10 +295,10 @@ export const login = async (
     res.json({
       accessToken,
       refreshToken,
-      name: user.name || user.email,
-      email: user.email,
+      name   : user.name  || user.email,
+      email  : user.email,
       credits: user.credits,
-      role: user.role || "user",
+      role   : user.role || "user",
     });
   } catch (error) {
     next(error);
