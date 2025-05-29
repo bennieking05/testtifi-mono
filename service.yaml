@@ -3,11 +3,19 @@ kind: Service
 metadata:
   name: backend
   namespace: default
+
+  # Annotation tells GKE’s Ingress controller to create a NEG
+  # (needed for layer‑7 HTTP load‑balancing).
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+
 spec:
+  type: ClusterIP # keep internal service; Ingress will front it
   selector:
-    app: backend
+    app: backend # MUST match the pod label in your Deployment
+
   ports:
-    - protocol: TCP
-      port: 80 # External port
-      targetPort: 4000 # Internal port the backend application is listening on
-  type: ClusterIP
+    - name: http # give the port a canonical name
+      protocol: TCP
+      port: 80 # the port the Ingress routes to
+      targetPort: 4000 # containerPort exposed in your Deployment

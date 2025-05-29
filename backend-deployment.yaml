@@ -14,7 +14,7 @@ spec:
         app: backend
     spec:
       containers:
-        # 1) Cloud SQL Proxy sidecar
+        # ───────────── Cloud SQL Proxy side‑car ─────────────
         - name: cloud-sql-proxy
           image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
           command:
@@ -33,7 +33,7 @@ spec:
               memory: "256Mi"
               cpu: "200m"
 
-        # 2) Main backend container
+        # ───────────── Main backend container ───────────────
         - name: backend
           image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
           resources:
@@ -43,98 +43,98 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+
+          volumeMounts:
+            - name: gcp-service-account # <‑‑ mounts *service‑account‑json*
+              mountPath: /var/secrets/google
+              readOnly: true
+
           env:
             - name: NODE_ENV
-              value: production
+              value: "production"
 
+            # ---------- database / app secrets ----------
             - name: DATABASE_URL
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DATABASE_URL
+                { secretKeyRef: { name: backend-secrets, key: DATABASE_URL } }
 
             - name: DB_HOST
               value: "127.0.0.1"
             - name: DB_USER
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DB_USER
+                { secretKeyRef: { name: backend-secrets, key: DB_USER } }
             - name: DB_PASSWORD
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DB_PASSWORD
+                { secretKeyRef: { name: backend-secrets, key: DB_PASSWORD } }
             - name: DB_NAME
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DB_NAME
+                { secretKeyRef: { name: backend-secrets, key: DB_NAME } }
 
             - name: SENDGRID_API_KEY
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: SENDGRID_API_KEY
+                {
+                  secretKeyRef:
+                    { name: backend-secrets, key: SENDGRID_API_KEY },
+                }
             - name: OPENAI_API_KEY
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: OPENAI_API_KEY
+                { secretKeyRef: { name: backend-secrets, key: OPENAI_API_KEY } }
             - name: BREVO_SENDER_EMAIL
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: EMAIL_USER
+                { secretKeyRef: { name: backend-secrets, key: EMAIL_USER } }
             - name: JWT_SECRET
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: JWT_SECRET
+                { secretKeyRef: { name: backend-secrets, key: JWT_SECRET } }
             - name: BASE_URL
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: BASE_URL
+                { secretKeyRef: { name: backend-secrets, key: BASE_URL } }
             - name: BACKEND_URL
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: BACKEND_URL
+                { secretKeyRef: { name: backend-secrets, key: BACKEND_URL } }
 
-            # Stripe secrets
+            # ---------- Stripe ----------
             - name: STRIPE_API_KEY
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: STRIPE_API_KEY
+                { secretKeyRef: { name: backend-secrets, key: STRIPE_API_KEY } }
             - name: STRIPE_WEBHOOK_SECRET
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: STRIPE_WEBHOOK_SECRET
+                {
+                  secretKeyRef:
+                    { name: backend-secrets, key: STRIPE_WEBHOOK_SECRET },
+                }
 
-            # Azure OpenAI secrets
+            # ---------- Azure OpenAI ----------
             - name: AZURE_OPENAI_API_KEY
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_OPENAI_API_KEY
+                {
+                  secretKeyRef:
+                    { name: backend-secrets, key: AZURE_OPENAI_API_KEY },
+                }
             - name: AZURE_OPENAI_ENDPOINT
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_OPENAI_ENDPOINT
+                {
+                  secretKeyRef:
+                    { name: backend-secrets, key: AZURE_OPENAI_ENDPOINT },
+                }
             - name: AZURE_OPENAI_DEPLOYMENT_NAME
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_OPENAI_DEPLOYMENT_NAME
+                {
+                  secretKeyRef:
+                    {
+                      name: backend-secrets,
+                      key: AZURE_OPENAI_DEPLOYMENT_NAME,
+                    },
+                }
             - name: AZURE_API_VERSION
               valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_API_VERSION
+                {
+                  secretKeyRef:
+                    { name: backend-secrets, key: AZURE_API_VERSION },
+                }
+
+            # ---------- GCP credentials ----------
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json # <‑‑ matches secret filename
 
           readinessProbe:
             httpGet:
@@ -143,7 +143,12 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
 
+      # ─────────────────────── Volumes ────────────────────────
       volumes:
         - name: cloudsql-instance-credentials
           secret:
             secretName: your-cloudsql-credentials
+
+        - name: gcp-service-account
+          secret:
+            secretName: service-account-json # <‑‑ uses your new secret
