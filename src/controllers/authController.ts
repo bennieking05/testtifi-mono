@@ -184,7 +184,7 @@ export const resetPassword = async (
     if (confTemplate) {
       const html = fillTemplate(confTemplate.body, {
         name       : user.name ?? user.email,
-        support_url: "mailto:support@thenexgen.ai",
+        support_url: "mailto:support@testifi.ai",
       });
       await sendEmail(user.email, confTemplate.subject, "", html);
     }
