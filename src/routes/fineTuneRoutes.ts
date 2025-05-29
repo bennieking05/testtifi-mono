@@ -6,7 +6,10 @@ import { authenticateToken } from "../middlewares/authMiddleware";
 
 const router = express.Router();
 const prisma = new PrismaClient();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  dest: "/tmp/uploads",                  // write to the pod’s disk
+  limits: { fileSize: 512 * 1024 * 1024 } // 512 MiB cap
+});
 
 const storage = new Storage();
 const humanSummaryBucket = storage.bucket("deposition-summaries"); // /human/
