@@ -1,103 +1,120 @@
-// src/routes/uploadRoutes.ts
+// ─── src/routes/uploadRoutes.ts ────────────────────────────────────────────────
 import express, { Request, Response } from "express";
-import multer from "multer";
+import busboy from "busboy";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
-import pdf from "pdf-parse";
-import mammoth from "mammoth";
-import path from "path";
 
+/*──────────────────────── setup ────────────────────────*/
 const router = express.Router();
 const prisma = new PrismaClient();
-const upload = multer({ storage: multer.memoryStorage() });
 const storage = new Storage();
 const depositionBkt = storage.bucket("deposition-files");
 
-/** Strip control chars and replacement glyphs */
-const clean = (s: string): string =>
-  s.replace(/[\u0000-\u001F\u007F-\u009F]/g, "").replace(/\uFFFD/g, "");
+/*──────────────────────── helpers ────────────────────────*/
+/** Accept only PDF / DOC / DOCX for now */
+const allowedMime = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
 
 /**
- * Splits a transcript text into pages.
- * Returns an array, so .length is always safe.
+ * Inserts a new summaryJob row and responds to the client.
+ * Doing this *before* the later worker picks up the file keeps the
+ * upload route lightweight (no PDF parsing → no OOM).
  */
-function splitPages(txt: string): { page: number; text: string }[] {
-  const byFF = txt.split(/\f/);
-  if (byFF.length > 1) {
-    return byFF.map((t, i) => ({ page: i + 1, text: t }));
-  }
+async function createJobAndRespond(
+  userId: string,
+  fileName: string,
+  res: Response
+) {
+  const fileUrl = `https://storage.googleapis.com/${depositionBkt.name}/${fileName}`;
 
-  const out: { page: number; text: string }[] = [];
-  let page = 1;
-  let buf: string[] = [];
+  const job = await prisma.summaryJob.create({
+    data: {
+      userId,
+      fileName,
+      fileUrl,
+      status: "processing",
+      totalPages: 0, // let the worker fill this in after OCR/PDF parse
+      lastPageProcessed: 0,
+    },
+  });
 
-  const flush = () => {
-    if (buf.length) {
-      out.push({ page: page++, text: buf.join("\n") });
-      buf = [];
-    }
-  };
-
-  for (const line of txt.split("\n")) {
-    if (/^\s*Page\s+\d+\s*$/i.test(line)) {
-      flush();
-    } else {
-      buf.push(line);
-    }
-  }
-  flush();
-  return out;
+  res.json({ jobId: job.id, status: "processing", totalPages: 0 });
 }
 
-router.post(
-  "/",
-  authenticateToken,
-  upload.single("file"),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const file = req.file;
-      const userId = (req as any).user?.userId as string | undefined;
+/*──────────────────────── route ────────────────────────*/
+router.post("/", authenticateToken, (req: Request, res: Response): void => {
+  const userId = (req as any).user?.userId as string | undefined;
+  if (!userId) {
+    res.status(401).json({ error: "Missing authentication" });
+    return;
+  }
 
-      if (!file || !userId) {
-        res.status(400).json({ error: "Missing file or authentication" });
+  try {
+    const bb = busboy({
+      headers: req.headers,
+      highWaterMark: 2 * 1024 * 1024, // 2 MiB chunks → minimal RAM
+    });
+
+    let hasFile = false;
+    let uploadFinished = false;
+
+    bb.on("file", (_field, file, info) => {
+      hasFile = true;
+
+      if (!allowedMime.has(info.mimeType)) {
+        file.resume(); // discard stream
+        res.status(400).json({ error: "Unsupported file type" });
         return;
       }
 
-      // 1️⃣ Upload raw bytes to GCS
-      await depositionBkt.file(file.originalname).save(file.buffer);
-      const fileUrl = `https://storage.googleapis.com/${depositionBkt.name}/${file.originalname}`;
-
-      // 2️⃣ Quick page count for PDF or Word
-      const ext = path.extname(file.originalname).toLowerCase();
-      let totalPages = 1;
-
-      if (ext === ".pdf") {
-        const parsed = await pdf(file.buffer);
-        totalPages = splitPages(clean(parsed.text)).length;
-      } else if (ext === ".doc" || ext === ".docx") {
-        const { value } = await mammoth.extractRawText({ buffer: file.buffer });
-        totalPages = splitPages(value).length;
-      }
-
-      // 3️⃣ Create the processing job
-      const job = await prisma.summaryJob.create({
-        data: {
-          userId,
-          fileName: file.originalname,
-          fileUrl,
-          status: "processing",
-          totalPages,
-          lastPageProcessed: 0,
-        },
+      const gcsFile = depositionBkt.file(info.filename);
+      const gcsStream = gcsFile.createWriteStream({
+        resumable: false,
+        contentType: info.mimeType,
       });
 
-      res.json({ jobId: job.id, totalPages, status: "processing" });
-    } catch (err: any) {
-      console.error("Upload error:", err);
-      res.status(400).json({ error: err.message || "Upload/parsing failed" });
-    }
+      file.pipe(gcsStream);
+
+      gcsStream.on("error", (err) => {
+        console.error("GCS upload error:", err);
+        if (!uploadFinished) {
+          uploadFinished = true;
+          res.status(500).json({ error: "Upload failed" });
+        }
+      });
+
+      gcsStream.on("finish", async () => {
+        try {
+          await gcsFile.makePrivate({ strict: false }); // optional: keep bucket private
+          if (!uploadFinished) {
+            uploadFinished = true;
+            await createJobAndRespond(userId, info.filename, res);
+          }
+        } catch (err) {
+          console.error("DB insert error:", err);
+          if (!uploadFinished) {
+            uploadFinished = true;
+            res.status(500).json({ error: "Internal error" });
+          }
+        }
+      });
+    });
+
+    bb.on("close", () => {
+      if (!hasFile && !uploadFinished) {
+        res.status(400).json({ error: "Missing file" });
+      }
+    });
+
+    req.pipe(bb);
+  } catch (err: any) {
+    console.error("Upload route error:", err);
+    res.status(500).json({ error: err.message || "Internal error" });
   }
-);
+});
 
 export default router;
