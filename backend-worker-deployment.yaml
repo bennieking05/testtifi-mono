@@ -37,11 +37,11 @@ spec:
           command: ["node", "dist/worker/summarizeWorker.js"]
           resources:
             requests:
-              memory: "192Mi"
-              cpu: "150m"
+              memory: "512Mi"
+              cpu: "250m"
             limits:
-              memory: "384Mi"
-              cpu: "300m"
+              memory: "1024Mi"
+              cpu: "500m"
           env:
             - name: NODE_ENV
               value: production

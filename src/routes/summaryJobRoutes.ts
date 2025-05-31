@@ -1,19 +1,15 @@
-// src/routes/summaryJobRoutes.ts
-
 import express, { Request, Response } from "express";
 import multer from "multer";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import pdf from "pdf-parse";
+import mammoth from "mammoth";
 import { Storage } from "@google-cloud/storage";
+import path from "path";
 
 const router = express.Router();
 const prisma = new PrismaClient();
-
-const upload = multer({
-  dest: "/tmp/uploads",                  // write to the pod’s disk
-  limits: { fileSize: 512 * 1024 * 1024 } // 512 MiB cap
-});
+const upload = multer({ storage: multer.memoryStorage() });
 const storage = new Storage();
 const depositionBucket = storage.bucket("deposition-files");
 
@@ -29,7 +25,10 @@ function splitPages(txt: string): { page: number; text: string }[] {
   let buf: string[] = [];
   const out: { page: number; text: string }[] = [];
   let current = 1;
-  const flush = () => { if (buf.length) out.push({ page: current++, text: buf.join("\n") }); buf = []; };
+  const flush = () => {
+    if (buf.length) out.push({ page: current++, text: buf.join("\n") });
+    buf = [];
+  };
   for (const line of txt.split("\n")) {
     if (/^\s*Page\s+\d+\s*$/i.test(line)) flush();
     buf.push(line);
@@ -44,7 +43,9 @@ router.get(
   authenticateToken,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const job = await prisma.summaryJob.findUnique({ where: { id: req.params.jobId } });
+      const job = await prisma.summaryJob.findUnique({
+        where: { id: req.params.jobId },
+      });
       if (!job) {
         res.status(404).json({ error: "Not found" });
         return;
@@ -76,14 +77,21 @@ router.post(
         res.status(400).json({ error: "missing file or auth" });
         return;
       }
-      // Save PDF to GCS
+      // Save file to GCS
       await depositionBucket.file(file.originalname).save(file.buffer);
       const fileUrl = `https://storage.googleapis.com/${depositionBucket.name}/${file.originalname}`;
 
-      // Get page count (quick PDF parse)
-      const parsed = await pdf(file.buffer);
-      const transcript = clean(parsed.text);
-      const pages = splitPages(transcript);
+      // Page count for PDF/DOC/DOCX
+      const ext = path.extname(file.originalname).toLowerCase();
+      let totalPages = 1;
+
+      if (ext === ".pdf") {
+        const parsed = await pdf(file.buffer);
+        totalPages = splitPages(clean(parsed.text)).length;
+      } else if (ext === ".doc" || ext === ".docx") {
+        const { value } = await mammoth.extractRawText({ buffer: file.buffer });
+        totalPages = splitPages(value).length;
+      }
 
       // Create summary job in DB
       const job = await prisma.summaryJob.create({
@@ -93,11 +101,11 @@ router.post(
           fileUrl,
           status: "processing",
           lastPageProcessed: 0,
-          totalPages: pages.length,
-        }
+          totalPages,
+        },
       });
 
-      res.json({ jobId: job.id, totalPages: pages.length, status: "processing" });
+      res.json({ jobId: job.id, totalPages, status: "processing" });
     } catch (err) {
       console.error("Upload error:", err);
       res.status(500).json({ error: "internal error" });

@@ -1,3 +1,5 @@
+// src/worker.ts
+
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import axios from "axios";
@@ -13,6 +15,17 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
+// Debug: log database URL and environment at startup
+console.log("=== Worker starting ===");
+console.log("Using DB:", process.env.DATABASE_URL);
+console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log("AZURE_OPENAI_ENDPOINT:", process.env.AZURE_OPENAI_ENDPOINT);
+console.log(
+  "AZURE_OPENAI_DEPLOYMENT_NAME:",
+  process.env.AZURE_OPENAI_DEPLOYMENT_NAME
+);
+console.log("AZURE_API_VERSION:", process.env.AZURE_API_VERSION);
+
 /* ────────── TEXT EXTRACTION ────────── */
 async function extractFullText(
   buffer: Buffer,
@@ -23,30 +36,46 @@ async function extractFullText(
   const isDocx = /\.(doc|docx)$/i.test(filename);
 
   if (isPDF) {
+    console.log(`[extractFullText] Detected PDF: ${filename}`);
     const parsed = await pdf(buffer);
-    if (parsed.text.trim().length > 100) return parsed.text;
+    if (parsed.text.trim().length > 100) {
+      console.log("[extractFullText] PDF has digital text. Skipping OCR.");
+      return parsed.text;
+    }
     // scanned → OCR fallback
+    console.log(
+      "[extractFullText] PDF appears scanned, using Vision OCR fallback."
+    );
     return await extractTextWithVision(gcsUri);
   }
   if (isDocx) {
+    console.log(`[extractFullText] Detected Word doc: ${filename}`);
     const { value } = await mammoth.extractRawText({ buffer });
     return value;
   }
+  console.log(`[extractFullText] Treating ${filename} as plain text.`);
   return buffer.toString("utf-8");
 }
 
 async function extractTextWithVision(gcsUri: string): Promise<string> {
+  console.log(`[extractTextWithVision] Starting OCR for: ${gcsUri}`);
   const destinationUri = `gs://${summaryBucket.name}/vision-output/`;
   const [operation] = await visionClient.asyncBatchAnnotateFiles({
     requests: [
       {
-        inputConfig: { gcsSource: { uri: gcsUri }, mimeType: "application/pdf" },
+        inputConfig: {
+          gcsSource: { uri: gcsUri },
+          mimeType: "application/pdf",
+        },
         features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
         outputConfig: { gcsDestination: { uri: destinationUri }, batchSize: 1 },
       },
     ],
   });
   await operation.promise();
+  console.log(
+    "[extractTextWithVision] Vision OCR job complete. Downloading result..."
+  );
   const [files] = await summaryBucket.getFiles({
     prefix: "vision-output/output-1-to-1.json",
   });
@@ -59,6 +88,7 @@ async function extractTextWithVision(gcsUri: string): Promise<string> {
 
 /* ────────── PAGE HELPERS ────────── */
 function splitPages(transcript: string): { page: number; text: string }[] {
+  console.log(`[splitPages] Splitting transcript into pages...`);
   const lines = transcript.split("\n");
   let currentPage = 1;
   let buf: string[] = [];
@@ -72,6 +102,7 @@ function splitPages(transcript: string): { page: number; text: string }[] {
     buf.push(line);
   }
   if (buf.length) out.push({ page: currentPage++, text: buf.join("\n") });
+  console.log(`[splitPages] Done. Total pages: ${out.length}`);
   return out;
 }
 
@@ -79,6 +110,9 @@ function groupPagesToChunks(
   pages: { page: number; text: string }[],
   pagesPerChunk = 12
 ): { start: number; end: number; text: string }[] {
+  console.log(
+    `[groupPagesToChunks] Grouping ${pages.length} pages into chunks of ${pagesPerChunk}...`
+  );
   const out: { start: number; end: number; text: string }[] = [];
   for (let i = 0; i < pages.length; i += pagesPerChunk) {
     const chunkPages = pages.slice(i, i + pagesPerChunk);
@@ -88,6 +122,7 @@ function groupPagesToChunks(
       text: chunkPages.map((p) => p.text).join("\n"),
     });
   }
+  console.log(`[groupPagesToChunks] Done. Total chunks: ${out.length}`);
   return out;
 }
 
@@ -152,14 +187,12 @@ function extractLegalMetadata(transcript: string): string {
   }
 - PLAINTIFFS: ${
     transcript
-      .match(/PLAINTIFFS[\s\S]{0,100}/i)
-      ?.[0]
+      .match(/PLAINTIFFS[\s\S]{0,100}/i)?.[0]
       ?.replace(/[\r\n]+/g, " ") || "[Unknown]"
   }
 - DEFENDANTS: ${
     transcript
-      .match(/DEFENDANTS[\s\S]{0,100}/i)
-      ?.[0]
+      .match(/DEFENDANTS[\s\S]{0,100}/i)?.[0]
       ?.replace(/[\r\n]+/g, " ") || "[Unknown]"
   }
 - DEPOSITION TITLE: ${
@@ -176,6 +209,7 @@ function extractLegalMetadata(transcript: string): string {
 
 /* ────────── LLM CALL ────────── */
 async function azureChatCompletion(messages: any[], maxTokens = 2800) {
+  console.log(`[azureChatCompletion] Sending prompt to Azure OpenAI...`);
   const url = `${process.env.AZURE_OPENAI_ENDPOINT?.replace(
     /\/+$/,
     ""
@@ -191,6 +225,7 @@ async function azureChatCompletion(messages: any[], maxTokens = 2800) {
     { messages, max_tokens: maxTokens, temperature: 0.1 },
     { headers, timeout: 120_000 }
   );
+  console.log(`[azureChatCompletion] Response received.`);
   return data;
 }
 
@@ -199,16 +234,27 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function mainWorkerLoop() {
   while (true) {
+    console.log(
+      `[${new Date().toISOString()}] Worker loop running, checking for jobs...`
+    );
     const job = await prisma.summaryJob.findFirst({
       where: { status: "processing" },
     });
+
     if (!job) {
+      // Always show a heartbeat even when idle
       await sleep(10_000);
       continue;
     }
 
+    // Debug: found a job!
+    console.log(
+      `[${job.id}] Found job. Status: ${job.status}, File: ${job.fileName}`
+    );
+
     const user = await prisma.user.findUnique({ where: { id: job.userId } });
     if (!user) {
+      console.error(`[${job.id}] ERROR: User not found`);
       await prisma.summaryJob.update({
         where: { id: job.id },
         data: { status: "error", error: "User not found" },
@@ -216,6 +262,7 @@ async function mainWorkerLoop() {
       continue;
     }
     if (user.credits <= 0) {
+      console.error(`[${job.id}] ERROR: Insufficient credits`);
       await prisma.summaryJob.update({
         where: { id: job.id },
         data: { status: "error", error: "Insufficient credits" },
@@ -225,22 +272,33 @@ async function mainWorkerLoop() {
     // *** credit was already decremented in /api/upload – nothing to do here ***
 
     try {
-      console.log(`[${job.id}] Starting chunked job for file: ${job.fileName}`);
-      const [fileBuffer] = await depositionBucket
-        .file(job.fileName)
-        .download();
+      console.log(`[${job.id}] Starting job. Downloading file from GCS...`);
+      const [fileBuffer] = await depositionBucket.file(job.fileName).download();
+      console.log(
+        `[${job.id}] File downloaded (${fileBuffer.length} bytes). Extracting text...`
+      );
+
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
       const transcript = await extractFullText(
         fileBuffer,
         job.fileName,
         gcsUri
       );
+      console.log(
+        `[${job.id}] Text extraction complete. Length: ${transcript.length}`
+      );
+
       const pages = splitPages(transcript);
       const chunks = groupPagesToChunks(pages, 12);
       const metaSection = extractLegalMetadata(transcript);
 
       const summaryParts: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
+        console.log(
+          `[${job.id}] Summarizing chunk ${i + 1}/${chunks.length} (pages ${
+            chunks[i].start
+          }-${chunks[i].end})`
+        );
         const prompt = makePrompt(chunks[i], i === 0, metaSection);
         const resp = await azureChatCompletion(prompt, 2800);
         const summaryTable = resp.choices[0].message.content.trim();
@@ -254,6 +312,7 @@ async function mainWorkerLoop() {
           where: { id: job.id },
           data: { lastPageProcessed: chunks[i].end },
         });
+        console.log(`[${job.id}] Chunk ${i + 1} complete.`);
       }
 
       const merged = summaryParts
@@ -265,6 +324,9 @@ async function mainWorkerLoop() {
 
       const outFile = path.join("/tmp", `${job.id}.md`);
       fs.writeFileSync(outFile, merged);
+      console.log(
+        `[${job.id}] Full summary written to disk. Uploading to GCS...`
+      );
 
       const destFile = `summary-${job.id}.md`;
       await summaryBucket.upload(outFile, {
@@ -292,12 +354,12 @@ async function mainWorkerLoop() {
         where: { id: job.id },
         data: { status: "error", error: e.message || "Failed" },
       });
-      console.error(`[${job.id}] Worker error:`, e);
+      console.error(`[${job.id}] Worker error:`, e, e?.stack);
     }
   }
 }
 
 mainWorkerLoop().catch((e) => {
-  console.error("Fatal error in worker:", e);
+  console.error("Fatal error in worker:", e, e?.stack);
   process.exit(1);
 });
