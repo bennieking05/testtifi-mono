@@ -1,6 +1,6 @@
 // ─── src/routes/uploadRoutes.ts ────────────────────────────────────────────────
 import express, { Request, Response } from "express";
-import busboy from "busboy";
+import Busboy, { FileInfo } from "busboy";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
@@ -13,23 +13,25 @@ const depositionBkt = storage.bucket("deposition-files");
 
 /*──────────────────────── helpers ────────────────────────*/
 /** Accept only PDF / DOC / DOCX for now */
-const allowedMime = new Set([
+const allowedMime = new Set<string>([
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
 /**
- * Inserts a new summaryJob row and responds to the client.
- * Doing this *before* the later worker picks up the file keeps the
- * upload route lightweight (no PDF parsing → no OOM).
+ * Inserts a new summaryJob record and responds to the client.
+ * We defer page‑count/OCR work to the worker so the upload route
+ * stays lightweight and memory‑safe.
  */
 async function createJobAndRespond(
   userId: string,
   fileName: string,
   res: Response
 ) {
-  const fileUrl = `https://storage.googleapis.com/${depositionBkt.name}/${fileName}`;
+  const fileUrl = `https://storage.googleapis.com/${
+    depositionBkt.name
+  }/${encodeURIComponent(fileName)}`;
 
   const job = await prisma.summaryJob.create({
     data: {
@@ -37,7 +39,7 @@ async function createJobAndRespond(
       fileName,
       fileUrl,
       status: "processing",
-      totalPages: 0, // let the worker fill this in after OCR/PDF parse
+      totalPages: 0,
       lastPageProcessed: 0,
     },
   });
@@ -53,21 +55,25 @@ router.post("/", authenticateToken, (req: Request, res: Response): void => {
     return;
   }
 
-  try {
-    const bb = busboy({
-      headers: req.headers,
-      highWaterMark: 2 * 1024 * 1024, // 2 MiB chunks → minimal RAM
-    });
+  const bb = Busboy({
+    headers: req.headers,
+    highWaterMark: 2 * 1024 * 1024, // 2 MiB chunks → minimal RAM
+  });
 
-    let hasFile = false;
-    let uploadFinished = false;
+  let hasFile = false;
+  let responded = false;
 
-    bb.on("file", (_field, file, info) => {
+  bb.on(
+    "file",
+    (_fieldName: string, file: NodeJS.ReadableStream, info: FileInfo) => {
       hasFile = true;
 
       if (!allowedMime.has(info.mimeType)) {
         file.resume(); // discard stream
-        res.status(400).json({ error: "Unsupported file type" });
+        if (!responded) {
+          responded = true;
+          res.status(400).json({ error: "Unsupported file type" });
+        }
         return;
       }
 
@@ -75,46 +81,40 @@ router.post("/", authenticateToken, (req: Request, res: Response): void => {
       const gcsStream = gcsFile.createWriteStream({
         resumable: false,
         contentType: info.mimeType,
+        // ⚠️ no predefinedAcl here — bucket uses Uniform Bucket‑Level Access
       });
 
       file.pipe(gcsStream);
 
       gcsStream.on("error", (err) => {
         console.error("GCS upload error:", err);
-        if (!uploadFinished) {
-          uploadFinished = true;
+        if (!responded) {
+          responded = true;
           res.status(500).json({ error: "Upload failed" });
         }
       });
 
       gcsStream.on("finish", async () => {
+        if (responded) return;
+        responded = true;
+        /* No makePrivate(): bucket has Uniform Bucket‑Level Access enabled */
         try {
-          await gcsFile.makePrivate({ strict: false }); // optional: keep bucket private
-          if (!uploadFinished) {
-            uploadFinished = true;
-            await createJobAndRespond(userId, info.filename, res);
-          }
+          await createJobAndRespond(userId, info.filename, res);
         } catch (err) {
           console.error("DB insert error:", err);
-          if (!uploadFinished) {
-            uploadFinished = true;
-            res.status(500).json({ error: "Internal error" });
-          }
+          res.status(500).json({ error: "Internal error" });
         }
       });
-    });
+    }
+  );
 
-    bb.on("close", () => {
-      if (!hasFile && !uploadFinished) {
-        res.status(400).json({ error: "Missing file" });
-      }
-    });
+  bb.on("close", () => {
+    if (!hasFile && !responded) {
+      res.status(400).json({ error: "Missing file" });
+    }
+  });
 
-    req.pipe(bb);
-  } catch (err: any) {
-    console.error("Upload route error:", err);
-    res.status(500).json({ error: err.message || "Internal error" });
-  }
+  req.pipe(bb);
 });
 
 export default router;
