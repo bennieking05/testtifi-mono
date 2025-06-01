@@ -1,3 +1,4 @@
+// ─── src/routes/downloadRoutes.ts ────────────────────────────────────────────
 import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
@@ -27,6 +28,17 @@ const sanitize = (s: string) =>
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 const stripExt = (s: string) => s.replace(/\.[^.]+$/, "");
+
+/** take a GCS‑signed URL or path & return just the object name */
+const toObjectName = (u: string) => {
+  try {
+    const { pathname } = new URL(u);
+    return pathname.substring(pathname.lastIndexOf("/") + 1);
+  } catch {
+    // not a URL – treat as already‑clean
+    return u;
+  }
+};
 
 function parseSummaryMarkdown(md: string) {
   const lines = md.split(/\r?\n/);
@@ -61,7 +73,7 @@ router.get("/", authenticateToken, async (req: Request, res: Response) => {
     return;
   }
 
-  /* 1️⃣ fetch job & related file */
+  /* 1️⃣ fetch job + file */
   const job = await prisma.summaryJob.findUnique({
     where: { id: jobId },
     include: { file: true },
@@ -71,13 +83,12 @@ router.get("/", authenticateToken, async (req: Request, res: Response) => {
     return;
   }
 
-  /* object name */
-  const objectName =
-    job.summaryCsvUrl?.split("/").pop() ||
-    job.file?.summaryFileName ||
-    `summary-${job.id}.md`;
+  /* clean object name */
+  const objectName = job.summaryCsvUrl
+    ? toObjectName(job.summaryCsvUrl)
+    : job.file?.summaryFileName ?? `summary-${job.id}.md`;
 
-  /* build a nice filename */
+  /* build a nice download filename */
   const safeTitle = sanitize(
     stripExt(
       job.file?.title || job.file?.summaryFileName || job.fileName || "summary"
@@ -90,17 +101,16 @@ router.get("/", authenticateToken, async (req: Request, res: Response) => {
     /* ---------- TXT ---------- */
     if (format === "txt") {
       const { meta, rows } = parseSummaryMarkdown(summaryBuf.toString());
-      const header =
-        "---------------------------------------------------------\n";
-      const body =
-        meta.join("\n") +
-        "\n\n" +
-        header +
-        "Page(s)           | Testimony Summary\n" +
-        header +
-        rows.map(([p, s]) => p.padEnd(18) + "| " + s).join("\n") +
-        "\n" +
-        header;
+      const hdr = "---------------------------------------------------------\n";
+      const body = [
+        ...meta,
+        "",
+        hdr,
+        "Page(s)           | Testimony Summary",
+        hdr,
+        ...rows.map(([p, s]) => p.padEnd(18) + "| " + s),
+        hdr,
+      ].join("\n");
 
       res.setHeader("Content-Type", "text/plain");
       res.setHeader(
@@ -162,8 +172,7 @@ router.get("/", authenticateToken, async (req: Request, res: Response) => {
     /* ---------- PDF ---------- */
     if (format === "pdf") {
       const { meta, rows } = parseSummaryMarkdown(summaryBuf.toString());
-      const doc = new PDFDocument({ margin: 40, size: "LETTER" });
-
+      const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
@@ -171,37 +180,37 @@ router.get("/", authenticateToken, async (req: Request, res: Response) => {
       );
 
       const pass = new stream.PassThrough();
-      doc.pipe(pass).pipe(res);
+      pdf.pipe(pass).pipe(res);
 
-      doc.font("Helvetica-Bold").fontSize(13);
-      meta.forEach((line) => doc.text(line));
-      doc.moveDown();
+      pdf.font("Helvetica-Bold").fontSize(13);
+      meta.forEach((line) => pdf.text(line));
+      pdf.moveDown();
 
-      doc
+      pdf
         .font("Helvetica-Bold")
         .fontSize(11)
         .text("Page(s)", { width: 100, continued: true })
         .text("Testimony Summary", { width: 400 });
-      doc
+      pdf
         .moveDown(0.2)
-        .moveTo(doc.x, doc.y)
-        .lineTo(doc.x + 500, doc.y)
+        .moveTo(pdf.x, pdf.y)
+        .lineTo(pdf.x + 500, pdf.y)
         .stroke();
 
       rows.forEach(([p, s]) => {
-        doc
+        pdf
           .font("Helvetica-Bold")
           .fontSize(10)
           .text(p, { width: 100, continued: true });
-        doc.font("Helvetica").fontSize(10).text(s, { width: 400 });
-        doc.moveDown(0.2);
+        pdf.font("Helvetica").fontSize(10).text(s, { width: 400 });
+        pdf.moveDown(0.2);
       });
 
-      doc.end();
+      pdf.end();
       return;
     }
 
-    /* ---------- CSV (fallback) ---------- */
+    /* ---------- CSV ---------- */
     if (format === "csv") {
       res.setHeader("Content-Type", "text/csv");
       res.setHeader(

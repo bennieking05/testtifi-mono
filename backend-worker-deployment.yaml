@@ -13,6 +13,7 @@ spec:
       labels:
         app: summarize-worker
     spec:
+      # ──────────── Side‑car: Cloud SQL Proxy ────────────
       containers:
         - name: cloud-sql-proxy
           image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
@@ -20,119 +21,51 @@ spec:
             - "/cloud_sql_proxy"
             - "-instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306"
             - "-credential_file=/secrets/cloudsql/credentials.json"
+          resources:
+            requests: { memory: "128Mi", cpu: "100m" }
+            limits: { memory: "256Mi", cpu: "200m" }
           volumeMounts:
             - name: cloudsql-instance-credentials
               mountPath: /secrets/cloudsql
               readOnly: true
-          resources:
-            requests:
-              memory: "128Mi"
-              cpu: "100m"
-            limits:
-              memory: "256Mi"
-              cpu: "200m"
 
+        # ──────────── Main worker container ────────────
         - name: summarize-worker
           image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
           command: ["node", "dist/worker/summarizeWorker.js"]
+
           resources:
-            requests:
-              memory: "512Mi"
-              cpu: "250m"
-            limits:
-              memory: "1024Mi"
-              cpu: "500m"
+            requests: { memory: "512Mi", cpu: "250m" }
+            limits: { memory: "1024Mi", cpu: "500m" }
+
+          # Inject EVERY key from backend‑secrets
+          envFrom:
+            - secretRef:
+                name: backend-secrets
+
+          # Add/override vars that are **not** in the secret
           env:
             - name: NODE_ENV
-              value: production
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DATABASE_URL
-            - name: DB_HOST
+              value: "production"
+            - name: DB_HOST # local Cloud SQL Proxy
               value: "127.0.0.1"
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DB_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DB_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: DB_NAME
-            - name: SENDGRID_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: SENDGRID_API_KEY
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: OPENAI_API_KEY
-            - name: BREVO_SENDER_EMAIL
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: EMAIL_USER
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: JWT_SECRET
-            - name: BASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: BASE_URL
-            - name: BACKEND_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: BACKEND_URL
-            - name: STRIPE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: STRIPE_API_KEY
-            - name: STRIPE_WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: STRIPE_WEBHOOK_SECRET
-            - name: AZURE_OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_OPENAI_API_KEY
-            - name: AZURE_OPENAI_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_OPENAI_ENDPOINT
-            - name: AZURE_OPENAI_DEPLOYMENT_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_OPENAI_DEPLOYMENT_NAME
-            - name: AZURE_API_VERSION
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_API_VERSION
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json
+
           volumeMounts:
+            - name: gcp-service-account
+              mountPath: /var/secrets/google
+              readOnly: true
             - name: cloudsql-instance-credentials
               mountPath: /secrets/cloudsql
               readOnly: true
 
+      # ───────────────────── Volumes ─────────────────────
       volumes:
         - name: cloudsql-instance-credentials
           secret:
-            secretName: your-cloudsql-credentials
+            secretName: your-cloudsql-credentials # ↳ already exists
+
+        - name: gcp-service-account
+          secret:
+            secretName: service-account-json # ↳ same one backend uses
