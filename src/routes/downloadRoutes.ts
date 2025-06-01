@@ -18,8 +18,7 @@ import stream from "stream";
 
 const router = express.Router();
 const prisma = new PrismaClient();
-const storage = new Storage();
-const summaryBucket = storage.bucket("deposition-summaries");
+const bucket = new Storage().bucket("deposition-summaries");
 
 /* ────────── helpers ────────── */
 const sanitize = (s: string) =>
@@ -28,29 +27,23 @@ const sanitize = (s: string) =>
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 const stripExt = (s: string) => s.replace(/\.[^.]+$/, "");
-
-/** take a GCS‑signed URL or path & return just the object name */
-const toObjectName = (u: string) => {
+const objectKey = (u: string) => {
   try {
-    const { pathname } = new URL(u);
-    return pathname.substring(pathname.lastIndexOf("/") + 1);
+    return new URL(u).pathname.split("/").pop()!;
   } catch {
-    // not a URL – treat as already‑clean
     return u;
   }
 };
 
-function parseSummaryMarkdown(md: string) {
-  const lines = md.split(/\r?\n/);
-  const meta: string[] = [];
-  const rows: string[][] = [];
+function parseMarkdown(md: string) {
+  const meta: string[] = [],
+    rows: string[][] = [];
   let inTable = false;
-
-  for (const line of lines) {
-    if (line.startsWith("|")) inTable = true;
-    if (!inTable && line.trim()) meta.push(line);
-    else if (inTable && line.startsWith("|")) {
-      const cols = line
+  md.split(/\r?\n/).forEach((l) => {
+    if (l.startsWith("|")) inTable = true;
+    if (!inTable && l.trim()) meta.push(l);
+    if (inTable && l.startsWith("|")) {
+      const cols = l
         .split("|")
         .slice(1, -1)
         .map((c) => c.trim());
@@ -61,171 +54,196 @@ function parseSummaryMarkdown(md: string) {
       )
         rows.push(cols);
     }
-  }
+  });
   return { meta, rows };
 }
 
 /* ────────── route ────────── */
-router.get("/", authenticateToken, async (req: Request, res: Response) => {
-  const { jobId, format } = req.query as { jobId?: string; format?: string };
-  if (!jobId || !format) {
-    res.status(400).json({ error: "Missing jobId or format" });
-    return;
-  }
-
-  /* 1️⃣ fetch job + file */
-  const job = await prisma.summaryJob.findUnique({
-    where: { id: jobId },
-    include: { file: true },
-  });
-  if (!job) {
-    res.status(404).json({ error: "Summary job not found." });
-    return;
-  }
-
-  /* clean object name */
-  const objectName = job.summaryCsvUrl
-    ? toObjectName(job.summaryCsvUrl)
-    : job.file?.summaryFileName ?? `summary-${job.id}.md`;
-
-  /* build a nice download filename */
-  const safeTitle = sanitize(
-    stripExt(
-      job.file?.title || job.file?.summaryFileName || job.fileName || "summary"
-    )
-  );
-
-  try {
-    const [summaryBuf] = await summaryBucket.file(objectName).download();
-
-    /* ---------- TXT ---------- */
-    if (format === "txt") {
-      const { meta, rows } = parseSummaryMarkdown(summaryBuf.toString());
-      const hdr = "---------------------------------------------------------\n";
-      const body = [
-        ...meta,
-        "",
-        hdr,
-        "Page(s)           | Testimony Summary",
-        hdr,
-        ...rows.map(([p, s]) => p.padEnd(18) + "| " + s),
-        hdr,
-      ].join("\n");
-
-      res.setHeader("Content-Type", "text/plain");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${safeTitle}.txt"`
-      );
-      res.send(body);
+router.get(
+  "/",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    const { jobId, format } = req.query as { jobId?: string; format?: string };
+    if (!jobId || !format) {
+      res.status(400).json({ error: "Missing jobId or format" });
       return;
     }
 
-    /* ---------- DOCX ---------- */
-    if (format === "docx") {
-      const { meta, rows } = parseSummaryMarkdown(summaryBuf.toString());
-      const children = [
-        ...meta.map((m) => new Paragraph({ children: [new TextRun(m)] })),
-        new Paragraph(""),
-        new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          rows: [
-            new TableRow({
+    const job = await prisma.summaryJob.findUnique({
+      where: { id: jobId },
+      include: { file: true },
+    });
+    if (!job) {
+      res.status(404).json({ error: "Summary job not found." });
+      return;
+    }
+
+    const key = job.summaryCsvUrl
+      ? objectKey(job.summaryCsvUrl)
+      : job.file?.summaryFileName ?? `summary-${job.id}.md`;
+    const safeTitle = sanitize(
+      stripExt(
+        job.file?.title ||
+          job.file?.summaryFileName ||
+          job.fileName ||
+          "summary"
+      )
+    );
+
+    try {
+      const [buf] = await bucket.file(key).download();
+      const data = buf.toString("utf-8");
+
+      /* ---------- TXT ---------- */
+      if (format === "txt") {
+        const { meta, rows } = parseMarkdown(data);
+        const line =
+          "---------------------------------------------------------";
+        const body = [
+          ...meta,
+          "",
+          line,
+          "Page(s)           | Testimony Summary",
+          line,
+          ...rows.map(([p, s]) => p.padEnd(18) + "| " + s),
+          line,
+        ].join("\n");
+        res.setHeader("Content-Type", "text/plain");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeTitle}.txt"`
+        );
+        res.send(body);
+        return;
+      }
+
+      /* ---------- DOCX ---------- */
+      if (format === "docx") {
+        const { meta, rows } = parseMarkdown(data);
+        const doc = new Document({
+          sections: [
+            {
               children: [
-                new TableCell({
-                  width: { size: 30, type: WidthType.PERCENTAGE },
-                  children: [new Paragraph("Page(s)")],
-                }),
-                new TableCell({
-                  width: { size: 70, type: WidthType.PERCENTAGE },
-                  children: [new Paragraph("Testimony Summary")],
+                ...meta.map(
+                  (m) => new Paragraph({ children: [new TextRun(m)] })
+                ),
+                new Paragraph(""),
+                new Table({
+                  width: { size: 100, type: WidthType.PERCENTAGE },
+                  rows: [
+                    new TableRow({
+                      children: [
+                        new TableCell({
+                          width: { size: 30, type: WidthType.PERCENTAGE },
+                          children: [new Paragraph("Page(s)")],
+                        }),
+                        new TableCell({
+                          width: { size: 70, type: WidthType.PERCENTAGE },
+                          children: [new Paragraph("Testimony Summary")],
+                        }),
+                      ],
+                    }),
+                    ...rows.map(
+                      ([p, s]) =>
+                        new TableRow({
+                          children: [
+                            new TableCell({ children: [new Paragraph(p)] }),
+                            new TableCell({ children: [new Paragraph(s)] }),
+                          ],
+                        })
+                    ),
+                  ],
                 }),
               ],
-            }),
-            ...rows.map(
-              ([p, s]) =>
-                new TableRow({
-                  children: [
-                    new TableCell({ children: [new Paragraph(p)] }),
-                    new TableCell({ children: [new Paragraph(s)] }),
-                  ],
-                })
-            ),
+            },
           ],
-        }),
-      ];
-      const docBuf = await Packer.toBuffer(
-        new Document({ sections: [{ children }] })
-      );
-      res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      );
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${safeTitle}.docx"`
-      );
-      res.send(docBuf);
-      return;
-    }
+        });
+        const docBuf = await Packer.toBuffer(doc);
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeTitle}.docx"`
+        );
+        res.send(docBuf);
+        return;
+      }
 
-    /* ---------- PDF ---------- */
-    if (format === "pdf") {
-      const { meta, rows } = parseSummaryMarkdown(summaryBuf.toString());
-      const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${safeTitle}.pdf"`
-      );
+      /* ---------- PDF ---------- */
+      if (format === "pdf") {
+        const { meta, rows } = parseMarkdown(data);
+        const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
+        const pass = new stream.PassThrough();
+        pdf.pipe(pass).pipe(res);
 
-      const pass = new stream.PassThrough();
-      pdf.pipe(pass).pipe(res);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeTitle}.pdf"`
+        );
 
-      pdf.font("Helvetica-Bold").fontSize(13);
-      meta.forEach((line) => pdf.text(line));
-      pdf.moveDown();
+        /* calculate printable width */
+        const lm = pdf.page.margins.left;
+        const rm = pdf.page.margins.right;
+        const full = pdf.page.width - lm - rm; // e.g. 612‑40‑40 = 532 pt
+        const gap = 8;
+        const pageCol = 80; // 1‑inch≈72 pt → narrow page column
+        const sumCol = full - pageCol - gap;
 
-      pdf
-        .font("Helvetica-Bold")
-        .fontSize(11)
-        .text("Page(s)", { width: 100, continued: true })
-        .text("Testimony Summary", { width: 400 });
-      pdf
-        .moveDown(0.2)
-        .moveTo(pdf.x, pdf.y)
-        .lineTo(pdf.x + 500, pdf.y)
-        .stroke();
+        pdf.font("Helvetica-Bold").fontSize(13);
+        meta.forEach((l) => pdf.text(l));
+        pdf.moveDown();
 
-      rows.forEach(([p, s]) => {
+        /* header */
+        let y = pdf.y;
+        pdf.font("Helvetica-Bold").fontSize(11);
+        pdf.text("Page(s)", lm, y, { width: pageCol });
+        pdf.text("Testimony Summary", lm + pageCol + gap, y, { width: sumCol });
+        y = pdf.y + 2;
         pdf
-          .font("Helvetica-Bold")
-          .fontSize(10)
-          .text(p, { width: 100, continued: true });
-        pdf.font("Helvetica").fontSize(10).text(s, { width: 400 });
-        pdf.moveDown(0.2);
-      });
+          .moveTo(lm, y)
+          .lineTo(lm + full, y)
+          .stroke();
 
-      pdf.end();
+        /* rows */
+        rows.forEach(([p, s]) => {
+          const rowY = pdf.y + 4;
+          pdf
+            .font("Helvetica-Bold")
+            .fontSize(10)
+            .text(p, lm, rowY, { width: pageCol });
+          pdf
+            .font("Helvetica")
+            .fontSize(10)
+            .text(s, lm + pageCol + gap, rowY, { width: sumCol });
+        });
+
+        pdf.end();
+        return;
+      }
+
+      /* ---------- CSV ---------- */
+      if (format === "csv") {
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeTitle}.csv"`
+        );
+        res.send(buf);
+        return;
+      }
+
+      /* unsupported */
+      res.status(400).json({ error: "Supported formats: csv, txt, docx, pdf" });
+      return;
+    } catch (err) {
+      console.error("Download route error:", err);
+      res.status(500).json({ error: "Failed to retrieve summary content." });
       return;
     }
-
-    /* ---------- CSV ---------- */
-    if (format === "csv") {
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${safeTitle}.csv"`
-      );
-      res.send(summaryBuf);
-      return;
-    }
-
-    res.status(400).json({ error: "Supported formats: csv, txt, docx, pdf" });
-  } catch (err) {
-    console.error("Download route error:", err);
-    res.status(500).json({ error: "Failed to retrieve summary content." });
   }
-});
+);
 
 export default router;
