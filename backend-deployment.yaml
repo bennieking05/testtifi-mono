@@ -36,23 +36,17 @@ spec:
         # ───────────── Main backend container ───────────────
         - name: backend
           image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
-          # override CMD to give V8 a larger heap (optional—remove if your Dockerfile already sets this)
-          command: ["node", "--max-old-space-size=768", "dist/server.js"]
-
-          ports:
-            - containerPort: 4000
-
           resources:
             requests:
-              memory: "512Mi"
+              memory: "512Mi" # ← enough for normal operation
               cpu: "250m"
             limits:
-              memory: "1Gi" # extra head‑room for GC & bursts
-              cpu: "500m"
+              memory: "2Gi" # ← big head‑room for large uploads
+              cpu: "1000m"
 
           volumeMounts:
             - name: gcp-service-account
-              mountPath: /var/secrets/google # Google‑service‑account JSON
+              mountPath: /var/secrets/google # service‑account key.json
               readOnly: true
 
           env:
@@ -65,6 +59,7 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: DATABASE_URL
+
             - name: DB_HOST
               value: "127.0.0.1"
             - name: DB_USER
@@ -83,7 +78,6 @@ spec:
                   name: backend-secrets
                   key: DB_NAME
 
-            # ---------- Email / Auth ----------
             - name: SENDGRID_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -153,21 +147,14 @@ spec:
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /var/secrets/google/key.json
 
-          # ───────────── Health checks ─────────────
           readinessProbe:
-            httpGet:
-              path: /health # make sure this route returns 200
-              port: 4000
-            initialDelaySeconds: 5
-            periodSeconds: 5
-          livenessProbe:
             httpGet:
               path: /health
               port: 4000
-            initialDelaySeconds: 30
-            periodSeconds: 10
+            initialDelaySeconds: 5
+            periodSeconds: 5
 
-      # ─────────────────────── Volumes ────────────────────────
+      # ───────────────────── Volumes ─────────────────────
       volumes:
         - name: cloudsql-instance-credentials
           secret:
@@ -175,4 +162,4 @@ spec:
 
         - name: gcp-service-account
           secret:
-            secretName: service-account-json
+            secretName: service-account-json # secret you created with key.json
