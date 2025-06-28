@@ -4,7 +4,8 @@ metadata:
   name: summarize-worker
   namespace: default
 spec:
-  replicas: 1
+  # ➊ Two pods instead of one ── scales job throughput
+  replicas: 2
   selector:
     matchLabels:
       app: summarize-worker
@@ -13,7 +14,7 @@ spec:
       labels:
         app: summarize-worker
     spec:
-      # ──────────── Side‑car: Cloud SQL Proxy ────────────
+      # ─────────────── Side-car: Cloud SQL Proxy ───────────────
       containers:
         - name: cloud-sql-proxy
           image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
@@ -22,35 +23,50 @@ spec:
             - "-instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306"
             - "-credential_file=/secrets/cloudsql/credentials.json"
           resources:
-            requests: { memory: "128Mi", cpu: "100m" }
-            limits: { memory: "256Mi", cpu: "200m" }
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
           volumeMounts:
             - name: cloudsql-instance-credentials
               mountPath: /secrets/cloudsql
               readOnly: true
 
-        # ──────────── Main worker container ────────────
+        # ─────────────── Main summarize-worker container ───────────────
         - name: summarize-worker
           image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
           command: ["node", "dist/worker/summarizeWorker.js"]
 
+          # ➋ Give each pod room to burst
           resources:
-            requests: { memory: "512Mi", cpu: "250m" }
-            limits: { memory: "1024Mi", cpu: "500m" }
+            requests:
+              memory: "1Gi" # guaranteed
+              cpu: "500m"
+            limits:
+              memory: "2Gi" # upper bound
+              cpu: "2" # up to two cores
 
-          # Inject EVERY key from backend‑secrets
+          # Pull every key already stored in backend-secrets
           envFrom:
             - secretRef:
                 name: backend-secrets
 
-          # Add/override vars that are **not** in the secret
+          # ➌ Extra env vars (override / add)
           env:
             - name: NODE_ENV
               value: "production"
-            - name: DB_HOST # local Cloud SQL Proxy
+            - name: DB_HOST # local Cloud SQL Proxy
               value: "127.0.0.1"
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /var/secrets/google/key.json
+
+            # Performance tuning knobs read by summarizeWorker.js
+            - name: WORKER_CONCURRENCY # parallel page-range requests
+              value: "6"
+            - name: PAGE_RANGE_SIZE # pages per OpenAI call
+              value: "3"
 
           volumeMounts:
             - name: gcp-service-account
@@ -60,12 +76,11 @@ spec:
               mountPath: /secrets/cloudsql
               readOnly: true
 
-      # ───────────────────── Volumes ─────────────────────
+      # ───────────────────────── Volumes ─────────────────────────
       volumes:
         - name: cloudsql-instance-credentials
           secret:
-            secretName: your-cloudsql-credentials # ↳ already exists
-
+            secretName: your-cloudsql-credentials # already exists
         - name: gcp-service-account
           secret:
-            secretName: service-account-json # ↳ same one backend uses
+            secretName: service-account-json # same secret as backend

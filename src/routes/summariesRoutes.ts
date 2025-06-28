@@ -8,10 +8,9 @@ import { Storage } from "@google-cloud/storage";
 const router = express.Router();
 const prisma = new PrismaClient();
 const bucket = new Storage().bucket("deposition-summaries");
-
 const WORDS_PER_PAGE = 300;
 
-/* ────────── helpers ────────── */
+/* ───────── helpers ───────── */
 const toObjectName = (u: string): string => {
   try {
     const { pathname } = new URL(u);
@@ -24,13 +23,13 @@ const toObjectName = (u: string): string => {
 async function fetchSummaryText(objectName: string): Promise<string> {
   const [url] = await bucket.file(objectName).getSignedUrl({
     action: "read",
-    expires: Date.now() + 3 * 86_400_000, // 3 days
+    expires: Date.now() + 3 * 86_400_000, // 3 days
   });
   const { data } = await axios.get<string>(url);
   return data;
 }
 
-/* ────────── LIST all summaries ────────── */
+/* ───────── LIST all summaries ───────── */
 router.get(
   "/",
   authenticateToken,
@@ -42,26 +41,25 @@ router.get(
         return;
       }
 
-      /* 1️⃣  jobs + inline file join */
+      /* 1️⃣ jobs + inline file join */
       const jobs = await prisma.summaryJob.findMany({
         where: { userId },
         orderBy: { createdAt: "desc" },
         include: { file: true },
       });
 
-      /* 2️⃣  orphan file lookup */
+      /* 2️⃣ orphan-file lookup */
       const orphanNames = jobs.filter((j) => !j.file).map((j) => j.fileName);
-      const extraFiles =
-        orphanNames.length > 0
-          ? await prisma.file.findMany({
-              where: { fileName: { in: orphanNames } },
-            })
-          : [];
+      const extraFiles = orphanNames.length
+        ? await prisma.file.findMany({
+            where: { fileName: { in: orphanNames } },
+          })
+        : [];
       const fileByName = Object.fromEntries(
         extraFiles.map((f) => [f.fileName, f])
       );
 
-      /* 3️⃣  build API response */
+      /* 3️⃣ build API response */
       const summaries = await Promise.all(
         jobs.map(async (job) => {
           const file = job.file ?? fileByName[job.fileName];
@@ -70,7 +68,7 @@ router.get(
             ? toObjectName(job.summaryCsvUrl)
             : file?.summaryFileName ?? `summary-${job.id}.md`;
 
-          /* page estimate from live word‑count */
+          /* page estimate from live word-count */
           let pages = file?.pages ?? job.totalPages ?? 0;
           try {
             const txt = await fetchSummaryText(objectName);
@@ -79,17 +77,15 @@ router.get(
             console.warn("fetchSummaryText failed:", (e as any).message);
           }
 
-          /* signed URL (3 days) */
-          const signedUrl = (
-            await bucket.file(objectName).getSignedUrl({
-              action: "read",
-              expires: Date.now() + 3 * 86_400_000,
-            })
-          )[0];
+          /* signed URL (3 days) */
+          const [signedUrl] = await bucket.file(objectName).getSignedUrl({
+            action: "read",
+            expires: Date.now() + 3 * 86_400_000,
+          });
 
           return {
             id: job.id,
-            title: file?.title || "Untitled Document",
+            fileTitle: file?.title || job.fileName, // ← always populated
             fileName: file?.fileName || job.fileName,
             summaryUrl: signedUrl,
             date: job.createdAt.toISOString(),
@@ -101,22 +97,19 @@ router.get(
                 ? "error"
                 : "processing",
             error: job.error || undefined,
-            progress: `${job.lastPageProcessed}/${job.totalPages}`,
           };
         })
       );
 
       res.json(summaries);
-      return;
     } catch (err) {
       console.error("[/api/summaries] Error:", err);
       res.status(500).json({ error: "Internal server error" });
-      return;
     }
   }
 );
 
-/* ────────── VIEW one summary as raw markdown ────────── */
+/* ───────── VIEW one summary raw markdown ───────── */
 router.get(
   "/view",
   authenticateToken,
@@ -145,11 +138,9 @@ router.get(
       const [buf] = await bucket.file(objectName).download();
       res.setHeader("Content-Type", "text/markdown; charset=utf-8");
       res.send(buf);
-      return;
     } catch (e) {
       console.error("[/api/summaries/view] Error:", e);
       res.status(404).json({ error: "Summary file not found in storage." });
-      return;
     }
   }
 );

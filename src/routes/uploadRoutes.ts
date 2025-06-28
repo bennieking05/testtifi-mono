@@ -1,77 +1,83 @@
-// ─── src/routes/uploadRoutes.ts ────────────────────────────────────────────────
+// ─── src/routes/uploadRoutes.ts ───────────────────────────────────────────────
 import express, { Request, Response } from "express";
 import Busboy, { FileInfo } from "busboy";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
 
-/*──────────────────────── setup ────────────────────────*/
 const router = express.Router();
 const prisma = new PrismaClient();
 const storage = new Storage();
 const depositionBkt = storage.bucket("deposition-files");
 
 /*──────────────────────── helpers ────────────────────────*/
-/** Accept only PDF / DOC / DOCX for now */
 const allowedMime = new Set<string>([
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
-/**
- * Inserts a new summaryJob record and responds to the client.
- * We defer page‑count/OCR work to the worker so the upload route
- * stays lightweight and memory‑safe.
- */
-async function createJobAndRespond(
-  userId: string,
-  fileName: string,
-  res: Response
-) {
+/** wraps the DB work in a single transaction (create + credit-decrement) */
+async function createJobTx(userId: string, fileName: string) {
   const fileUrl = `https://storage.googleapis.com/${
     depositionBkt.name
   }/${encodeURIComponent(fileName)}`;
 
-  const job = await prisma.summaryJob.create({
-    data: {
-      userId,
-      fileName,
-      fileUrl,
-      status: "processing",
-      totalPages: 0,
-      lastPageProcessed: 0,
-    },
-  });
+  return prisma.$transaction(async (tx) => {
+    // 1) deduct one credit – will throw if user has < 1
+    await tx.user.update({
+      where: { id: userId },
+      data: { credits: { decrement: 1 } },
+    });
 
-  res.json({ jobId: job.id, status: "processing", totalPages: 0 });
+    // 2) create the SummaryJob row
+    return tx.summaryJob.create({
+      data: {
+        userId,
+        fileName,
+        fileUrl,
+        status: "processing",
+        totalPages: 0,
+        lastPageProcessed: 0,
+        notifyOnComplete: false,
+      },
+    });
+  });
 }
 
 /*──────────────────────── route ────────────────────────*/
-router.post("/", authenticateToken, (req: Request, res: Response): void => {
-  const userId = (req as any).user?.userId as string | undefined;
-  if (!userId) {
-    res.status(401).json({ error: "Missing authentication" });
-    return;
-  }
+router.post(
+  "/",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    /* ---------- auth & credit check ---------- */
+    const userId = (req as any).user?.userId as string | undefined;
+    if (!userId) {
+      res.status(401).json({ error: "Missing authentication" });
+      return;
+    }
 
-  const bb = Busboy({
-    headers: req.headers,
-    highWaterMark: 2 * 1024 * 1024, // 2 MiB chunks → minimal RAM
-  });
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      res.status(401).json({ error: "User not found" });
+      return;
+    }
+    if (user.credits < 1) {
+      res.status(402).json({ error: "Not enough credits" });
+      return;
+    }
 
-  let hasFile = false;
-  let responded = false;
+    /* ---------- streaming upload ---------- */
+    const bb = Busboy({ headers: req.headers, highWaterMark: 2 * 1024 * 1024 });
+    let hasFile = false;
+    let replied = false;
 
-  bb.on(
-    "file",
-    (_fieldName: string, file: NodeJS.ReadableStream, info: FileInfo) => {
+    bb.on("file", (_field, file, info: FileInfo) => {
       hasFile = true;
-
       if (!allowedMime.has(info.mimeType)) {
-        file.resume(); // discard stream
-        if (!responded) {
-          responded = true;
+        file.resume();
+        if (!replied) {
+          replied = true;
           res.status(400).json({ error: "Unsupported file type" });
         }
         return;
@@ -81,40 +87,43 @@ router.post("/", authenticateToken, (req: Request, res: Response): void => {
       const gcsStream = gcsFile.createWriteStream({
         resumable: false,
         contentType: info.mimeType,
-        // ⚠️ no predefinedAcl here — bucket uses Uniform Bucket‑Level Access
       });
-
       file.pipe(gcsStream);
 
       gcsStream.on("error", (err) => {
-        console.error("GCS upload error:", err);
-        if (!responded) {
-          responded = true;
+        console.error("[GCS upload] ", err);
+        if (!replied) {
+          replied = true;
           res.status(500).json({ error: "Upload failed" });
         }
       });
 
       gcsStream.on("finish", async () => {
-        if (responded) return;
-        responded = true;
-        /* No makePrivate(): bucket has Uniform Bucket‑Level Access enabled */
+        if (replied) return;
+        replied = true;
         try {
-          await createJobAndRespond(userId, info.filename, res);
-        } catch (err) {
-          console.error("DB insert error:", err);
-          res.status(500).json({ error: "Internal error" });
+          const job = await createJobTx(userId, info.filename);
+          res.json({ jobId: job.id, status: "processing", totalPages: 0 });
+        } catch (err: any) {
+          /* rollback already happened inside the transaction */
+          const msg =
+            err?.code === "P2000" || /credits/i.test(err?.message || "")
+              ? "Not enough credits"
+              : "Internal error";
+          const code = /credits/i.test(msg) ? 402 : 500;
+          res.status(code).json({ error: msg });
         }
       });
-    }
-  );
+    });
 
-  bb.on("close", () => {
-    if (!hasFile && !responded) {
-      res.status(400).json({ error: "Missing file" });
-    }
-  });
+    bb.on("close", () => {
+      if (!hasFile && !replied) {
+        res.status(400).json({ error: "Missing file" });
+      }
+    });
 
-  req.pipe(bb);
-});
+    req.pipe(bb);
+  }
+);
 
 export default router;
