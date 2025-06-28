@@ -1,2 +1,0 @@
--- AlterTable
-ALTER TABLE `Email` MODIFY `body` VARCHAR(10000) NOT NULL;

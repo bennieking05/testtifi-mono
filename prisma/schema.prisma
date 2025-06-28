@@ -61,7 +61,7 @@ model SummaryJob {
   error             String?  @db.Text
   fileId            String?
   file              File?    @relation("FileToSummaryJob", fields: [fileId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_SummaryJob_file")
-
+  notifyOnComplete  Boolean   @default(false)
   @@index([fileId], map: "fk_SummaryJob_file")
 }
 
