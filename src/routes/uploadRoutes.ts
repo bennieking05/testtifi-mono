@@ -4,53 +4,70 @@ import Busboy, { FileInfo } from "busboy";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
+import { randomUUID } from "crypto";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const storage = new Storage();
 const depositionBkt = storage.bucket("deposition-files");
 
-/*──────────────────────── helpers ────────────────────────*/
 const allowedMime = new Set<string>([
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
-/** wraps the DB work in a single transaction (create + credit-decrement) */
+/** wraps the DB work in a single transaction (create File + create SummaryJob + credit‐decrement) */
 async function createJobTx(userId: string, fileName: string) {
+  const fileId = randomUUID();
   const fileUrl = `https://storage.googleapis.com/${
     depositionBkt.name
   }/${encodeURIComponent(fileName)}`;
 
   return prisma.$transaction(async (tx) => {
-    // 1) deduct one credit – will throw if user has < 1
+    // 1) deduct one credit
     await tx.user.update({
       where: { id: userId },
       data: { credits: { decrement: 1 } },
     });
 
-    // 2) create the SummaryJob row
-    return tx.summaryJob.create({
+    // 2) write the File record
+    const file = await tx.file.create({
+      data: {
+        id: fileId,
+        userId,
+        fileName,
+        fileUrl,
+        summaryFileName: null,
+        summaryUrl: null,
+        pages: 0,
+        deponent: null,
+        title: fileName,
+      },
+    });
+
+    // 3) create the SummaryJob row, pointing at the file
+    const job = await tx.summaryJob.create({
       data: {
         userId,
         fileName,
         fileUrl,
+        fileId: file.id,
         status: "processing",
         totalPages: 0,
         lastPageProcessed: 0,
         notifyOnComplete: false,
       },
     });
+
+    return job;
   });
 }
 
-/*──────────────────────── route ────────────────────────*/
 router.post(
   "/",
   authenticateToken,
   async (req: Request, res: Response): Promise<void> => {
-    /* ---------- auth & credit check ---------- */
     const userId = (req as any).user?.userId as string | undefined;
     if (!userId) {
       res.status(401).json({ error: "Missing authentication" });
@@ -67,8 +84,10 @@ router.post(
       return;
     }
 
-    /* ---------- streaming upload ---------- */
-    const bb = Busboy({ headers: req.headers, highWaterMark: 2 * 1024 * 1024 });
+    const bb = Busboy({
+      headers: req.headers,
+      highWaterMark: 2 * 1024 * 1024,
+    });
     let hasFile = false;
     let replied = false;
 
@@ -105,7 +124,6 @@ router.post(
           const job = await createJobTx(userId, info.filename);
           res.json({ jobId: job.id, status: "processing", totalPages: 0 });
         } catch (err: any) {
-          /* rollback already happened inside the transaction */
           const msg =
             err?.code === "P2000" || /credits/i.test(err?.message || "")
               ? "Not enough credits"
