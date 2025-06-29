@@ -13,6 +13,7 @@ import supportRoutes from "./routes/supportRoutes";
 import fineTineRoutes from "./routes/fineTuneRoutes";
 import summariesRoutes from "./routes/summariesRoutes";
 import summaryJobRoutes from "./routes/summaryJobRoutes";
+import previeqwRoutes from "./routes/previewRoutes";
 import emailNotificationRoutes from "./routes/emailNotificationRoutes";
 
 dotenv.config();
@@ -59,6 +60,7 @@ app.use("/api/support", supportRoutes);
 app.use("/api/fine-tune", fineTineRoutes);
 app.use("/api/summary-jobs", summaryJobRoutes);
 app.use("/api/email-notifications", emailNotificationRoutes);
+app.use("/api/preview", previeqwRoutes);
 /* ─────────────────────────────────────────────── */
 
 /* ─────────────── START SERVER ───────────────── */
