@@ -1,10 +1,8 @@
 // src/worker.ts
-
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import axios from "axios";
 import fs from "fs";
-import path from "path";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
@@ -15,7 +13,7 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
-// Debug: log database URL and environment at startup
+/*──────────────────────── bootstrap ───────────────────────*/
 console.log("=== Worker starting ===");
 console.log("Using DB:", process.env.DATABASE_URL);
 console.log("NODE_ENV:", process.env.NODE_ENV);
@@ -26,39 +24,38 @@ console.log(
 );
 console.log("AZURE_API_VERSION:", process.env.AZURE_API_VERSION);
 
-/* ────────── TEXT EXTRACTION ────────── */
+/*──────────────────────── helpers ─────────────────────────*/
 async function extractFullText(
   buffer: Buffer,
   filename: string,
   gcsUri: string
 ): Promise<string> {
   const isPDF = filename.toLowerCase().endsWith(".pdf");
-  const isDocx = /\.(doc|docx)$/i.test(filename);
+  const isDocx = /\.(docx?|DOCX?)$/.test(filename);
 
   if (isPDF) {
     console.log(`[extractFullText] Detected PDF: ${filename}`);
     const parsed = await pdf(buffer);
     if (parsed.text.trim().length > 100) {
-      console.log("[extractFullText] PDF has digital text. Skipping OCR.");
+      console.log("[extractFullText] Digital text detected – skipping OCR");
       return parsed.text;
     }
-    // scanned → OCR fallback
-    console.log(
-      "[extractFullText] PDF appears scanned, using Vision OCR fallback."
-    );
-    return await extractTextWithVision(gcsUri);
+    console.log("[extractFullText] Appears scanned – using Vision OCR");
+    return extractTextWithVision(gcsUri);
   }
+
   if (isDocx) {
     console.log(`[extractFullText] Detected Word doc: ${filename}`);
     const { value } = await mammoth.extractRawText({ buffer });
     return value;
   }
-  console.log(`[extractFullText] Treating ${filename} as plain text.`);
+
+  console.log(`[extractFullText] Treating ${filename} as plain text`);
   return buffer.toString("utf-8");
 }
 
 async function extractTextWithVision(gcsUri: string): Promise<string> {
-  console.log(`[extractTextWithVision] Starting OCR for: ${gcsUri}`);
+  console.log(`[extractTextWithVision] OCR: ${gcsUri}`);
   const destinationUri = `gs://${summaryBucket.name}/vision-output/`;
   const [operation] = await visionClient.asyncBatchAnnotateFiles({
     requests: [
@@ -73,60 +70,49 @@ async function extractTextWithVision(gcsUri: string): Promise<string> {
     ],
   });
   await operation.promise();
-  console.log(
-    "[extractTextWithVision] Vision OCR job complete. Downloading result..."
-  );
   const [files] = await summaryBucket.getFiles({
     prefix: "vision-output/output-1-to-1.json",
   });
-  const [outputBuffer] = await files[0].download();
-  const parsed = JSON.parse(outputBuffer.toString());
+  const [raw] = await files[0].download();
+  const parsed = JSON.parse(raw.toString());
   return parsed.responses
-    .map((res: any) => res.fullTextAnnotation?.text || "")
+    .map((r: any) => r.fullTextAnnotation?.text || "")
     .join("\n");
 }
 
-/* ────────── PAGE HELPERS ────────── */
-function splitPages(transcript: string): { page: number; text: string }[] {
-  console.log(`[splitPages] Splitting transcript into pages...`);
-  const lines = transcript.split("\n");
-  let currentPage = 1;
-  let buf: string[] = [];
-  const out: { page: number; text: string }[] = [];
-
-  for (const line of lines) {
+function splitPages(txt: string) {
+  console.log("[splitPages] Splitting transcript…");
+  let page = 1,
+    buf: string[] = [],
+    out: { page: number; text: string }[] = [];
+  for (const line of txt.split("\n")) {
     if (/^(?:\s*Page\s*)?\d+\s*$/.test(line.trim())) {
-      if (buf.length) out.push({ page: currentPage++, text: buf.join("\n") });
+      if (buf.length) out.push({ page: page++, text: buf.join("\n") });
       buf = [];
     }
     buf.push(line);
   }
-  if (buf.length) out.push({ page: currentPage++, text: buf.join("\n") });
-  console.log(`[splitPages] Done. Total pages: ${out.length}`);
+  if (buf.length) out.push({ page: page++, text: buf.join("\n") });
   return out;
 }
 
 function groupPagesToChunks(
   pages: { page: number; text: string }[],
-  pagesPerChunk = 12
-): { start: number; end: number; text: string }[] {
-  console.log(
-    `[groupPagesToChunks] Grouping ${pages.length} pages into chunks of ${pagesPerChunk}...`
-  );
+  perChunk = 12
+) {
   const out: { start: number; end: number; text: string }[] = [];
-  for (let i = 0; i < pages.length; i += pagesPerChunk) {
-    const chunkPages = pages.slice(i, i + pagesPerChunk);
+  for (let i = 0; i < pages.length; i += perChunk) {
+    const slice = pages.slice(i, i + perChunk);
     out.push({
-      start: chunkPages[0].page,
-      end: chunkPages[chunkPages.length - 1].page,
-      text: chunkPages.map((p) => p.text).join("\n"),
+      start: slice[0].page,
+      end: slice[slice.length - 1].page,
+      text: slice.map((p) => p.text).join("\n"),
     });
   }
-  console.log(`[groupPagesToChunks] Done. Total chunks: ${out.length}`);
   return out;
 }
 
-/* ────────── PROMPT BUILDERS ────────── */
+/*──────────────────────── prompt helpers ─────────────────*/
 function makePrompt(
   chunk: { start: number; end: number; text: string },
   isFirst: boolean,
@@ -161,7 +147,7 @@ ${metaSection}
 
 Below is the transcript text:
 ${chunk.text}
-      `.trim()
+        `.trim()
         : `
 Continue summarizing the deposition transcript from where the previous chunk ended (pages ${chunk.start}–${chunk.end}). **Do not repeat the metadata.**
 - Use the same Markdown table structure, adding new rows for the next page numbers in this chunk.
@@ -169,197 +155,154 @@ Continue summarizing the deposition transcript from where the previous chunk end
 
 Below is the next chunk of transcript:
 ${chunk.text}
-      `.trim(),
+        `.trim(),
     },
   ];
 }
-
-function extractLegalMetadata(transcript: string): string {
+function extractLegalMetadata(tr: string) {
   return `
 - CIVIL ACTION NUMBER: ${
-    transcript.match(/CIVIL ACTION NO[.,]?\s*([A-Za-z0-9\-]+)/i)?.[1] ||
-    "[Unknown]"
+    tr.match(/CIVIL ACTION NO[.,]?\s*([\w\-]+)/i)?.[1] || "[Unknown]"
   }
 - COURT: ${
-    transcript.match(
-      /(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*)/i
-    )?.[1] || "[Unknown]"
+    tr.match(/(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*)/i)?.[1] ||
+    "[Unknown]"
   }
 - PLAINTIFFS: ${
-    transcript
-      .match(/PLAINTIFFS[\s\S]{0,100}/i)?.[0]
-      ?.replace(/[\r\n]+/g, " ") || "[Unknown]"
+    tr.match(/PLAINTIFFS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
+    "[Unknown]"
   }
 - DEFENDANTS: ${
-    transcript
-      .match(/DEFENDANTS[\s\S]{0,100}/i)?.[0]
-      ?.replace(/[\r\n]+/g, " ") || "[Unknown]"
+    tr.match(/DEFENDANTS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
+    "[Unknown]"
   }
 - DEPOSITION TITLE: ${
-    transcript.match(/DEPOSITION SUMMARY OF ([A-Z\s\.\-]+),/i)?.[1]?.trim() ||
+    tr.match(/DEPOSITION SUMMARY OF ([A-Z\s\.\-]+),/i)?.[1]?.trim() ||
     "[Unknown]"
   }
 - DATE: ${
-    transcript.match(
-      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/
+    tr.match(
+      /\b(?:January|February|March|…|December)\s+\d{1,2},\s+\d{4}\b/
     )?.[0] || "[Unknown]"
   }
   `.trim();
 }
 
-/* ────────── LLM CALL ────────── */
-async function azureChatCompletion(messages: any[], maxTokens = 2800) {
-  console.log(`[azureChatCompletion] Sending prompt to Azure OpenAI...`);
-  const url = `${process.env.AZURE_OPENAI_ENDPOINT?.replace(
+async function azureChatCompletion(messages: any[], max = 2_800) {
+  const url = `${process.env.AZURE_OPENAI_ENDPOINT!.replace(
     /\/+$/,
     ""
   )}/openai/deployments/${
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME
   }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
-  const headers = {
-    "Content-Type": "application/json",
-    "api-key": process.env.AZURE_OPENAI_API_KEY!,
-  };
   const { data } = await axios.post(
     url,
-    { messages, max_tokens: maxTokens, temperature: 0.1 },
-    { headers, timeout: 120_000 }
+    { messages, max_tokens: max, temperature: 0.1 },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": process.env.AZURE_OPENAI_API_KEY!,
+      },
+      timeout: 120_000,
+    }
   );
-  console.log(`[azureChatCompletion] Response received.`);
   return data;
 }
 
-/* ────────── WORKER LOOP ────────── */
+/*──────────────────────── main loop ──────────────────────*/
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function mainWorkerLoop() {
+async function work() {
   while (true) {
-    console.log(
-      `[${new Date().toISOString()}] Worker loop running, checking for jobs...`
-    );
+    console.log(`[${new Date().toISOString()}] checking for jobs…`);
     const job = await prisma.summaryJob.findFirst({
       where: { status: "processing" },
     });
-
     if (!job) {
-      // Always show a heartbeat even when idle
       await sleep(10_000);
       continue;
     }
 
-    // Debug: found a job!
-    console.log(
-      `[${job.id}] Found job. Status: ${job.status}, File: ${job.fileName}`
-    );
+    console.log(`[${job.id}] picked up – ${job.fileName}`);
 
     const user = await prisma.user.findUnique({ where: { id: job.userId } });
-    if (!user) {
-      console.error(`[${job.id}] ERROR: User not found`);
+    if (!user || user.credits <= 0) {
       await prisma.summaryJob.update({
         where: { id: job.id },
-        data: { status: "error", error: "User not found" },
+        data: {
+          status: "error",
+          error: user ? "Insufficient credits" : "User not found",
+        },
       });
       continue;
     }
-    if (user.credits <= 0) {
-      console.error(`[${job.id}] ERROR: Insufficient credits`);
-      await prisma.summaryJob.update({
-        where: { id: job.id },
-        data: { status: "error", error: "Insufficient credits" },
-      });
-      continue;
-    }
-    // *** credit was already decremented in /api/upload – nothing to do here ***
 
     try {
-      console.log(`[${job.id}] Starting job. Downloading file from GCS...`);
-      const [fileBuffer] = await depositionBucket.file(job.fileName).download();
-      console.log(
-        `[${job.id}] File downloaded (${fileBuffer.length} bytes). Extracting text...`
-      );
-
+      /* download & extract */
+      const [buf] = await depositionBucket.file(job.fileName).download();
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
-      const transcript = await extractFullText(
-        fileBuffer,
-        job.fileName,
-        gcsUri
-      );
-      console.log(
-        `[${job.id}] Text extraction complete. Length: ${transcript.length}`
-      );
+      const transcript = await extractFullText(buf, job.fileName, gcsUri);
 
       const pages = splitPages(transcript);
       const chunks = groupPagesToChunks(pages, 12);
-      const metaSection = extractLegalMetadata(transcript);
+      const meta = extractLegalMetadata(transcript);
 
-      const summaryParts: string[] = [];
+      /* summarise chunk-by-chunk */
+      const mdParts: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
-        console.log(
-          `[${job.id}] Summarizing chunk ${i + 1}/${chunks.length} (pages ${
-            chunks[i].start
-          }-${chunks[i].end})`
+        const resp = await azureChatCompletion(
+          makePrompt(chunks[i], i === 0, meta)
         );
-        const prompt = makePrompt(chunks[i], i === 0, metaSection);
-        const resp = await azureChatCompletion(prompt, 2800);
-        const summaryTable = resp.choices[0].message.content.trim();
-        summaryParts.push(summaryTable);
-
-        fs.writeFileSync(
-          path.join("/tmp", `${job.id}-chunk-${i + 1}.md`),
-          summaryTable
-        );
+        mdParts.push(resp.choices[0].message.content.trim());
         await prisma.summaryJob.update({
           where: { id: job.id },
           data: { lastPageProcessed: chunks[i].end },
         });
-        console.log(`[${job.id}] Chunk ${i + 1} complete.`);
       }
 
-      const merged = summaryParts
-        .map((part, idx) => {
-          if (idx === 0) return part;
-          return part.replace(/^.*?\| Page.*?\n\|[-\|]+\n/i, "");
-        })
+      /* merge & upload */
+      const merged = mdParts
+        .map((part, i) =>
+          i === 0 ? part : part.replace(/^.*?\| Page.*?\n\|[-\|]+\n/i, "")
+        )
         .join("\n");
+      const local = `/tmp/${job.id}.md`;
+      fs.writeFileSync(local, merged);
 
-      const outFile = path.join("/tmp", `${job.id}.md`);
-      fs.writeFileSync(outFile, merged);
-      console.log(
-        `[${job.id}] Full summary written to disk. Uploading to GCS...`
-      );
-
-      const destFile = `summary-${job.id}.md`;
-      await summaryBucket.upload(outFile, {
-        destination: destFile,
+      const dest = `summary-${job.id}.md`;
+      await summaryBucket.upload(local, {
+        destination: dest,
         contentType: "text/markdown",
       });
-      const [mdUrl] = await summaryBucket.file(destFile).getSignedUrl({
+      const [signedUrl] = await summaryBucket.file(dest).getSignedUrl({
         version: "v4",
         action: "read",
-        expires: Date.now() + 3 * 24 * 60 * 60 * 1000, // 3 days
+        expires: Date.now() + 3 * 86_400_000,
       });
 
       await prisma.summaryJob.update({
         where: { id: job.id },
         data: {
           status: "complete",
-          summaryCsvUrl: mdUrl,
-          lastPageProcessed: chunks[chunks.length - 1].end,
+          summaryCsvUrl: signedUrl,
+          lastPageProcessed: pages[pages.length - 1].page,
+          finishedAt: new Date(), // ← NEW timestamp
         },
       });
-      fs.unlinkSync(outFile);
-      console.log(`[${job.id}] Completed and uploaded full chunked summary`);
+
+      fs.unlinkSync(local);
+      console.log(`[${job.id}] finished OK`);
     } catch (e: any) {
+      console.error(`[${job.id}] failed:`, e);
       await prisma.summaryJob.update({
         where: { id: job.id },
-        data: { status: "error", error: e.message || "Failed" },
+        data: { status: "error", error: e.message ?? "Unknown error" },
       });
-      console.error(`[${job.id}] Worker error:`, e, e?.stack);
     }
   }
 }
 
-mainWorkerLoop().catch((e) => {
-  console.error("Fatal error in worker:", e, e?.stack);
+work().catch((e) => {
+  console.error("Fatal worker error:", e);
   process.exit(1);
 });

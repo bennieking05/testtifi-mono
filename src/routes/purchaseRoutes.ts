@@ -6,7 +6,7 @@ import Stripe from "stripe";
 const router = express.Router();
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_API_KEY!, {
-  apiVersion: "2025-04-30.basil",
+  apiVersion: "2025-05-28.basil",
 });
 
 // helper to catch async errors
@@ -190,14 +190,22 @@ router.get(
         include: { user: { select: { name: true, email: true } } },
       });
 
-      const history = raw.map((p) => ({
-        id: p.id,
-        user: p.user.name,
-        email: p.user.email,
-        date: p.createdAt.toISOString(),
-        plan: `${p.credits} Credits`,
-        amount: p.amount, // <–– keep as number
-      }));
+      const history = raw.map(
+        (p: {
+          id: any;
+          user: { name: any; email: any };
+          createdAt: { toISOString: () => any };
+          credits: any;
+          amount: any;
+        }) => ({
+          id: p.id,
+          user: p.user.name,
+          email: p.user.email,
+          date: p.createdAt.toISOString(),
+          plan: `${p.credits} Credits`,
+          amount: p.amount, // <–– keep as number
+        })
+      );
 
       res.json(history);
     } catch (err) {

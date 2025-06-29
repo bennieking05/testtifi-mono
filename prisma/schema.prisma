@@ -49,22 +49,34 @@ model File {
 
 model SummaryJob {
   id                String   @id @default(uuid())
+
+  /* ───── relations ───── */
   userId            String
+  fileId            String?
+  file              File?    @relation("FileToSummaryJob", fields: [fileId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_SummaryJob_file")
+
+  /* ───── file info ───── */
   fileName          String
   fileUrl           String
   summaryCsvUrl     String?  @db.Text
+
+  /* ───── job status ───── */
   status            String
   lastPageProcessed Int
   totalPages        Int
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @default(now()) @updatedAt
   error             String?  @db.Text
-  fileId            String?
-  file              File?    @relation("FileToSummaryJob", fields: [fileId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_SummaryJob_file")
-  notifyOnComplete  Boolean   @default(false)
+  notifyOnComplete  Boolean  @default(false)
+
+  /* ───── timing  ───── */
+  startedAt         DateTime @default(now())  // when the row is inserted
+  finishedAt        DateTime?                 // filled by the worker on success
+
+  /* ───── bookkeeping ─── */
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
   @@index([fileId], map: "fk_SummaryJob_file")
 }
-
 model Purchase {
   id        String   @id @default(uuid())
   userId    String
