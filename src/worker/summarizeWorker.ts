@@ -1,4 +1,5 @@
 // src/worker.ts
+
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import axios from "axios";
@@ -6,6 +7,7 @@ import fs from "fs";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
+import { sendEmail } from "src/lib/sendEmail";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -13,7 +15,6 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
-/*──────────────────────── bootstrap ───────────────────────*/
 console.log("=== Worker starting ===");
 console.log("Using DB:", process.env.DATABASE_URL);
 console.log("NODE_ENV:", process.env.NODE_ENV);
@@ -24,7 +25,6 @@ console.log(
 );
 console.log("AZURE_API_VERSION:", process.env.AZURE_API_VERSION);
 
-/*──────────────────────── helpers ─────────────────────────*/
 async function extractFullText(
   buffer: Buffer,
   filename: string,
@@ -112,7 +112,35 @@ function groupPagesToChunks(
   return out;
 }
 
-/*──────────────────────── prompt helpers ─────────────────*/
+function extractLegalMetadata(tr: string) {
+  return `
+- CIVIL ACTION NUMBER: ${
+    tr.match(/CIVIL ACTION NO[.,]?\s*([\w\-]+)/i)?.[1] || "[Unknown]"
+  }
+- COURT: ${
+    tr.match(/(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*)/i)?.[1] ||
+    "[Unknown]"
+  }
+- PLAINTIFFS: ${
+    tr.match(/PLAINTIFFS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
+    "[Unknown]"
+  }
+- DEFENDANTS: ${
+    tr.match(/DEFENDANTS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
+    "[Unknown]"
+  }
+- DEPOSITION TITLE: ${
+    tr.match(/DEPOSITION SUMMARY OF ([A-Z\s\.\-]+),/i)?.[1]?.trim() ||
+    "[Unknown]"
+  }
+- DATE: ${
+    tr.match(
+      /\b(?:January|February|March|…|December)\s+\d{1,2},\s+\d{4}\b/
+    )?.[0] || "[Unknown]"
+  }
+`.trim();
+}
+
 function makePrompt(
   chunk: { start: number; end: number; text: string },
   isFirst: boolean,
@@ -159,42 +187,12 @@ ${chunk.text}
     },
   ];
 }
-function extractLegalMetadata(tr: string) {
-  return `
-- CIVIL ACTION NUMBER: ${
-    tr.match(/CIVIL ACTION NO[.,]?\s*([\w\-]+)/i)?.[1] || "[Unknown]"
-  }
-- COURT: ${
-    tr.match(/(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*)/i)?.[1] ||
-    "[Unknown]"
-  }
-- PLAINTIFFS: ${
-    tr.match(/PLAINTIFFS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
-    "[Unknown]"
-  }
-- DEFENDANTS: ${
-    tr.match(/DEFENDANTS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
-    "[Unknown]"
-  }
-- DEPOSITION TITLE: ${
-    tr.match(/DEPOSITION SUMMARY OF ([A-Z\s\.\-]+),/i)?.[1]?.trim() ||
-    "[Unknown]"
-  }
-- DATE: ${
-    tr.match(
-      /\b(?:January|February|March|…|December)\s+\d{1,2},\s+\d{4}\b/
-    )?.[0] || "[Unknown]"
-  }
-  `.trim();
-}
 
-async function azureChatCompletion(messages: any[], max = 2_800) {
-  const url = `${process.env.AZURE_OPENAI_ENDPOINT!.replace(
-    /\/+$/,
-    ""
-  )}/openai/deployments/${
-    process.env.AZURE_OPENAI_DEPLOYMENT_NAME
-  }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
+async function azureChatCompletion(messages: any[], max = 2800) {
+  const url =
+    `${process.env.AZURE_OPENAI_ENDPOINT!.replace(/\/+$/, "")}` +
+    `/openai/deployments/${process.env.AZURE_OPENAI_DEPLOYMENT_NAME}` +
+    `/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
   const { data } = await axios.post(
     url,
     { messages, max_tokens: max, temperature: 0.1 },
@@ -203,13 +201,12 @@ async function azureChatCompletion(messages: any[], max = 2_800) {
         "Content-Type": "application/json",
         "api-key": process.env.AZURE_OPENAI_API_KEY!,
       },
-      timeout: 120_000,
+      timeout: 120000,
     }
   );
   return data;
 }
 
-/*──────────────────────── main loop ──────────────────────*/
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function work() {
@@ -219,12 +216,15 @@ async function work() {
       where: { status: "processing" },
     });
     if (!job) {
-      await sleep(10_000);
+      await sleep(10000);
       continue;
     }
 
     console.log(`[${job.id}] picked up – ${job.fileName}`);
-
+    const jobMeta = await prisma.summaryJob.findUnique({
+      where: { id: job.id },
+      select: { userId: true, notifyOnComplete: true, fileName: true },
+    });
     const user = await prisma.user.findUnique({ where: { id: job.userId } });
     if (!user || user.credits <= 0) {
       await prisma.summaryJob.update({
@@ -238,46 +238,42 @@ async function work() {
     }
 
     try {
-      /* download & extract */
+      // download & extract
       const [buf] = await depositionBucket.file(job.fileName).download();
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri);
 
+      // chunk & summarize
       const pages = splitPages(transcript);
-      const chunks = groupPagesToChunks(pages, 12);
+      const chunks = groupPagesToChunks(pages);
       const meta = extractLegalMetadata(transcript);
 
-      /* summarise chunk-by-chunk */
-      const mdParts: string[] = [];
+      const parts: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
         const resp = await azureChatCompletion(
           makePrompt(chunks[i], i === 0, meta)
         );
-        mdParts.push(resp.choices[0].message.content.trim());
+        parts.push(resp.choices[0].message.content.trim());
         await prisma.summaryJob.update({
           where: { id: job.id },
           data: { lastPageProcessed: chunks[i].end },
         });
       }
 
-      /* merge & upload */
-      const merged = mdParts
-        .map((part, i) =>
-          i === 0 ? part : part.replace(/^.*?\| Page.*?\n\|[-\|]+\n/i, "")
-        )
-        .join("\n");
-      const local = `/tmp/${job.id}.md`;
-      fs.writeFileSync(local, merged);
+      // merge, upload, update DB
+      const merged = parts.join("\n");
+      const tmpPath = `/tmp/${job.id}.md`;
+      fs.writeFileSync(tmpPath, merged);
 
       const dest = `summary-${job.id}.md`;
-      await summaryBucket.upload(local, {
+      await summaryBucket.upload(tmpPath, {
         destination: dest,
         contentType: "text/markdown",
       });
       const [signedUrl] = await summaryBucket.file(dest).getSignedUrl({
         version: "v4",
         action: "read",
-        expires: Date.now() + 3 * 86_400_000,
+        expires: Date.now() + 3 * 86400000,
       });
 
       await prisma.summaryJob.update({
@@ -286,23 +282,42 @@ async function work() {
           status: "complete",
           summaryCsvUrl: signedUrl,
           lastPageProcessed: pages[pages.length - 1].page,
-          finishedAt: new Date(), // ← NEW timestamp
+          finishedAt: new Date(),
         },
       });
 
-      fs.unlinkSync(local);
+      // send email if opted-in
+      if (jobMeta?.notifyOnComplete && user.email) {
+        const downloadUrl = `${process.env.FRONTEND_URL}/download/${job.id}`;
+        const subject = `Your deposition summary is ready`;
+        const text = `Hello ${
+          user.name || user.email
+        },\n\nYour deposition summary "${
+          jobMeta.fileName
+        }" is now ready to download:\n${downloadUrl}\n\nThank you!`;
+        const html = `
+          <p>Hello ${user.name || user.email},</p>
+          <p>Your deposition summary "<strong>${
+            jobMeta.fileName
+          }</strong>" is now ready.</p>
+          <p><a href="${downloadUrl}">Click here to download</a></p>
+        `;
+        await sendEmail(user.email, subject, text, html);
+      }
+
+      fs.unlinkSync(tmpPath);
       console.log(`[${job.id}] finished OK`);
     } catch (e: any) {
-      console.error(`[${job.id}] failed:`, e);
+      console.error(`[${job.id}] error:`, e);
       await prisma.summaryJob.update({
         where: { id: job.id },
-        data: { status: "error", error: e.message ?? "Unknown error" },
+        data: { status: "error", error: e.message || "Unknown error" },
       });
     }
   }
 }
 
-work().catch((e) => {
-  console.error("Fatal worker error:", e);
+work().catch((err) => {
+  console.error("Fatal error:", err);
   process.exit(1);
 });

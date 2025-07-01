@@ -18,7 +18,13 @@ const allowedMime = new Set<string>([
 ]);
 
 /** wraps the DB work in a single transaction (create File + create SummaryJob + credit‐decrement) */
-async function createJobTx(userId: string, fileName: string) {
+async function createJobTx(
+  userId: string,
+  fileName: string,
+  summaryName: string,
+  deponent: string,
+  notifyOnComplete: boolean
+) {
   const fileId = randomUUID();
   const fileUrl = `https://storage.googleapis.com/${
     depositionBkt.name
@@ -31,7 +37,7 @@ async function createJobTx(userId: string, fileName: string) {
       data: { credits: { decrement: 1 } },
     });
 
-    // 2) write the File record
+    // 2) create file record
     const file = await tx.file.create({
       data: {
         id: fileId,
@@ -41,12 +47,12 @@ async function createJobTx(userId: string, fileName: string) {
         summaryFileName: null,
         summaryUrl: null,
         pages: 0,
-        deponent: null,
-        title: fileName,
+        deponent: deponent || null,
+        title: summaryName || fileName,
       },
     });
 
-    // 3) create the SummaryJob row, pointing at the file
+    // 3) create summary job
     const job = await tx.summaryJob.create({
       data: {
         userId,
@@ -56,7 +62,7 @@ async function createJobTx(userId: string, fileName: string) {
         status: "processing",
         totalPages: 0,
         lastPageProcessed: 0,
-        notifyOnComplete: false,
+        notifyOnComplete,
       },
     });
 
@@ -79,6 +85,7 @@ router.post(
       res.status(401).json({ error: "User not found" });
       return;
     }
+
     if (user.credits < 1) {
       res.status(402).json({ error: "Not enough credits" });
       return;
@@ -88,11 +95,23 @@ router.post(
       headers: req.headers,
       highWaterMark: 2 * 1024 * 1024,
     });
+
     let hasFile = false;
     let replied = false;
 
+    let summaryName = "";
+    let deponent = "";
+    let notifyOnComplete = false;
+
+    bb.on("field", (fieldname, val) => {
+      if (fieldname === "summaryName") summaryName = val;
+      if (fieldname === "deponent") deponent = val;
+      if (fieldname === "notifyOnComplete") notifyOnComplete = val === "true";
+    });
+
     bb.on("file", (_field, file, info: FileInfo) => {
       hasFile = true;
+
       if (!allowedMime.has(info.mimeType)) {
         file.resume();
         if (!replied) {
@@ -107,6 +126,7 @@ router.post(
         resumable: false,
         contentType: info.mimeType,
       });
+
       file.pipe(gcsStream);
 
       gcsStream.on("error", (err) => {
@@ -120,8 +140,15 @@ router.post(
       gcsStream.on("finish", async () => {
         if (replied) return;
         replied = true;
+
         try {
-          const job = await createJobTx(userId, info.filename);
+          const job = await createJobTx(
+            userId,
+            info.filename,
+            summaryName,
+            deponent,
+            notifyOnComplete
+          );
           res.json({ jobId: job.id, status: "processing", totalPages: 0 });
         } catch (err: any) {
           const msg =
