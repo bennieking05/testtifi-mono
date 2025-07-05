@@ -7,7 +7,7 @@ import fs from "fs";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
-import { sendEmail } from "src/lib/sendEmail";
+import { sendEmail } from "../lib/sendEmail";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -15,15 +15,9 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
+console.log("🔥 summarizeWorker.ts – new build: " + new Date().toISOString());
+
 console.log("=== Worker starting ===");
-console.log("Using DB:", process.env.DATABASE_URL);
-console.log("NODE_ENV:", process.env.NODE_ENV);
-console.log("AZURE_OPENAI_ENDPOINT:", process.env.AZURE_OPENAI_ENDPOINT);
-console.log(
-  "AZURE_OPENAI_DEPLOYMENT_NAME:",
-  process.env.AZURE_OPENAI_DEPLOYMENT_NAME
-);
-console.log("AZURE_API_VERSION:", process.env.AZURE_API_VERSION);
 
 async function extractFullText(
   buffer: Buffer,
@@ -34,28 +28,20 @@ async function extractFullText(
   const isDocx = /\.(docx?|DOCX?)$/.test(filename);
 
   if (isPDF) {
-    console.log(`[extractFullText] Detected PDF: ${filename}`);
     const parsed = await pdf(buffer);
-    if (parsed.text.trim().length > 100) {
-      console.log("[extractFullText] Digital text detected – skipping OCR");
-      return parsed.text;
-    }
-    console.log("[extractFullText] Appears scanned – using Vision OCR");
+    if (parsed.text.trim().length > 100) return parsed.text;
     return extractTextWithVision(gcsUri);
   }
 
   if (isDocx) {
-    console.log(`[extractFullText] Detected Word doc: ${filename}`);
     const { value } = await mammoth.extractRawText({ buffer });
     return value;
   }
 
-  console.log(`[extractFullText] Treating ${filename} as plain text`);
   return buffer.toString("utf-8");
 }
 
 async function extractTextWithVision(gcsUri: string): Promise<string> {
-  console.log(`[extractTextWithVision] OCR: ${gcsUri}`);
   const destinationUri = `gs://${summaryBucket.name}/vision-output/`;
   const [operation] = await visionClient.asyncBatchAnnotateFiles({
     requests: [
@@ -81,7 +67,6 @@ async function extractTextWithVision(gcsUri: string): Promise<string> {
 }
 
 function splitPages(txt: string) {
-  console.log("[splitPages] Splitting transcript…");
   let page = 1,
     buf: string[] = [],
     out: { page: number; text: string }[] = [];
@@ -150,16 +135,15 @@ function makePrompt(
     {
       role: "system",
       content: `
-You are a highly skilled legal paralegal AI that summarizes deposition transcripts. Output must be in Markdown with a case metadata section (only for the first chunk) and a highly detailed, page-by-page testimony table. Your summaries should match or exceed the specificity and structure of expert human-written legal summaries.
+You are a highly skilled legal paralegal AI that summarizes deposition transcripts. Output must be in Markdown with a case metadata section (only for the first chunk) and a highly detailed, page-by-page testimony table.
       `.trim(),
     },
     {
       role: "user",
       content: isFirst
         ? `
-Summarize the following deposition transcript chunk (pages ${chunk.start}–${chunk.end}) with **great detail and accuracy**. Follow this structure:
+Summarize pages ${chunk.start}–${chunk.end} with metadata and detailed table:
 
-**1. Case Metadata (at the top):**
 ${metaSection}
 
 **2. Detailed Testimony Table (Markdown):**
@@ -189,10 +173,12 @@ ${chunk.text}
 }
 
 async function azureChatCompletion(messages: any[], max = 2800) {
-  const url =
-    `${process.env.AZURE_OPENAI_ENDPOINT!.replace(/\/+$/, "")}` +
-    `/openai/deployments/${process.env.AZURE_OPENAI_DEPLOYMENT_NAME}` +
-    `/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
+  const url = `${process.env.AZURE_OPENAI_ENDPOINT!.replace(
+    /\/+$/,
+    ""
+  )}/openai/deployments/${
+    process.env.AZURE_OPENAI_DEPLOYMENT_NAME
+  }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
   const { data } = await axios.post(
     url,
     { messages, max_tokens: max, temperature: 0.1 },
@@ -211,7 +197,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function work() {
   while (true) {
-    console.log(`[${new Date().toISOString()}] checking for jobs…`);
     const job = await prisma.summaryJob.findFirst({
       where: { status: "processing" },
     });
@@ -220,28 +205,34 @@ async function work() {
       continue;
     }
 
-    console.log(`[${job.id}] picked up – ${job.fileName}`);
     const jobMeta = await prisma.summaryJob.findUnique({
       where: { id: job.id },
-      select: { userId: true, notifyOnComplete: true, fileName: true },
+      select: {
+        userId: true,
+        notifyOnComplete: true,
+        fileName: true,
+      },
     });
-    const user = await prisma.user.findUnique({ where: { id: job.userId } });
-    if (!user || user.credits <= 0) {
-      await prisma.summaryJob.update({
-        where: { id: job.id },
-        data: {
-          status: "error",
-          error: user ? "Insufficient credits" : "User not found",
-        },
-      });
-      continue;
+
+    const displayTitle =
+      jobMeta?.fileName
+        ?.replace(/\.[^/.]+$/, "")
+        ?.replace(/[-_]/g, " ")
+        ?.trim() || "Untitled Deposition";
+
+    let user;
+    try {
+      user = await prisma.user.findUnique({ where: { id: job.userId } });
+    } catch (e) {
+      console.warn(
+        `[${job.id}] Warning: User not found – continuing without email`
+      );
     }
 
     try {
       const [buf] = await depositionBucket.file(job.fileName).download();
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri);
-
       const pages = splitPages(transcript);
       const chunks = groupPagesToChunks(pages);
       const meta = extractLegalMetadata(transcript);
@@ -283,41 +274,28 @@ async function work() {
         },
       });
 
-      // ─── Enhanced Email Debug ─────────────────────────
-      console.log("🔍 Email debug", {
-        notifyOnComplete: jobMeta?.notifyOnComplete,
-        userEmail: user?.email,
-      });
-
-      if (jobMeta?.notifyOnComplete && user.email) {
-        const downloadUrl = `${process.env.FRONTEND_URL}/download/${job.id}`;
-        const subject = `Your deposition summary is ready`;
-        const text = `Hello ${
-          user.name || user.email
-        },\n\nYour deposition summary \"${
-          jobMeta.fileName
-        }\" is now ready to download:\n${downloadUrl}\n\nThank you!`;
-        const html = `
-          <p>Hello ${user.name || user.email},</p>
-          <p>Your deposition summary "<strong>${
-            jobMeta.fileName
-          }</strong>" is now ready.</p>
-          <p><a href="${downloadUrl}">Click here to download</a></p>
-        `;
-
+      if (jobMeta?.notifyOnComplete && user?.email) {
         try {
-          console.log("📧 Sending email to:", user.email);
-          await sendEmail(user.email, subject, text, html);
-          console.log("✅ Email sent to", user.email);
-        } catch (err) {
-          console.error("❌ Email send failed", err);
+          const downloadUrl = `${process.env.FRONTEND_URL}/download/${job.id}`;
+          await sendEmail(
+            user.email,
+            `Your deposition summary is ready`,
+            `Hello ${
+              user.name || user.email
+            },\n\nYour deposition summary "${displayTitle}" is ready: ${downloadUrl}`,
+            `<p>Hello ${
+              user.name || user.email
+            },</p><p>Your deposition summary "<strong>${displayTitle}</strong>" is now ready.</p><p><a href="${downloadUrl}">Download it here</a></p>`
+          );
+        } catch (emailErr) {
+          console.warn(`[${job.id}] Email failed:`, emailErr);
         }
       }
 
       fs.unlinkSync(tmpPath);
-      console.log(`[${job.id}] finished OK`);
+      console.log(`[${job.id}] ✅ Summary completed.`);
     } catch (e: any) {
-      console.error(`[${job.id}] error:`, e);
+      console.error(`[${job.id}] ❌ Error:`, e);
       await prisma.summaryJob.update({
         where: { id: job.id },
         data: { status: "error", error: e.message || "Unknown error" },

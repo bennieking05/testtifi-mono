@@ -1,4 +1,5 @@
-// ─── src/routes/uploadRoutes.ts ───────────────────────────────────────────────
+// src/routes/uploadRoutes.ts
+
 import express, { Request, Response } from "express";
 import Busboy, { FileInfo } from "busboy";
 import { Storage } from "@google-cloud/storage";
@@ -86,6 +87,7 @@ router.post(
       return;
     }
 
+    // make sure they have at least one credit to spend
     if (user.credits < 1) {
       res.status(402).json({ error: "Not enough credits" });
       return;
@@ -98,7 +100,6 @@ router.post(
 
     let hasFile = false;
     let replied = false;
-
     let summaryName = "";
     let deponent = "";
     let notifyOnComplete = false;
@@ -130,7 +131,7 @@ router.post(
       file.pipe(gcsStream);
 
       gcsStream.on("error", (err) => {
-        console.error("[GCS upload] ", err);
+        console.error("[GCS upload]", err);
         if (!replied) {
           replied = true;
           res.status(500).json({ error: "Upload failed" });
