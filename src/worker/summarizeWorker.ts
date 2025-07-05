@@ -238,12 +238,10 @@ async function work() {
     }
 
     try {
-      // download & extract
       const [buf] = await depositionBucket.file(job.fileName).download();
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri);
 
-      // chunk & summarize
       const pages = splitPages(transcript);
       const chunks = groupPagesToChunks(pages);
       const meta = extractLegalMetadata(transcript);
@@ -260,7 +258,6 @@ async function work() {
         });
       }
 
-      // merge, upload, update DB
       const merged = parts.join("\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
@@ -286,15 +283,20 @@ async function work() {
         },
       });
 
-      // send email if opted-in
+      // ─── Enhanced Email Debug ─────────────────────────
+      console.log("🔍 Email debug", {
+        notifyOnComplete: jobMeta?.notifyOnComplete,
+        userEmail: user?.email,
+      });
+
       if (jobMeta?.notifyOnComplete && user.email) {
         const downloadUrl = `${process.env.FRONTEND_URL}/download/${job.id}`;
         const subject = `Your deposition summary is ready`;
         const text = `Hello ${
           user.name || user.email
-        },\n\nYour deposition summary "${
+        },\n\nYour deposition summary \"${
           jobMeta.fileName
-        }" is now ready to download:\n${downloadUrl}\n\nThank you!`;
+        }\" is now ready to download:\n${downloadUrl}\n\nThank you!`;
         const html = `
           <p>Hello ${user.name || user.email},</p>
           <p>Your deposition summary "<strong>${
@@ -302,7 +304,14 @@ async function work() {
           }</strong>" is now ready.</p>
           <p><a href="${downloadUrl}">Click here to download</a></p>
         `;
-        await sendEmail(user.email, subject, text, html);
+
+        try {
+          console.log("📧 Sending email to:", user.email);
+          await sendEmail(user.email, subject, text, html);
+          console.log("✅ Email sent to", user.email);
+        } catch (err) {
+          console.error("❌ Email send failed", err);
+        }
       }
 
       fs.unlinkSync(tmpPath);

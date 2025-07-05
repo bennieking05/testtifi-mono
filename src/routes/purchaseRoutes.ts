@@ -30,30 +30,48 @@ router.post(
       return;
     }
 
-    const { plan } = req.body as { plan?: string };
-    let creditsToAdd: number;
-    let amount: number;
+    const { plan, tokens, amount } = req.body as {
+      plan?: string;
+      tokens?: number;
+      amount?: number;
+    };
 
-    switch (plan) {
-      case "individual":
-        creditsToAdd = 1;
-        amount = 125;
-        break;
-      case "basic":
-        creditsToAdd = 10;
-        amount = 1000;
-        break;
-      case "plus":
-        creditsToAdd = 25;
-        amount = 2500;
-        break;
-      case "premium":
-        creditsToAdd = 50;
-        amount = 5000;
-        break;
-      default:
+    const planDetails: Record<
+      string,
+      { creditsToAdd: number; amount: number }
+    > = {
+      individual: { creditsToAdd: 1, amount: 12500 },
+      basic: { creditsToAdd: 10, amount: 120000 },
+      plus: { creditsToAdd: 25, amount: 275000 },
+      premium: { creditsToAdd: 50, amount: 500000 },
+    };
+
+    let creditsToAdd: number;
+    let finalAmount: number;
+
+    if (plan === "custom") {
+      if (
+        typeof tokens !== "number" ||
+        typeof amount !== "number" ||
+        tokens < 1 ||
+        amount <= 0
+      ) {
+        res.status(400).json({ error: "Invalid custom plan details" });
+        return;
+      }
+
+      creditsToAdd = tokens;
+      finalAmount = Math.round(amount * 100); // Convert to cents
+    } else {
+      const selected = planDetails[plan ?? ""];
+      if (!selected) {
+        console.warn("⚠️ Invalid plan sent from frontend:", plan);
         res.status(400).json({ error: "Invalid plan" });
         return;
+      }
+
+      creditsToAdd = selected.creditsToAdd;
+      finalAmount = selected.amount;
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -63,10 +81,14 @@ router.post(
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // in cents
+      amount: finalAmount,
       currency: "usd",
       description: `Purchase ${creditsToAdd} credits for user ${userId}`,
-      metadata: { userId, credits: String(creditsToAdd), plan },
+      metadata: {
+        userId,
+        credits: String(creditsToAdd),
+        plan: plan ?? "custom",
+      },
     });
 
     await prisma.purchase.create({
@@ -74,7 +96,7 @@ router.post(
         id: paymentIntent.id,
         userId,
         credits: creditsToAdd,
-        amount,
+        amount: finalAmount,
         success: false,
       },
     });
@@ -174,11 +196,6 @@ export const stripeWebhookHandler = async (
  * GET /api/purchase/history
  *   – admin only: return all past purchases with user info
  */
-
-/**
- * GET /api/purchase/history
- *   – admin only: return all past purchases with user info
- */
 router.get(
   "/history",
   authenticateToken,
@@ -203,7 +220,7 @@ router.get(
           email: p.user.email,
           date: p.createdAt.toISOString(),
           plan: `${p.credits} Credits`,
-          amount: p.amount, // <–– keep as number
+          amount: p.amount,
         })
       );
 
@@ -213,4 +230,5 @@ router.get(
     }
   }
 );
+
 export default router;
