@@ -1,4 +1,4 @@
-// src/worker.ts
+// src/worker/summarizeWorker.ts
 
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
@@ -16,7 +16,6 @@ const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
 console.log("🔥 summarizeWorker.ts – new build: " + new Date().toISOString());
-
 console.log("=== Worker starting ===");
 
 async function extractFullText(
@@ -211,14 +210,15 @@ async function work() {
         userId: true,
         notifyOnComplete: true,
         fileName: true,
+        file: {
+          select: {
+            title: true,
+          },
+        },
       },
     });
 
-    const displayTitle =
-      jobMeta?.fileName
-        ?.replace(/\.[^/.]+$/, "")
-        ?.replace(/[-_]/g, " ")
-        ?.trim() || "Untitled Deposition";
+    const displayTitle = jobMeta?.file?.title || "Untitled Deposition";
 
     let user;
     try {
@@ -258,6 +258,7 @@ async function work() {
         destination: dest,
         contentType: "text/markdown",
       });
+
       const [signedUrl] = await summaryBucket.file(dest).getSignedUrl({
         version: "v4",
         action: "read",
