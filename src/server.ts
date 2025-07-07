@@ -58,6 +58,8 @@ app.use("/api/email-notifications", emailNotificationRoutes);
 app.use("/api/preview", previeqwRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`✔️  Backend listening on port ${PORT}`)
-);
+setTimeout(() => {
+  app.listen(PORT, "0.0.0.0", () =>
+    console.log(`✔️  Backend listening on port ${PORT}`)
+  );
+}, 3000); // Wait 3 seconds before starting the server
