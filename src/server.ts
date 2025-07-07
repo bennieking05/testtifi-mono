@@ -20,6 +20,9 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
+console.log("Starting backend...");
+console.log("PORT:", PORT);
+console.log("DATABASE_URL:", process.env.DATABASE_URL);
 /* ─────────────── HEALTH CHECKS ──────────────── */
 const health: RequestHandler = (_req, res) => {
   res.status(200).send("OK");
