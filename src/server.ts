@@ -20,11 +20,9 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
-console.log("Starting backend...");
-console.log("PORT:", PORT);
-console.log("DATABASE_URL:", process.env.DATABASE_URL);
 /* ─────────────── HEALTH CHECKS ──────────────── */
 const health: RequestHandler = (_req, res) => {
+  console.log("✔️  /health check received");
   res.status(200).send("OK");
 };
 
@@ -61,8 +59,6 @@ app.use("/api/email-notifications", emailNotificationRoutes);
 app.use("/api/preview", previeqwRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
-setTimeout(() => {
-  app.listen(PORT, "0.0.0.0", () =>
-    console.log(`✔️  Backend listening on port ${PORT}`)
-  );
-}, 3000); // Wait 3 seconds before starting the server
+app.listen(PORT, "0.0.0.0", () =>
+  console.log(`✔️  Backend listening on port ${PORT}`)
+);
