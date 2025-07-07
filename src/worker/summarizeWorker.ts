@@ -17,7 +17,9 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
-console.log("🔥 summarizeWorker.ts – new build: " + new Date().toISOString());
+console.log(
+  "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
+);
 console.log("=== Worker starting ===");
 
 async function extractFullText(
