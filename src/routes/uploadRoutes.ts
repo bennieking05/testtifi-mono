@@ -3,7 +3,7 @@
 import express, { Request, Response } from "express";
 import Busboy, { FileInfo } from "busboy";
 import { Storage } from "@google-cloud/storage";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { randomUUID } from "crypto";
 
@@ -31,7 +31,7 @@ async function createJobTx(
     depositionBkt.name
   }/${encodeURIComponent(fileName)}`;
 
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     // 1) deduct one credit
     await tx.user.update({
       where: { id: userId },
@@ -70,7 +70,6 @@ async function createJobTx(
     return job;
   });
 }
-
 router.post(
   "/",
   authenticateToken,

@@ -1,5 +1,5 @@
-# Stage 1: Build Stage
-FROM node:20-alpine AS builder
+# Stage 1: Base Stage for both build-worker and build-backend
+FROM node:20-alpine AS base
 
 WORKDIR /usr/src/app
 
@@ -10,7 +10,7 @@ RUN apk add --no-cache python3 make g++ gcc bash curl net-tools
 COPY package*.json ./
 RUN npm install
 
-# Copy your entire project (including schema.prisma)
+# Copy the rest of the application
 COPY . .
 
 # Rebuild bcrypt (if needed for Alpine)
@@ -19,22 +19,26 @@ RUN npm rebuild bcrypt --build-from-source
 # Generate the Prisma client
 RUN npx prisma generate
 
-# Build your app
+# --- Build worker (Summarize Worker) ---
+FROM base AS build-worker
+
+# Build the TypeScript project before pruning
 RUN npm run build
 
-# Prune dev dependencies
+# Prune dev dependencies AFTER build
 RUN npm prune --omit=dev
 
-# Stage 2: Runtime Stage
-FROM node:20-alpine
+# --- Runtime image for Summarize Worker ---
+FROM node:20-alpine AS summarize-worker
+
 WORKDIR /usr/src/app
 
-# Copy from builder
-COPY --from=builder /usr/src/app/package*.json ./
-COPY --from=builder /usr/src/app/node_modules ./node_modules
-COPY --from=builder /usr/src/app/dist ./dist
+# Copy only what's needed for runtime
+COPY --from=build-worker /usr/src/app/package*.json ./
+COPY --from=build-worker /usr/src/app/node_modules ./node_modules
+COPY --from=build-worker /usr/src/app/dist ./dist
 
 EXPOSE 4000
 ENV NODE_ENV=production
 
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/worker/summarizeWorker.js"]

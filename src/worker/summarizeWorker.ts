@@ -1,4 +1,6 @@
-// src/worker/summarizeWorker.ts
+// ─── src/worker/summarizeWorker.ts ────────────────────────────────────────
+import dotenv from "dotenv";
+dotenv.config();
 
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
@@ -119,7 +121,7 @@ function extractLegalMetadata(tr: string) {
   }
 - DATE: ${
     tr.match(
-      /\b(?:January|February|March|…|December)\s+\d{1,2},\s+\d{4}\b/
+      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/
     )?.[0] || "[Unknown]"
   }
 `.trim();
@@ -133,9 +135,7 @@ function makePrompt(
   return [
     {
       role: "system",
-      content: `
-You are a highly skilled legal paralegal AI that summarizes deposition transcripts. Output must be in Markdown with a case metadata section (only for the first chunk) and a highly detailed, page-by-page testimony table.
-      `.trim(),
+      content: `You are a highly skilled legal paralegal AI that summarizes deposition transcripts. Output must be in Markdown with a case metadata section (only for the first chunk) and a highly detailed, page-by-page testimony table.`,
     },
     {
       role: "user",
@@ -194,39 +194,49 @@ async function azureChatCompletion(messages: any[], max = 2800) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+async function getRenderedEmailTemplate(
+  templateId: number,
+  variables: Record<string, string>
+) {
+  const emailTemplate = await prisma.email.findUnique({
+    where: { id: templateId },
+  });
+  if (!emailTemplate) throw new Error(`Email template ${templateId} not found`);
+
+  let { subject, body } = emailTemplate;
+  for (const [key, value] of Object.entries(variables)) {
+    const regex = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+    body = body.replace(regex, value);
+    subject = subject.replace(regex, value);
+  }
+  return { subject, body };
+}
+
 async function work() {
   while (true) {
     const job = await prisma.summaryJob.findFirst({
       where: { status: "processing" },
+      select: {
+        id: true,
+        userId: true,
+        fileName: true,
+        notifyOnComplete: true,
+        file: { select: { title: true } },
+      },
     });
+
     if (!job) {
       await sleep(10000);
       continue;
     }
 
-    const jobMeta = await prisma.summaryJob.findUnique({
-      where: { id: job.id },
-      select: {
-        userId: true,
-        notifyOnComplete: true,
-        fileName: true,
-        file: {
-          select: {
-            title: true,
-          },
-        },
-      },
-    });
-
-    const displayTitle = jobMeta?.file?.title || "Untitled Deposition";
+    const displayTitle = job.file?.title || "Untitled Deposition";
 
     let user;
     try {
       user = await prisma.user.findUnique({ where: { id: job.userId } });
-    } catch (e) {
-      console.warn(
-        `[${job.id}] Warning: User not found – continuing without email`
-      );
+    } catch {
+      console.warn(`[${job.id}] Warning: User not found`);
     }
 
     try {
@@ -275,22 +285,28 @@ async function work() {
         },
       });
 
-      if (jobMeta?.notifyOnComplete && user?.email) {
+      if (job.notifyOnComplete && user?.email) {
+        console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
+        console.log("BASE_URL:", process.env.BASE_URL);
         try {
-          const downloadUrl = `${process.env.FRONTEND_URL}/download/${job.id}`;
-          await sendEmail(
-            user.email,
-            `Your deposition summary is ready`,
-            `Hello ${
-              user.name || user.email
-            },\n\nYour deposition summary "${displayTitle}" is ready: ${downloadUrl}`,
-            `<p>Hello ${
-              user.name || user.email
-            },</p><p>Your deposition summary "<strong>${displayTitle}</strong>" is now ready.</p><p><a href="${downloadUrl}">Download it here</a></p>`
-          );
+          const dashboardUrl = `${process.env.BASE_URL}`;
+          console.log(`[${job.id}] 🌐 Dashboard URL: ${dashboardUrl}`);
+
+          const { subject, body } = await getRenderedEmailTemplate(4, {
+            name: user.name || user.email,
+            deposition_title: displayTitle,
+            dashboard_link: dashboardUrl,
+          });
+
+          await sendEmail(user.email, subject, undefined, body); // ✅ FIXED HERE
+          console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
         } catch (emailErr) {
           console.warn(`[${job.id}] Email failed:`, emailErr);
         }
+      } else {
+        console.log(
+          `[${job.id}] ⚠️ Skipping email. notifyOnComplete: ${job.notifyOnComplete}, user.email: ${user?.email}`
+        );
       }
 
       fs.unlinkSync(tmpPath);

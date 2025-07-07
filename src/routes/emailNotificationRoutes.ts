@@ -58,7 +58,7 @@ router.post(
           });
 
           if (user?.email) {
-            const downloadUrl = `${process.env.FRONTEND_URL}/download/${job.id}`;
+            const downloadUrl = `${process.env.BASE_URL}/download/${job.id}`;
             const subject = `Your deposition summary is ready`;
             const text =
               `Hello ${user.name || user.email},\n\n` +
