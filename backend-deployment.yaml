@@ -14,7 +14,6 @@ spec:
         app: backend
     spec:
       containers:
-        # ───────────── Cloud SQL Proxy side‑car ─────────────
         - name: cloud-sql-proxy
           image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
           command:
@@ -33,33 +32,29 @@ spec:
               memory: "256Mi"
               cpu: "200m"
 
-        # ───────────── Main backend container ───────────────
         - name: backend
           image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
+          ports:
+            - containerPort: 4000
           resources:
             requests:
-              memory: "512Mi" # ← enough for normal operation
+              memory: "512Mi"
               cpu: "250m"
             limits:
-              memory: "2Gi" # ← big head‑room for large uploads
+              memory: "2Gi"
               cpu: "1000m"
-
           volumeMounts:
             - name: gcp-service-account
-              mountPath: /var/secrets/google # service‑account key.json
+              mountPath: /var/secrets/google
               readOnly: true
-
           env:
             - name: NODE_ENV
               value: "production"
-
-            # ---------- database / app secrets ----------
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
                   key: DATABASE_URL
-
             - name: DB_HOST
               value: "127.0.0.1"
             - name: DB_USER
@@ -77,7 +72,6 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: DB_NAME
-
             - name: SENDGRID_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -108,8 +102,6 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: BACKEND_URL
-
-            # ---------- Stripe ----------
             - name: STRIPE_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -120,8 +112,6 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: STRIPE_WEBHOOK_SECRET
-
-            # ---------- Azure OpenAI ----------
             - name: AZURE_OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -142,24 +132,21 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: AZURE_API_VERSION
-
-            # ---------- GCP credentials ----------
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /var/secrets/google/key.json
-
           readinessProbe:
             httpGet:
               path: /health
               port: 4000
-            initialDelaySeconds: 5
+            initialDelaySeconds: 15
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
 
-      # ───────────────────── Volumes ─────────────────────
       volumes:
         - name: cloudsql-instance-credentials
           secret:
             secretName: your-cloudsql-credentials
-
         - name: gcp-service-account
           secret:
-            secretName: service-account-json # secret you created with key.json
+            secretName: service-account-json

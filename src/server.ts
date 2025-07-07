@@ -1,4 +1,3 @@
-// ─── src/server.ts ────────────────────────────────────────────────────
 import express, { type RequestHandler } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -23,12 +22,11 @@ const PORT = Number(process.env.PORT) || 4000;
 
 /* ─────────────── HEALTH CHECKS ──────────────── */
 const health: RequestHandler = (_req, res) => {
-  res.status(200).send("OK"); // block body ⇒ returns void (no TS2322)
+  res.status(200).send("OK");
 };
 
 app.get("/health", health); // k8s liveness / readiness
 app.get("/api/health", health); // public Ingress
-/* ─────────────────────────────────────────────── */
 
 /* ─────────────── MIDDLEWARE ─────────────────── */
 app.use(cors());
@@ -45,13 +43,10 @@ app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
-/* ─────────────────────────────────────────────── */
 
 /* ─────────────── ROUTES ─────────────────────── */
-// app.get("/api/test", (_req, res) => res.send("Test OK"));
-
 app.use("/api/auth", authRoutes);
-app.use("/api/upload", uploadRoutes); // ← single upload mount
+app.use("/api/upload", uploadRoutes);
 app.use("/api/purchase", purchaseRoutes);
 app.use("/api/summaries", summariesRoutes);
 app.use("/api/download", downloadRoutes);
@@ -61,7 +56,8 @@ app.use("/api/fine-tune", fineTineRoutes);
 app.use("/api/summary-jobs", summaryJobRoutes);
 app.use("/api/email-notifications", emailNotificationRoutes);
 app.use("/api/preview", previeqwRoutes);
-/* ─────────────────────────────────────────────── */
 
 /* ─────────────── START SERVER ───────────────── */
-app.listen(PORT, () => console.log(`✔️  Backend listening on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () =>
+  console.log(`✔️  Backend listening on port ${PORT}`)
+);
