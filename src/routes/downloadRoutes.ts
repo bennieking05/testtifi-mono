@@ -12,11 +12,9 @@ import {
   TableRow,
   TableCell,
   WidthType,
-  ImageRun,
 } from "docx";
 import PDFDocument from "pdfkit";
 import stream from "stream";
-import fs from "fs";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -37,25 +35,60 @@ const objectKey = (u: string) => {
 };
 
 function parseMarkdown(md: string) {
-  const meta: string[] = [],
-    rows: string[][] = [];
+  const clean = (s: string) =>
+    s
+      // convert <br> to newlines
+      .replace(/<br\s*\/?>(\s*)/gi, "\n")
+      // remove bold/italic markdown wrappers (keep inner text)
+      .replace(/\*\*(.*?)\*\*/g, "$1")
+      .replace(/__(.*?)__/g, "$1")
+      .replace(/\*(.*?)\*/g, "$1")
+      .trim();
+
+  const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
+
+  const looksLikeHeader = (a: string, b: string) => {
+    const A = clean(a).toLowerCase();
+    const B = clean(b).toLowerCase();
+    const hasPage = /page/.test(A) || /page/.test(B);
+    const hasSummary = /summary/.test(A) || /summary/.test(B);
+    const isDashes = /^-+$/.test(A) || /^-+$/.test(B);
+    return (hasPage && hasSummary) || isDashes;
+  };
+
+  const meta: string[] = [];
+  const rows: string[][] = [];
   let inTable = false;
-  md.split(/\r?\n/).forEach((l) => {
-    if (l.startsWith("|")) inTable = true;
-    if (!inTable && l.trim()) meta.push(l);
-    if (inTable && l.startsWith("|")) {
-      const cols = l
+
+  md.split(/\r?\n/).forEach((raw) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (isRule(trimmed)) return; // drop horizontal rules
+
+    if (trimmed.startsWith("|")) inTable = true;
+
+    if (!inTable) {
+      // Drop markdown headers and a specific Case Metadata heading
+      if (/^#+\s*/.test(trimmed) || /^\*\*?\s*Case\s*Metadata/i.test(trimmed)) {
+        return;
+      }
+      // strip leading list marker like "- " or "* "
+      const noBullet = trimmed.replace(/^[*-]\s+/, "");
+      meta.push(clean(noBullet));
+      return;
+    }
+
+    if (inTable && trimmed.startsWith("|")) {
+      const cols = trimmed
         .split("|")
         .slice(1, -1)
-        .map((c) => c.trim());
-      if (
-        cols.length === 2 &&
-        cols[0].toLowerCase() !== "page" &&
-        !/^[-]+$/.test(cols[0])
-      )
-        rows.push(cols);
+        .map((c) => clean(c));
+      if (cols.length !== 2) return;
+      if (looksLikeHeader(cols[0], cols[1])) return; // skip header row
+      rows.push(cols);
     }
   });
+
   return { meta, rows };
 }
 
@@ -81,6 +114,7 @@ router.get(
     const key = job.summaryCsvUrl
       ? objectKey(job.summaryCsvUrl)
       : job.file?.summaryFileName ?? `summary-${job.id}.md`;
+    const coverTitle = job.file?.title || "Deposition Summary";
     const safeTitle = sanitize(
       stripExt(
         job.file?.title ||
@@ -116,29 +150,37 @@ router.get(
         return;
       }
 
-      // DOCX
+      // DOCX — match preview structure: cover page (title + pages), then content
       if (format === "docx") {
-        const logoBuffer = fs.readFileSync("./og-image.png");
         const doc = new Document({
+          styles: {
+            default: {
+              document: {
+                run: { font: "Calibri", size: 22 }, // 11pt
+                paragraph: { spacing: { after: 120 } },
+              },
+              heading1: { run: { size: 32, bold: true } },
+            },
+          },
           sections: [
             {
               children: [
+                // Cover page
                 new Paragraph({
-                  text: "Summarized by Testifi AI",
+                  text: coverTitle,
                   alignment: "center",
                   heading: "Heading1",
                 }),
-                new Paragraph({
-                  children: [
-                    new ImageRun({
-                      type: "png",
-                      data: logoBuffer,
-                      transformation: { width: 150, height: 150 },
-                    }),
-                  ],
-                  alignment: "center",
-                }),
+                ...(job.file?.pages
+                  ? [
+                      new Paragraph({
+                        text: `Pages: ${job.file.pages}`,
+                        alignment: "center",
+                      }),
+                    ]
+                  : []),
                 new Paragraph({ children: [], pageBreakBefore: true }),
+                // Body from parsed markdown
                 ...meta.map((m) => new Paragraph(m)),
                 new Table({
                   width: { size: 100, type: WidthType.PERCENTAGE },
@@ -179,7 +221,7 @@ router.get(
         return;
       }
 
-      // PDF
+      // PDF — match preview structure: cover page (title + pages), then content
       if (format === "pdf") {
         const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
         const pass = new stream.PassThrough();
@@ -189,38 +231,49 @@ router.get(
           "Content-Disposition",
           `attachment; filename="${safeTitle}.pdf"`
         );
-        const lm = pdf.page.margins.left,
-          rm = pdf.page.margins.right;
-        const full = pdf.page.width - lm - rm,
-          gap = 8;
-        const pageCol = 80,
-          sumCol = full - pageCol - gap;
-        pdf.font("Helvetica-Bold").fontSize(13);
+        const lm = pdf.page.margins.left;
+        const rm = pdf.page.margins.right;
+        const full = pdf.page.width - lm - rm;
+        const gap = 8;
+        const pageCol = 90;
+        const sumCol = full - pageCol - gap;
+
+        // Cover page
+        pdf.font("Helvetica-Bold").fontSize(22).text(coverTitle, {
+          align: "center",
+        });
+        if (job.file?.pages) {
+          pdf.moveDown();
+          pdf.font("Helvetica").fontSize(12).text(`Pages: ${job.file.pages}`, {
+            align: "center",
+          });
+        }
+
+        // New page for body
+        pdf.addPage();
+
+        // Metadata
+        pdf.font("Helvetica").fontSize(11);
         meta.forEach((l) => pdf.text(l));
-        pdf.moveDown();
+        pdf.moveDown(0.5);
+
+        // Table header
         let y = pdf.y;
         pdf.font("Helvetica-Bold").fontSize(11);
         pdf.text("Page(s)", lm, y, { width: pageCol });
-        pdf.text("Testimony Summary", lm + pageCol + gap, y, {
-          width: sumCol,
-        });
-        y = pdf.y + 2;
-        pdf
-          .moveTo(lm, y)
-          .lineTo(lm + full, y)
-          .stroke();
+        pdf.text("Testimony Summary", lm + pageCol + gap, y, { width: sumCol });
+        y = pdf.y + 6;
+        pdf.moveTo(lm, y).lineTo(lm + full, y).stroke();
+
+        // Rows
         rows.forEach(([p, s]) => {
-          const rowY = pdf.y + 4;
-          pdf
-            .font("Helvetica-Bold")
-            .fontSize(10)
-            .text(p, lm, rowY, { width: pageCol });
-          pdf
-            .font("Helvetica")
-            .fontSize(10)
-            .text(s, lm + pageCol + gap, rowY, {
-              width: sumCol,
-            });
+          const rowY = pdf.y + 6;
+          pdf.font("Helvetica-Bold").fontSize(10).text(p, lm, rowY, {
+            width: pageCol,
+          });
+          pdf.font("Helvetica").fontSize(10).text(s, lm + pageCol + gap, rowY, {
+            width: sumCol,
+          });
         });
         pdf.end();
         return;

@@ -1,34 +1,39 @@
 steps:
-  # Step 1: Build the Docker image
+  # Build backend
   - name: "gcr.io/cloud-builders/docker"
     args:
-      - "build"
-      - "-t"
-      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
-      - "."
+      [
+        "build",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA",
+        "--target=backend",
+        ".",
+      ]
 
-  # Step 2: Push the image to GCR
+  # Build summarize-worker
   - name: "gcr.io/cloud-builders/docker"
     args:
-      - "push"
-      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+      [
+        "build",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/summarize-worker:$SHORT_SHA",
+        "--target=summarize-worker",
+        ".",
+      ]
 
-  # Step 3: Authenticate and deploy to GKE
-  - name: "gcr.io/cloud-builders/gke-deploy"
-    args:
-      - "run"
-      - "--filename=backend-deployment.yaml"
-      - "--image=gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
-      - "--location=us-central1-c"
-      - "--cluster=testifi"
+  # Push both images
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"]
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:$SHORT_SHA"]
 
-  # Step 4: Update the Kubernetes deployment to use the new image
+  # Deploy worker separately
   - name: "gcr.io/cloud-builders/kubectl"
     args:
       - "set"
       - "image"
-      - "deployment/backend"
-      - "backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+      - "deployment/summarize-worker"
+      - "summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$SHORT_SHA"
     env:
       - "CLOUDSDK_COMPUTE_ZONE=us-central1-c"
       - "CLOUDSDK_CONTAINER_CLUSTER=testifi"

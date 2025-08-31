@@ -70,18 +70,36 @@ async function extractTextWithVision(gcsUri: string): Promise<string> {
 }
 
 function splitPages(txt: string) {
-  let page = 1,
-    buf: string[] = [],
-    out: { page: number; text: string }[] = [];
-  for (const line of txt.split("\n")) {
-    if (/^(?:\s*Page\s*)?\d+\s*$/.test(line.trim())) {
-      if (buf.length) out.push({ page: page++, text: buf.join("\n") });
-      buf = [];
+  // Detect explicit page markers and use their numeric value when present.
+  // Common patterns: "Page 147", "147", "PAGE 147" centered on a line.
+  const marker = /^\s*(?:Page\s*)?(\d{1,5})\s*$/i;
+  let currentPage: number | null = null;
+  let buf: string[] = [];
+  const out: { page: number; text: string }[] = [];
+
+  const push = () => {
+    if (buf.length && currentPage != null) {
+      out.push({ page: currentPage, text: buf.join("\n") });
+    }
+    buf = [];
+  };
+
+  for (const raw of txt.split("\n")) {
+    const line = raw;
+    const m = line.trim().match(marker);
+    if (m) {
+      // Starting a new page segment; flush previous
+      push();
+      currentPage = parseInt(m[1], 10);
+      // Do not include the page marker line itself in content
+      continue;
     }
     buf.push(line);
   }
-  if (buf.length) out.push({ page: page++, text: buf.join("\n") });
-  return out;
+
+  // Flush last buffer
+  push();
+  return out.sort((a, b) => a.page - b.page);
 }
 
 function groupPagesToChunks(
@@ -101,31 +119,49 @@ function groupPagesToChunks(
 }
 
 function extractLegalMetadata(tr: string) {
+  // Focus on the header area (first page, first ~30 lines)
+  const lines = tr.split(/\r?\n/);
+  const header = lines.slice(0, 30).join("\n");
+
+  // Civil action number: support variants and first occurrence
+  const civMatch = header.match(
+    /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
+  );
+  const civil = civMatch?.[2] || "[Unknown]";
+
+  // Deposition title: try "Continued deposition of <name>" first, fallback to generic "Deposition of <name>"
+  const contDep = header.match(/continued\s+deposition\s+of\s+([^\n,]+)/i)?.[1];
+  const depOf = header.match(/deposition\s+of\s+([^\n,]+)/i)?.[1];
+  const title = (contDep || depOf || "[Unknown]").trim();
+
+  // Date: prefer first 3 lines if present
+  const top3 = lines.slice(0, 3).join("\n");
+  const dateRegex =
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/;
+  const date =
+    top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0] || "[Unknown]";
+
+  // Court
+  const court =
+    header.match(
+      /(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*|UNITED STATES DISTRICT COURT.*)/i
+    )?.[1] || "[Unknown]";
+
+  // Parties (keep short – avoid scooping whole caption)
+  const pls =
+    header.match(/PLAINTIFFS?[\s\S]{0,80}/i)?.[0]?.replace(/\s+/g, " ") ||
+    "[Unknown]";
+  const defs =
+    header.match(/DEFENDANTS?[\s\S]{0,80}/i)?.[0]?.replace(/\s+/g, " ") ||
+    "[Unknown]";
+
   return `
-- CIVIL ACTION NUMBER: ${
-    tr.match(/CIVIL ACTION NO[.,]?\s*([\w\-]+)/i)?.[1] || "[Unknown]"
-  }
-- COURT: ${
-    tr.match(/(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*)/i)?.[1] ||
-    "[Unknown]"
-  }
-- PLAINTIFFS: ${
-    tr.match(/PLAINTIFFS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
-    "[Unknown]"
-  }
-- DEFENDANTS: ${
-    tr.match(/DEFENDANTS[\s\S]{0,100}/i)?.[0]?.replace(/\s+/g, " ") ||
-    "[Unknown]"
-  }
-- DEPOSITION TITLE: ${
-    tr.match(/DEPOSITION SUMMARY OF ([A-Z\s\.\-]+),/i)?.[1]?.trim() ||
-    "[Unknown]"
-  }
-- DATE: ${
-    tr.match(
-      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/
-    )?.[0] || "[Unknown]"
-  }
+- CIVIL ACTION NUMBER: ${civil}
+- COURT: ${court}
+- PLAINTIFFS: ${pls}
+- DEFENDANTS: ${defs}
+- DEPOSITION TITLE: ${title}
+- DATE: ${date}
 `.trim();
 }
 
@@ -287,7 +323,12 @@ async function work() {
         },
       });
 
-      if (job.notifyOnComplete && user?.email) {
+      // Re-fetch notifyOnComplete at completion time to honor late opt-ins
+      const fresh = await prisma.summaryJob.findUnique({
+        where: { id: job.id },
+        select: { notifyOnComplete: true },
+      });
+      if (fresh?.notifyOnComplete && user?.email) {
         console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
         console.log("BASE_URL:", process.env.BASE_URL);
         try {
@@ -300,14 +341,14 @@ async function work() {
             dashboard_link: dashboardUrl,
           });
 
-          await sendEmail(user.email, subject, undefined, body); // ✅ FIXED HERE
+          await sendEmail(user.email, subject, undefined, body); // ✅ HTML body supported; text auto-generated
           console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
         } catch (emailErr) {
           console.warn(`[${job.id}] Email failed:`, emailErr);
         }
       } else {
         console.log(
-          `[${job.id}] ⚠️ Skipping email. notifyOnComplete: ${job.notifyOnComplete}, user.email: ${user?.email}`
+          `[${job.id}] ⚠️ Skipping email notification. notifyOnComplete: ${fresh?.notifyOnComplete}, user.email: ${user?.email}`
         );
       }
 

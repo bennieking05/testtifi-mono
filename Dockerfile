@@ -35,6 +35,7 @@ CMD ["node", "dist/server.js"]
 # -------- Stage 3b: Runtime for Summarize Worker --------
 FROM node:20-alpine AS summarize-worker
 
+
 WORKDIR /usr/src/app
 
 COPY --from=build /usr/src/app/package*.json ./
@@ -43,4 +44,4 @@ COPY --from=build /usr/src/app/dist ./dist
 
 ENV NODE_ENV=production
 
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/worker/summarizeWorker.js"]

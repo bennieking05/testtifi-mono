@@ -78,13 +78,19 @@ router.get(
             ? toObjectName(job.summaryCsvUrl)
             : file?.summaryFileName ?? `summary-${job.id}.md`;
 
-          /* page estimate – fall back to live word-count if summary present */
+          /* page estimate – fall back to prior values; only fetch when finished and object exists */
           let pages = file?.pages ?? job.totalPages ?? 0;
-          try {
-            const txt = await fetchSummaryText(objectName);
-            pages = Math.ceil(txt.trim().split(/\s+/).length / WORDS_PER_PAGE);
-          } catch (e) {
-            console.warn("fetchSummaryText failed:", (e as any).message);
+          if (job.status === "complete") {
+            try {
+              const [exists] = await bucket.file(objectName).exists();
+              if (exists) {
+                const txt = await fetchSummaryText(objectName);
+                const words = txt.trim().split(/\s+/).length;
+                if (words > 0) pages = Math.ceil(words / WORDS_PER_PAGE);
+              }
+            } catch {
+              // Silently ignore fetch errors (e.g., 404 for expired/missing object)
+            }
           }
 
           /* signed URL (3 days) */
