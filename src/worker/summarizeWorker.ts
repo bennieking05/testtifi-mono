@@ -104,7 +104,7 @@ function splitPages(txt: string) {
 
 function groupPagesToChunks(
   pages: { page: number; text: string }[],
-  perChunk = 12
+  perChunk = 8 // smaller chunks to avoid token limits
 ) {
   const out: { start: number; end: number; text: string }[] = [];
   for (let i = 0; i < pages.length; i += perChunk) {
@@ -119,49 +119,32 @@ function groupPagesToChunks(
 }
 
 function extractLegalMetadata(tr: string) {
-  // Focus on the header area (first page, first ~30 lines)
   const lines = tr.split(/\r?\n/);
-  const header = lines.slice(0, 30).join("\n");
+  const header = lines.slice(0, 40).join("\n");
 
-  // Civil action number: support variants and first occurrence
   const civMatch = header.match(
     /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
   );
   const civil = civMatch?.[2] || "[Unknown]";
 
-  // Deposition title: try "Continued deposition of <name>" first, fallback to generic "Deposition of <name>"
+  const captionLine =
+    lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
+  const caption = captionLine.trim() || `Civil Action No. ${civil}`;
+
   const contDep = header.match(/continued\s+deposition\s+of\s+([^\n,]+)/i)?.[1];
   const depOf = header.match(/deposition\s+of\s+([^\n,]+)/i)?.[1];
-  const title = (contDep || depOf || "[Unknown]").trim();
+  const deponent = (contDep || depOf || "[Unknown]").trim();
 
-  // Date: prefer first 3 lines if present
   const top3 = lines.slice(0, 3).join("\n");
   const dateRegex =
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/;
   const date =
     top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0] || "[Unknown]";
 
-  // Court
-  const court =
-    header.match(
-      /(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*|UNITED STATES DISTRICT COURT.*)/i
-    )?.[1] || "[Unknown]";
-
-  // Parties (keep short – avoid scooping whole caption)
-  const pls =
-    header.match(/PLAINTIFFS?[\s\S]{0,80}/i)?.[0]?.replace(/\s+/g, " ") ||
-    "[Unknown]";
-  const defs =
-    header.match(/DEFENDANTS?[\s\S]{0,80}/i)?.[0]?.replace(/\s+/g, " ") ||
-    "[Unknown]";
-
   return `
-- CIVIL ACTION NUMBER: ${civil}
-- COURT: ${court}
-- PLAINTIFFS: ${pls}
-- DEFENDANTS: ${defs}
-- DEPOSITION TITLE: ${title}
-- DATE: ${date}
+Case Caption: ${caption}
+Title of Document: Transcript Summary of ${deponent}
+Date of Deposition: ${date}
 `.trim();
 }
 
@@ -173,43 +156,22 @@ function makePrompt(
   return [
     {
       role: "system",
-      content: `You are a highly skilled legal paralegal AI that summarizes deposition transcripts. Output must be in Markdown with a case metadata section (only for the first chunk) and a highly detailed, page-by-page testimony table.`,
+      content: `You are a highly skilled legal paralegal AI producing PAGE-LINE deposition summaries. Output must be in Markdown with: (1) a legal-style metadata block (first chunk only) and (2) a detailed, page-line table. Follow strictly:\n• Style: Page‑line summary suitable for law firms.\n• Focus: Attorney questions and witness answers; exclude unrelated detail.\n• Compression: Target ~5:1 (five transcript pages per one page of summary).\n• Table columns: EXACTLY two columns — (1) Page/Line and (2) Testimony.\n• Do NOT include a table header row.\n• Include page and line ranges when the text shows line numbers; otherwise pages only.\n• No commentary or continuation prompts.`,
     },
     {
       role: "user",
       content: isFirst
         ? `
-Summarize pages ${chunk.start}–${chunk.end} with metadata and detailed table:
-
-${metaSection}
-
-**2. Detailed Testimony Table (Markdown):**
-- Create a table with **two columns**: (1) Page Number(s), (2) Summary of Testimony.
-- Each row should summarize a specific page or small range of pages (e.g., 9–11, 12, 13–14, etc.).
-- The summary for each row must be **rich with specific details** from the text:
-  - Names and roles of individuals (attorneys, deponent, others mentioned).
-  - References to **exhibits**, **emails**, or important documents (identify by number or description).
-  - **Key questions and answers**, legal arguments, objections, and important points or admissions.
-  - Dates, critical figures, or short direct quotes (as needed for clarity or emphasis).
-- **Do not generalize.** Instead, create a factual, thorough, and clear summary for each segment, including every key topic, action, or exchange.
-- Structure the table using standard Markdown syntax.
-
-Below is the transcript text:
-${chunk.text}
+Summarize pages ${chunk.start}–${chunk.end} as a PAGE‑LINE deposition summary.\n\n${metaSection}\n\nNow output ONLY Markdown table rows with EXACTLY two columns: Page/Line and Testimony. No header row. Keep each row concise yet specific, capturing key Q&A, objections, exhibits, and dates. Aim for ~5:1 compression overall.\n\nTranscript:\n${chunk.text}
         `.trim()
         : `
-Continue summarizing the deposition transcript from where the previous chunk ended (pages ${chunk.start}–${chunk.end}). **Do not repeat the metadata.**
-- Use the same Markdown table structure, adding new rows for the next page numbers in this chunk.
-- Continue in the same detailed, page-by-page style.
-
-Below is the next chunk of transcript:
-${chunk.text}
+Continue the PAGE‑LINE deposition summary for pages ${chunk.start}–${chunk.end}. Do NOT repeat metadata. Output ONLY additional Markdown table rows with the two columns (Page/Line | Testimony). No header row.\n\nTranscript:\n${chunk.text}
         `.trim(),
     },
   ];
 }
 
-async function azureChatCompletion(messages: any[], max = 2800) {
+async function azureChatCompletion(messages: any[], max = 3400) {
   const url = `${process.env.AZURE_OPENAI_ENDPOINT!.replace(
     /\/+$/,
     ""
@@ -218,7 +180,7 @@ async function azureChatCompletion(messages: any[], max = 2800) {
   }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
   const { data } = await axios.post(
     url,
-    { messages, max_tokens: max, temperature: 0.1 },
+    { messages, max_tokens: max, temperature: 0.0 },
     {
       headers: {
         "Content-Type": "application/json",
@@ -297,7 +259,8 @@ async function work() {
         });
       }
 
-      const merged = parts.join("\n");
+      const mergedRaw = parts.join("\n");
+      const merged = sanitizeGeneratedMarkdown(mergedRaw);
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 
@@ -362,6 +325,20 @@ async function work() {
       });
     }
   }
+}
+
+// Remove model filler like "To be continued..." or "Let me know if you'd like me to continue"
+function sanitizeGeneratedMarkdown(md: string): string {
+  const lines = md.split(/\r?\n/);
+  const banned = [
+    /\bto be continued\b/i,
+    /\blet me know if you'd like me to continue\b/i,
+    /\blet me know if you(?:'|\s)\w* like me to continue\b/i,
+    /\bprovide further clarification\b/i,
+    /\bcan continue summarizing\b/i,
+  ];
+  const keep = lines.filter((l) => !banned.some((re) => re.test(l)));
+  return keep.join("\n");
 }
 
 work().catch((err) => {

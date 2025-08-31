@@ -5,7 +5,7 @@ steps:
       [
         "build",
         "-t",
-        "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA",
+        "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID",
         "--target=backend",
         ".",
       ]
@@ -16,35 +16,23 @@ steps:
       [
         "build",
         "-t",
-        "gcr.io/golden-cosmos-450417-i8/summarize-worker:$SHORT_SHA",
+        "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID",
         "--target=summarize-worker",
         ".",
       ]
 
   # Push both images
   - name: "gcr.io/cloud-builders/docker"
-    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"]
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"]
   - name: "gcr.io/cloud-builders/docker"
-    args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:$SHORT_SHA"]
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"]
 
-  # Deploy worker separately
-  - name: "gcr.io/cloud-builders/kubectl"
-    args:
-      - "set"
-      - "image"
-      - "deployment/summarize-worker"
-      - "summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$SHORT_SHA"
-    env:
-      - "CLOUDSDK_COMPUTE_ZONE=us-central1-c"
-      - "CLOUDSDK_CONTAINER_CLUSTER=testifi"
-
-substitutions:
-  _DB_HOST: "127.0.0.1" # Cloud SQL Proxy runs on localhost
 
 images:
-  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+  - "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"
 
 options:
   logging: CLOUD_LOGGING_ONLY
 
-serviceAccount: "748916208557-compute@developer.gserviceaccount.com"
+serviceAccount: "projects/golden-cosmos-450417-i8/serviceAccounts/748916208557-compute@developer.gserviceaccount.com"

@@ -35,7 +35,7 @@ spec:
 
         # ─────────────── Main summarize-worker container ───────────────
         - name: summarize-worker
-          image: gcr.io/golden-cosmos-450417-i8/testifi-backend
+          image: gcr.io/golden-cosmos-450417-i8/summarize-worker:latest
           command: ["node", "dist/worker/summarizeWorker.js"]
           resources:
             requests:

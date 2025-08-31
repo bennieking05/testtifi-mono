@@ -12,6 +12,7 @@ import {
   TableRow,
   TableCell,
   WidthType,
+  TextRun,
 } from "docx";
 import PDFDocument from "pdfkit";
 import stream from "stream";
@@ -64,6 +65,10 @@ function parseMarkdown(md: string) {
     const trimmed = raw.trim();
     if (!trimmed) return;
     if (isRule(trimmed)) return; // drop horizontal rules
+    // strip model filler lines
+    if (/\bto be continued\b/i.test(trimmed)) return;
+    if (/\blet me know if you'd like me to continue\b/i.test(trimmed)) return;
+    if (/\bprovide further clarification\b/i.test(trimmed)) return;
 
     if (trimmed.startsWith("|")) inTable = true;
 
@@ -85,6 +90,8 @@ function parseMarkdown(md: string) {
         .map((c) => clean(c));
       if (cols.length !== 2) return;
       if (looksLikeHeader(cols[0], cols[1])) return; // skip header row
+      // skip continuation/filler rows accidentally parsed as cells
+      if (cols.some((c) => /to be continued|let me know|provide further clarification/i.test(c))) return;
       rows.push(cols);
     }
   });
@@ -156,10 +163,10 @@ router.get(
           styles: {
             default: {
               document: {
-                run: { font: "Calibri", size: 22 }, // 11pt
-                paragraph: { spacing: { after: 120 } },
+                run: { font: "Times New Roman", size: 24 }, // 11pt
+                paragraph: { spacing: { after: 160 } },
               },
-              heading1: { run: { size: 32, bold: true } },
+              heading1: { run: { size: 36, bold: true } },
             },
           },
           sections: [
@@ -187,9 +194,9 @@ router.get(
                   rows: [
                     new TableRow({
                       children: [
-                        new TableCell({ children: [new Paragraph("Page(s)")] }),
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] })] }),
                         new TableCell({
-                          children: [new Paragraph("Testimony Summary")],
+                          children: [new Paragraph({ children: [new TextRun({ text: "Testimony Summary", bold: true })] })],
                         }),
                       ],
                     }),
@@ -239,12 +246,12 @@ router.get(
         const sumCol = full - pageCol - gap;
 
         // Cover page
-        pdf.font("Helvetica-Bold").fontSize(22).text(coverTitle, {
+        pdf.font("Times-Bold").fontSize(22).text(coverTitle, {
           align: "center",
         });
         if (job.file?.pages) {
           pdf.moveDown();
-          pdf.font("Helvetica").fontSize(12).text(`Pages: ${job.file.pages}`, {
+          pdf.font("Times-Roman").fontSize(12).text(`Pages: ${job.file.pages}`, {
             align: "center",
           });
         }
@@ -253,27 +260,29 @@ router.get(
         pdf.addPage();
 
         // Metadata
-        pdf.font("Helvetica").fontSize(11);
+        pdf.font("Times-Roman").fontSize(12);
         meta.forEach((l) => pdf.text(l));
         pdf.moveDown(0.5);
 
         // Table header
         let y = pdf.y;
-        pdf.font("Helvetica-Bold").fontSize(11);
+        pdf.font("Times-Bold").fontSize(12);
         pdf.text("Page(s)", lm, y, { width: pageCol });
         pdf.text("Testimony Summary", lm + pageCol + gap, y, { width: sumCol });
         y = pdf.y + 6;
-        pdf.moveTo(lm, y).lineTo(lm + full, y).stroke();
+        pdf.moveTo(lm, y).lineTo(lm + full, y).strokeColor('#c8c8c8').stroke();
 
         // Rows
         rows.forEach(([p, s]) => {
           const rowY = pdf.y + 6;
-          pdf.font("Helvetica-Bold").fontSize(10).text(p, lm, rowY, {
+          pdf.font("Times-Bold").fontSize(11).text(p, lm, rowY, {
             width: pageCol,
           });
-          pdf.font("Helvetica").fontSize(10).text(s, lm + pageCol + gap, rowY, {
+          pdf.font("Times-Roman").fontSize(11).text(s, lm + pageCol + gap, rowY, {
             width: sumCol,
           });
+          // Row separator
+          pdf.moveTo(lm, pdf.y + 4).lineTo(lm + full, pdf.y + 4).strokeColor('#e0e0e0').stroke();
         });
         pdf.end();
         return;

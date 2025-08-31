@@ -14,6 +14,7 @@ import summariesRoutes from "./routes/summariesRoutes";
 import summaryJobRoutes from "./routes/summaryJobRoutes";
 import previeqwRoutes from "./routes/previewRoutes";
 import emailNotificationRoutes from "./routes/emailNotificationRoutes";
+import snapshotsRoutes from "./routes/snapshotsRoutes";
 
 dotenv.config();
 
@@ -57,6 +58,7 @@ app.use("/api/fine-tune", fineTineRoutes);
 app.use("/api/summary-jobs", summaryJobRoutes);
 app.use("/api/email-notifications", emailNotificationRoutes);
 app.use("/api/preview", previeqwRoutes);
+app.use("/api/snapshots", snapshotsRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>

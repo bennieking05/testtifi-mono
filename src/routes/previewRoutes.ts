@@ -46,10 +46,13 @@ router.get(
         ? toObjectName(job.summaryCsvUrl)
         : job.file?.summaryFileName ?? `summary-${job.id}.md`;
       const [buf] = await bucket.file(objectName).download();
-      const htmlBody = md.render(buf.toString("utf-8"));
+      const raw = buf.toString("utf-8");
+      const cleaned = stripContinuations(raw);
+      const htmlBody = md.render(cleaned);
 
       const css = `
-        body { margin: 0; }
+        /* Professional legal-style document */
+        html, body { margin: 0; padding: 0; background: #fff; }
         .cover {
           display: flex;
           flex-direction: column;
@@ -57,31 +60,43 @@ router.get(
           align-items: center;
           height: 100vh;
           page-break-after: always;
-          font-family: "Calibri", Arial, sans-serif;
+          font-family: "Times New Roman", Georgia, serif;
         }
-        .cover h1 { font-size: 36pt; margin-bottom: 12pt; }
-        .cover p  { font-size: 14pt; margin: 6pt 0; }
+        .cover h1 { font-size: 30pt; margin: 0 0 8pt 0; font-weight: 700; }
+        .cover p  { font-size: 12pt; margin: 2pt 0; }
         .page {
-          max-width: 6.5in;
-          margin: 0.75in auto;
-          font-family: "Calibri", Arial, sans-serif;
-          font-size: 11pt;
-          line-height: 1.4;
+          max-width: 7in;
+          margin: 1in auto;
+          font-family: "Times New Roman", Georgia, serif;
+          font-size: 12pt;
+          line-height: 1.6;
+          color: #111;
         }
+        h1 { font-size: 18pt; margin: 16pt 0 10pt; font-weight: 700; }
+        h2 { font-size: 14pt; margin: 14pt 0 8pt; font-weight: 700; }
+        h3 { font-size: 12pt; margin: 12pt 0 6pt; font-weight: 700; }
+        p  { margin: 8pt 0; }
+        hr { border: none; border-top: 1px solid #c8c8c8; margin: 14pt 0; }
         table {
           width: 100%;
           border-collapse: collapse;
-          margin: 12pt 0;
+          margin: 10pt 0 16pt;
+          table-layout: fixed;
         }
-        th, td {
-          border: 1px solid #d0d0d0;
-          padding: 4pt 6pt;
+        thead th {
+          background: #eef2f7;
+          border: 1px solid #c8d0da;
+          padding: 6pt 8pt;
+          text-align: left;
+          font-weight: 700;
+        }
+        tbody td {
+          border: 1px solid #d8d8d8;
+          padding: 6pt 8pt;
           vertical-align: top;
         }
-        th { background: #f2f2f2; }
-        h1,h2,h3,h4 { margin-top: 18pt; }
-        pre { white-space: pre-wrap; word-wrap: break-word; }
-        code { font-family: "Courier New", monospace; }
+        tbody tr:nth-child(even) td { background: #fafbfc; }
+        code, pre { font-family: "Courier New", Courier, monospace; }
       `;
 
       // ← use job.file.title instead of originalName
@@ -109,3 +124,18 @@ router.get(
 );
 
 export default router;
+
+
+function stripContinuations(text: string): string {
+  const banned = [
+    /\bto be continued\b/i,
+    /\blet me know if you'd like me to continue\b/i,
+    /\blet me know if you(?:'|\s)\w* like me to continue\b/i,
+    /\bprovide further clarification\b/i,
+    /\bcan continue summarizing\b/i,
+  ];
+  return text.split(/\r?\n/).filter(l=>!any(l,banned)).join("\n");
+  function any(l:string, arr:RegExp[]){
+    return arr.some(re=>re.test(l));
+  }
+}
