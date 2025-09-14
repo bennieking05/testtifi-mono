@@ -1,6 +1,5 @@
 import express, { Request, Response } from "express";
 import fs from "fs";
-import path from "path";
 import { authenticateToken } from "../middlewares/authMiddleware";
 
 const router = express.Router();

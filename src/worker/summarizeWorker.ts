@@ -10,6 +10,8 @@ import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
 import { sendEmail } from "../lib/sendEmail";
+import pLimit from "p-limit";
+import os from "os";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -26,11 +28,14 @@ console.log("=== Worker starting ===");
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
 const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 4 : 6);
 const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 3800 : 3200);
+const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 3);
+const WORKER_ID = process.env.WORKER_ID || os.hostname();
 
 async function extractFullText(
   buffer: Buffer,
   filename: string,
-  gcsUri: string
+  gcsUri: string,
+  jobId: string
 ): Promise<string> {
   const isPDF = filename.toLowerCase().endsWith(".pdf");
   const isDocx = /\.(docx?|DOCX?)$/.test(filename);
@@ -38,7 +43,7 @@ async function extractFullText(
   if (isPDF) {
     const parsed = await pdf(buffer);
     if (parsed.text.trim().length > 100) return parsed.text;
-    return extractTextWithVision(gcsUri);
+    return extractTextWithVision(gcsUri, jobId);
   }
 
   if (isDocx) {
@@ -49,8 +54,8 @@ async function extractFullText(
   return buffer.toString("utf-8");
 }
 
-async function extractTextWithVision(gcsUri: string): Promise<string> {
-  const destinationUri = `gs://${summaryBucket.name}/vision-output/`;
+async function extractTextWithVision(gcsUri: string, jobId: string): Promise<string> {
+  const destinationUri = `gs://${summaryBucket.name}/vision-output/${jobId}/`;
   const [operation] = await visionClient.asyncBatchAnnotateFiles({
     requests: [
       {
@@ -65,13 +70,23 @@ async function extractTextWithVision(gcsUri: string): Promise<string> {
   });
   await operation.promise();
   const [files] = await summaryBucket.getFiles({
-    prefix: "vision-output/output-1-to-1.json",
+    prefix: `vision-output/${jobId}/`,
   });
-  const [raw] = await files[0].download();
-  const parsed = JSON.parse(raw.toString());
-  return parsed.responses
-    .map((r: any) => r.fullTextAnnotation?.text || "")
-    .join("\n");
+  const jsonFiles = files.filter((f) => f.name.toLowerCase().endsWith(".json"));
+  let combined = "";
+  for (const f of jsonFiles) {
+    const [raw] = await f.download();
+    const parsed = JSON.parse(raw.toString());
+    combined +=
+      parsed.responses
+        .map((r: any) => r.fullTextAnnotation?.text || "")
+        .join("\n") + "\n";
+  }
+  // best-effort cleanup of temporary Vision output
+  await Promise.all(
+    files.map((f) => f.delete().catch(() => {}))
+  );
+  return combined.trim();
 }
 
 function splitPages(txt: string) {
@@ -212,6 +227,36 @@ async function azureChatCompletion(messages: any[], max = AZURE_MAX_TOKENS) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Generic retry helper (exponential backoff + jitter) for 429/5xx
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { retries?: number; minDelayMs?: number; maxDelayMs?: number } = {}
+): Promise<T> {
+  const retries = Math.max(0, opts.retries ?? 3);
+  const min = opts.minDelayMs ?? 500;
+  const max = opts.maxDelayMs ?? 4000;
+  let attempt = 0;
+  let lastErr: any;
+  while (attempt <= retries) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const status = err?.response?.status;
+      const retryable =
+        status === 429 || (typeof status === "number" && status >= 500 && status < 600) || !status;
+      if (!retryable || attempt === retries) break;
+      const backoff = Math.min(
+        max,
+        Math.floor(min * Math.pow(2, attempt)) + Math.floor(Math.random() * 250)
+      );
+      await sleep(backoff);
+      attempt++;
+    }
+  }
+  throw lastErr;
+}
+
 async function getRenderedEmailTemplate(
   templateId: number,
   variables: Record<string, string>
@@ -232,8 +277,29 @@ async function getRenderedEmailTemplate(
 
 async function work() {
   while (true) {
-    const job = await prisma.summaryJob.findFirst({
-      where: { status: "processing" },
+    // 1) Find and atomically claim the next queued job
+    const candidate = await prisma.summaryJob.findFirst({
+      where: { status: "queued" },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+
+    if (!candidate) {
+      await sleep(10000);
+      continue;
+    }
+
+    const claimed = await prisma.summaryJob.updateMany({
+      where: { id: candidate.id, status: "queued" },
+      data: { status: "processing" },
+    });
+    if (claimed.count === 0) {
+      // Raced with another worker; try again.
+      continue;
+    }
+
+    const job = await prisma.summaryJob.findUnique({
+      where: { id: candidate.id },
       select: {
         id: true,
         userId: true,
@@ -244,7 +310,7 @@ async function work() {
     });
 
     if (!job) {
-      await sleep(10000);
+      console.warn(`[${candidate.id}] Claimed job missing; skipping`);
       continue;
     }
 
@@ -260,22 +326,42 @@ async function work() {
     try {
       const [buf] = await depositionBucket.file(job.fileName).download();
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
-      const transcript = await extractFullText(buf, job.fileName, gcsUri);
+      const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
       const chunks = groupPagesToChunks(pages);
       const meta = extractLegalMetadata(transcript);
 
-      const parts: string[] = [];
-      for (let i = 0; i < chunks.length; i++) {
-        const resp = await azureChatCompletion(
-          makePrompt(chunks[i], i === 0, meta)
-        );
-        parts.push(resp.choices[0].message.content.trim());
-        await prisma.summaryJob.update({
-          where: { id: job.id },
-          data: { lastPageProcessed: chunks[i].end },
-        });
-      }
+      // Persist totalPages early for better UI progress feedback
+      try {
+        const lastPage = pages.length ? pages[pages.length - 1].page : 0;
+        if (lastPage > 0) {
+          await prisma.summaryJob.update({
+            where: { id: job.id },
+            data: { totalPages: lastPage },
+          });
+        }
+      } catch {}
+
+      // 2) Summarize chunks with bounded parallelism and retries
+      const limit = pLimit(WORKER_CONCURRENCY);
+      const parts: string[] = new Array(chunks.length).fill("");
+
+      await Promise.all(
+        chunks.map((chunk, i) =>
+          limit(async () => {
+            const resp = await withRetry(
+              () => azureChatCompletion(makePrompt(chunk, i === 0, meta)),
+              { retries: 3, minDelayMs: 1000, maxDelayMs: 5000 }
+            );
+            parts[i] = resp.choices[0].message.content.trim();
+            // Best-effort progress update
+            await prisma.summaryJob.update({
+              where: { id: job.id },
+              data: { lastPageProcessed: chunk.end },
+            });
+          })
+        )
+      );
 
       const mergedRaw = parts.join("\n");
       const merged = sanitizeGeneratedMarkdown(mergedRaw);
@@ -299,7 +385,7 @@ async function work() {
         data: {
           status: "complete",
           summaryCsvUrl: signedUrl,
-          lastPageProcessed: pages[pages.length - 1].page,
+          lastPageProcessed: pages.length ? pages[pages.length - 1].page : 0,
           finishedAt: new Date(),
         },
       });
@@ -311,30 +397,27 @@ async function work() {
       });
       if (fresh?.notifyOnComplete && user?.email) {
         console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
-        console.log("BASE_URL:", process.env.BASE_URL);
         try {
           const dashboardUrl = `${process.env.BASE_URL}`;
-          console.log(`[${job.id}] 🌐 Dashboard URL: ${dashboardUrl}`);
-
           const { subject, body } = await getRenderedEmailTemplate(4, {
             name: user.name || user.email,
             deposition_title: displayTitle,
             dashboard_link: dashboardUrl,
           });
 
-          await sendEmail(user.email, subject, undefined, body); // ✅ HTML body supported; text auto-generated
+          await sendEmail(user.email, subject, undefined, body);
           console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
         } catch (emailErr) {
           console.warn(`[${job.id}] Email failed:`, emailErr);
         }
       } else {
         console.log(
-          `[${job.id}] ⚠️ Skipping email notification. notifyOnComplete: ${fresh?.notifyOnComplete}, user.email: ${user?.email}`
+          `[${job.id}] ℹ️ Skipping email notification (notifyOnComplete: ${fresh?.notifyOnComplete}, email: ${user?.email})`
         );
       }
 
       fs.unlinkSync(tmpPath);
-      console.log(`[${job.id}] ✅ Summary completed.`);
+      console.log(`[${job.id}] ✅ Summary completed by ${WORKER_ID}.`);
     } catch (e: any) {
       console.error(`[${job.id}] ❌ Error:`, e);
       await prisma.summaryJob.update({

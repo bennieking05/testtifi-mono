@@ -60,7 +60,7 @@ async function createJobTx(
         fileName,
         fileUrl,
         fileId: file.id,
-        status: "processing",
+        status: "queued",
         totalPages: 0,
         lastPageProcessed: 0,
         notifyOnComplete,
