@@ -1,38 +1,47 @@
 steps:
-  # Build backend
+  # Build backend (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
         "build",
         "-t",
         "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest",
         "--target=backend",
         ".",
       ]
 
-  # Build summarize-worker
+  # Build summarize-worker (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
         "build",
         "-t",
         "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest",
         "--target=summarize-worker",
         ".",
       ]
 
-  # Push both images
+  # Push both images (both tags)
   - name: "gcr.io/cloud-builders/docker"
     args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"]
   - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest"]
+  - name: "gcr.io/cloud-builders/docker"
     args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"]
-
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"]
 
 images:
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest"
   - "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"
+  - "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY
 
-serviceAccount: "projects/golden-cosmos-450417-i8/serviceAccounts/748916208557-compute@developer.gserviceaccount.com"
+# serviceAccount removed so the build runs under Cloud Build's default SA (or the Trigger's SA)
