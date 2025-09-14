@@ -35,11 +35,77 @@ steps:
   - name: "gcr.io/cloud-builders/docker"
     args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"]
 
+  # ===== Deploy to GKE (pin to this build's tag) =====
+  - id: "Get GKE credentials"
+    name: "gcr.io/cloud-builders/gcloud"
+    args:
+      [
+        "container",
+        "clusters",
+        "get-credentials",
+        "${_CLUSTER}",
+        "--zone",
+        "${_CLUSTER_LOCATION}",
+      ]
+
+  - id: "Deploy backend image"
+    name: "gcr.io/cloud-builders/kubectl"
+    args:
+      [
+        "-n",
+        "${_NAMESPACE}",
+        "set",
+        "image",
+        "deployment/backend",
+        "backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID",
+      ]
+
+  - id: "Deploy summarize-worker image"
+    name: "gcr.io/cloud-builders/kubectl"
+    args:
+      [
+        "-n",
+        "${_NAMESPACE}",
+        "set",
+        "image",
+        "deployment/summarize-worker",
+        "summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID",
+      ]
+
+  - id: "Wait backend rollout"
+    name: "gcr.io/cloud-builders/kubectl"
+    args:
+      [
+        "-n",
+        "${_NAMESPACE}",
+        "rollout",
+        "status",
+        "deployment/backend",
+        "--timeout=300s",
+      ]
+
+  - id: "Wait worker rollout"
+    name: "gcr.io/cloud-builders/kubectl"
+    args:
+      [
+        "-n",
+        "${_NAMESPACE}",
+        "rollout",
+        "status",
+        "deployment/summarize-worker",
+        "--timeout=600s",
+      ]
+
 images:
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest"
   - "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"
   - "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"
+
+substitutions:
+  _CLUSTER: testifi
+  _CLUSTER_LOCATION: us-central1-c
+  _NAMESPACE: default
 
 options:
   logging: CLOUD_LOGGING_ONLY
