@@ -15,6 +15,7 @@ import summaryJobRoutes from "./routes/summaryJobRoutes";
 import previeqwRoutes from "./routes/previewRoutes";
 import emailNotificationRoutes from "./routes/emailNotificationRoutes";
 import snapshotsRoutes from "./routes/snapshotsRoutes";
+import webCopyRoutes from "./routes/webCopyRoutes";
 
 dotenv.config();
 
@@ -59,6 +60,7 @@ app.use("/api/summary-jobs", summaryJobRoutes);
 app.use("/api/email-notifications", emailNotificationRoutes);
 app.use("/api/preview", previeqwRoutes);
 app.use("/api/snapshots", snapshotsRoutes);
+app.use("/api/webcopy", webCopyRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>

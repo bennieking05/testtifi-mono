@@ -190,7 +190,7 @@ router.get(
         return;
       }
 
-      // DOCX — match preview structure: cover page (title + pages), then content
+      // DOCX — cover page (logo + title + date + case name/pages), then content
       if (format === "docx") {
         const logo = loadLogo();
         const logoMaxWidth = 400; // px in docx units used by docx lib
@@ -243,6 +243,18 @@ router.get(
                   alignment: "center",
                   heading: "Heading1",
                 }),
+                new Paragraph({
+                  text: `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`,
+                  alignment: "center",
+                }),
+                ...(job.file?.title
+                  ? [
+                      new Paragraph({
+                        text: `Case: ${job.file.title}`,
+                        alignment: "center",
+                      }),
+                    ]
+                  : []),
                 ...(job.file?.pages
                   ? [
                       new Paragraph({
@@ -293,7 +305,7 @@ router.get(
         return;
       }
 
-      // PDF — match preview structure: cover page (title + pages), then content
+      // PDF — cover page (logo + title + date + case name/pages), then content
       if (format === "pdf") {
         const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
         const pass = new stream.PassThrough();
@@ -326,11 +338,13 @@ router.get(
         pdf.font("Times-Bold").fontSize(22).text(coverTitle, {
           align: "center",
         });
+        pdf.moveDown();
+        pdf.font("Times-Roman").fontSize(12).text(`Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`, { align: "center" });
+        if (job.file?.title) {
+          pdf.font("Times-Roman").fontSize(12).text(`Case: ${job.file.title}`, { align: "center" });
+        }
         if (job.file?.pages) {
-          pdf.moveDown();
-          pdf.font("Times-Roman").fontSize(12).text(`Pages: ${job.file.pages}`, {
-            align: "center",
-          });
+          pdf.font("Times-Roman").fontSize(12).text(`Pages: ${job.file.pages}`, { align: "center" });
         }
 
         // New page for body
