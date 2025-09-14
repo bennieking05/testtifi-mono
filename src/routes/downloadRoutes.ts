@@ -13,9 +13,12 @@ import {
   TableCell,
   WidthType,
   TextRun,
+  ImageRun,
 } from "docx";
 import PDFDocument from "pdfkit";
 import stream from "stream";
+import fs from "fs";
+import path from "path";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -34,6 +37,35 @@ const objectKey = (u: string) => {
     return u;
   }
 };
+
+// Attempt to locate the Testifi AI logo locally.
+function loadLogo(): { buf: Buffer; mime: string; width?: number; height?: number } | null {
+  const candidates = [
+    process.env.LOGO_PATH,
+    path.resolve(__dirname, "../../../og-image.png"), // typical during runtime (dist/src/routes -> ../../../)
+    path.resolve(process.cwd(), "og-image.png"),
+  ].filter(Boolean) as string[];
+
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const buf = fs.readFileSync(p);
+      // Minimal PNG size parsing (IHDR at bytes 16..24)
+      let width: number | undefined;
+      let height: number | undefined;
+      let mime = "image/png";
+      if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+        width = buf.readUInt32BE(16);
+        height = buf.readUInt32BE(20);
+      } else if (buf.length > 2 && buf[0] === 0xff && buf[1] === 0xd8) {
+        mime = "image/jpeg";
+        // JPEG parsing omitted; we won't have intrinsic size for DOCX scaling.
+      }
+      return { buf, mime, width, height };
+    } catch {}
+  }
+  return null;
+}
 
 function parseMarkdown(md: string) {
   const clean = (s: string) =>
@@ -74,7 +106,8 @@ function parseMarkdown(md: string) {
 
     if (!inTable) {
       // Drop markdown headers and a specific Case Metadata heading
-      if (/^#+\s*/.test(trimmed) || /^\*\*?\s*Case\s*Metadata/i.test(trimmed)) {
+      // Remove any visible Case Metadata headings in various casings
+      if (/^#+\s*/.test(trimmed) || /case\s*metadata/i.test(trimmed)) {
         return;
       }
       // strip leading list marker like "- " or "* "
@@ -159,6 +192,29 @@ router.get(
 
       // DOCX — match preview structure: cover page (title + pages), then content
       if (format === "docx") {
+        const logo = loadLogo();
+        const logoMaxWidth = 400; // px in docx units used by docx lib
+        let logoRun: ImageRun | null = null;
+        if (logo) {
+          // Compute scaled dimensions to avoid stretching
+          let w = 0;
+          let h = 0;
+          if (logo.width && logo.height) {
+            const scale = Math.min(1, logoMaxWidth / logo.width);
+            w = Math.round(logo.width * scale);
+            h = Math.round(logo.height * scale);
+          } else {
+            // Fallback: assume a conservative aspect ratio
+            w = logoMaxWidth;
+            h = Math.round(logoMaxWidth * 0.33);
+          }
+          const docxType = logo.mime.includes("png")
+            ? "png"
+            : logo.mime.includes("jpeg") || logo.mime.includes("jpg")
+            ? "jpg"
+            : ("png" as const);
+          logoRun = new ImageRun({ type: docxType, data: logo.buf, transformation: { width: w, height: h } });
+        }
         const doc = new Document({
           styles: {
             default: {
@@ -172,6 +228,15 @@ router.get(
           sections: [
             {
               children: [
+                // Logo (centered)
+                ...(logoRun
+                  ? [
+                      new Paragraph({
+                        children: [logoRun],
+                        alignment: "center",
+                      }),
+                    ]
+                  : []),
                 // Cover page
                 new Paragraph({
                   text: coverTitle,
@@ -246,6 +311,18 @@ router.get(
         const sumCol = full - pageCol - gap;
 
         // Cover page
+        // Try to draw logo centered without stretching
+        try {
+          const logo = loadLogo();
+          if (logo) {
+            const targetW = Math.min(260, full);
+            const x = lm + (full - targetW) / 2;
+            const y = pdf.y; // current cursor
+            pdf.image(logo.buf, x, y, { width: targetW });
+            pdf.moveDown(2);
+          }
+        } catch {}
+
         pdf.font("Times-Bold").fontSize(22).text(coverTitle, {
           align: "center",
         });

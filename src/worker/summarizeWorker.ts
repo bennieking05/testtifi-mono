@@ -22,6 +22,11 @@ console.log(
 );
 console.log("=== Worker starting ===");
 
+// Tuning knobs (env‑overridable)
+const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
+const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 4 : 6);
+const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 3800 : 3200);
+
 async function extractFullText(
   buffer: Buffer,
   filename: string,
@@ -84,13 +89,18 @@ function splitPages(txt: string) {
     buf = [];
   };
 
-  for (const raw of txt.split("\n")) {
+  for (const raw of txt.split(/\r?\n/)) {
     const line = raw;
     const m = line.trim().match(marker);
     if (m) {
       // Starting a new page segment; flush previous
       push();
-      currentPage = parseInt(m[1], 10);
+      const nextPage = parseInt(m[1], 10);
+      if (currentPage !== null && nextPage < currentPage) {
+        // If page markers jump backwards due to headers/footers, treat as a new section but keep order
+        // by flushing and continuing. We'll sort at the end.
+      }
+      currentPage = nextPage;
       // Do not include the page marker line itself in content
       continue;
     }
@@ -99,12 +109,20 @@ function splitPages(txt: string) {
 
   // Flush last buffer
   push();
-  return out.sort((a, b) => a.page - b.page);
+  // Deduplicate by page number, keeping the longest text segment per page
+  const byPage = new Map<number, string>();
+  for (const { page, text } of out) {
+    const prev = byPage.get(page) || "";
+    if (text.length > prev.length) byPage.set(page, text);
+  }
+  return Array.from(byPage.entries())
+    .map(([page, text]) => ({ page, text }))
+    .sort((a, b) => a.page - b.page);
 }
 
 function groupPagesToChunks(
   pages: { page: number; text: string }[],
-  perChunk = 8 // smaller chunks to avoid token limits
+  perChunk = PAGES_PER_CHUNK // smaller chunks to avoid token limits
 ) {
   const out: { start: number; end: number; text: string }[] = [];
   for (let i = 0; i < pages.length; i += perChunk) {
@@ -156,7 +174,7 @@ function makePrompt(
   return [
     {
       role: "system",
-      content: `You are a highly skilled legal paralegal AI producing PAGE-LINE deposition summaries. Output must be in Markdown with: (1) a legal-style metadata block (first chunk only) and (2) a detailed, page-line table. Follow strictly:\n• Style: Page‑line summary suitable for law firms.\n• Focus: Attorney questions and witness answers; exclude unrelated detail.\n• Compression: Target ~5:1 (five transcript pages per one page of summary).\n• Table columns: EXACTLY two columns — (1) Page/Line and (2) Testimony.\n• Do NOT include a table header row.\n• Include page and line ranges when the text shows line numbers; otherwise pages only.\n• No commentary or continuation prompts.`,
+      content: `You are a senior litigation paralegal producing PAGE‑LINE deposition summaries for law firms. Output MUST be Markdown with: (1) a legal‑style metadata block (first chunk only) and (2) ONLY a page‑line table.\n\nStrict requirements:\n- Style: professional, neutral, precise.\n- Focus: attorney questions (Q:) and witness answers (A:); include objections, rulings, instructions not to answer.\n- Detail: include exhibit IDs and short descriptions; dates, figures, names, positions; short quotes (≤ 20 words) where probative.\n- Compression: target ~5:1 (five transcript pages per one page of summary).\n- Segmentation: produce multiple rows per page when topics change (fine‑grained).\n- Columns: EXACTLY two — (1) Page/Line and (2) Testimony.\n- Lines: when visible, show ranges like “p.147:1‑15”; else “p.147–148”.\n- No header row; rows only.\n- No commentary, apologies, or prompts to continue.`,
     },
     {
       role: "user",
@@ -171,7 +189,7 @@ Continue the PAGE‑LINE deposition summary for pages ${chunk.start}–${chunk.e
   ];
 }
 
-async function azureChatCompletion(messages: any[], max = 3400) {
+async function azureChatCompletion(messages: any[], max = AZURE_MAX_TOKENS) {
   const url = `${process.env.AZURE_OPENAI_ENDPOINT!.replace(
     /\/+$/,
     ""
