@@ -1,0 +1,16 @@
+{
+  "name": "testifiai-repo",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test:ui": "playwright test -c playwright.config.ts",
+    "test:uat:mock": "node scripts/uat-mock-tests.mjs",
+    "scrape:webcopy": "node scripts/scrape-webcopy.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.2"
+  },
+  "dependencies": {
+    "axios": "^1.9.0"
+  }
+}
