@@ -10,6 +10,7 @@ import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
 import { sendEmail } from "../lib/sendEmail";
+import { loadPromptConfig } from "../lib/promptConfig";
 import pLimit from "p-limit";
 import os from "os";
 
@@ -184,12 +185,13 @@ Date of Deposition: ${date}
 function makePrompt(
   chunk: { start: number; end: number; text: string },
   isFirst: boolean,
-  metaSection: string
+  metaSection: string,
+  systemInstruction: string
 ) {
   return [
     {
       role: "system",
-      content: `You are a senior litigation paralegal producing PAGE‑LINE deposition summaries for law firms. Output MUST be Markdown with: (1) a legal‑style metadata block (first chunk only) and (2) ONLY a page‑line table.\n\nStrict requirements:\n- Style: professional, neutral, precise.\n- Focus: attorney questions (Q:) and witness answers (A:); include objections, rulings, instructions not to answer.\n- Detail: include exhibit IDs and short descriptions; dates, figures, names, positions; short quotes (≤ 20 words) where probative.\n- Compression: target ~5:1 (five transcript pages per one page of summary).\n- Segmentation: produce multiple rows per page when topics change (fine‑grained).\n- Columns: EXACTLY two — (1) Page/Line and (2) Testimony.\n- Lines: when visible, show ranges like “p.147:1‑15”; else “p.147–148”.\n- No header row; rows only.\n- No commentary, apologies, or prompts to continue.`,
+      content: systemInstruction,
     },
     {
       role: "user",
@@ -204,7 +206,11 @@ Continue the PAGE‑LINE deposition summary for pages ${chunk.start}–${chunk.e
   ];
 }
 
-async function azureChatCompletion(messages: any[], max = AZURE_MAX_TOKENS) {
+async function azureChatCompletion(
+  messages: any[],
+  maxTokens: number = AZURE_MAX_TOKENS,
+  temperature: number = 0.0
+) {
   const url = `${process.env.AZURE_OPENAI_ENDPOINT!.replace(
     /\/+$/,
     ""
@@ -213,7 +219,7 @@ async function azureChatCompletion(messages: any[], max = AZURE_MAX_TOKENS) {
   }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
   const { data } = await axios.post(
     url,
-    { messages, max_tokens: max, temperature: 0.0 },
+    { messages, max_tokens: maxTokens, temperature },
     {
       headers: {
         "Content-Type": "application/json",
@@ -333,11 +339,16 @@ async function work() {
 
       // Persist totalPages early for better UI progress feedback
       try {
-        const lastPage = pages.length ? pages[pages.length - 1].page : 0;
-        if (lastPage > 0) {
+        const pageCount = pages.length;
+        if (pageCount > 0) {
           await prisma.summaryJob.update({
             where: { id: job.id },
-            data: { totalPages: lastPage },
+            data: { totalPages: pageCount },
+          });
+          // Also update File.pages for consistent display throughout UI
+          await prisma.file.updateMany({
+            where: { fileName: job.fileName, userId: job.userId },
+            data: { pages: pageCount },
           });
         }
       } catch {}
@@ -350,7 +361,14 @@ async function work() {
         chunks.map((chunk, i) =>
           limit(async () => {
             const resp = await withRetry(
-              () => azureChatCompletion(makePrompt(chunk, i === 0, meta)),
+              () => {
+                const cfg = loadPromptConfig();
+                return azureChatCompletion(
+                  makePrompt(chunk, i === 0, meta, cfg.system),
+                  typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
+                  typeof cfg.temperature === "number" ? cfg.temperature : 0.0
+                );
+              },
               { retries: 3, minDelayMs: 1000, maxDelayMs: 5000 }
             );
             parts[i] = resp.choices[0].message.content.trim();
@@ -364,7 +382,8 @@ async function work() {
       );
 
       const mergedRaw = parts.join("\n");
-      const merged = sanitizeGeneratedMarkdown(mergedRaw);
+      // Ensure legal-style metadata block is present at the top
+      const merged = [meta, sanitizeGeneratedMarkdown(mergedRaw)].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 
@@ -386,6 +405,7 @@ async function work() {
           status: "complete",
           summaryCsvUrl: signedUrl,
           lastPageProcessed: pages.length ? pages[pages.length - 1].page : 0,
+          totalPages: pages.length,
           finishedAt: new Date(),
         },
       });
@@ -399,13 +419,24 @@ async function work() {
         console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
         try {
           const dashboardUrl = `${process.env.BASE_URL}`;
-          const { subject, body } = await getRenderedEmailTemplate(4, {
-            name: user.name || user.email,
-            deposition_title: displayTitle,
-            dashboard_link: dashboardUrl,
-          });
-
-          await sendEmail(user.email, subject, undefined, body);
+          try {
+            const { subject, body } = await getRenderedEmailTemplate(4, {
+              name: user.name || user.email,
+              deposition_title: displayTitle,
+              dashboard_link: dashboardUrl,
+            });
+            await sendEmail(user.email, subject, undefined, body);
+          } catch (tplErr) {
+            // Fallback minimal email if the template is missing or invalid
+            console.warn(`[${job.id}] Email template fallback:`, tplErr);
+            const subject = `Your deposition summary is ready`;
+            const html = `
+              <p>Hello ${user.name || user.email},</p>
+              <p>Your deposition summary <strong>${displayTitle}</strong> is ready.</p>
+              <p><a href="${dashboardUrl}">Open Testifi AI Dashboard</a></p>
+            `;
+            await sendEmail(user.email, subject, undefined, html);
+          }
           console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
         } catch (emailErr) {
           console.warn(`[${job.id}] Email failed:`, emailErr);
