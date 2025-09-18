@@ -1,14 +1,16 @@
 // ─── src/routes/summariesRoutes.ts ───────────────────────────────────────────
 import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
-import axios from "axios";
+// import axios from "axios";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { Storage } from "@google-cloud/storage";
+import { loadPromptConfig, savePromptConfig } from "../lib/promptConfig";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const bucket = new Storage().bucket("deposition-summaries");
-const WORDS_PER_PAGE = 300;
+// Keeping historical constant for reference; no longer used for estimation
+// const WORDS_PER_PAGE = 300;
 
 /* ───────── helpers ───────── */
 const toObjectName = (u: string): string => {
@@ -20,14 +22,7 @@ const toObjectName = (u: string): string => {
   }
 };
 
-async function fetchSummaryText(objectName: string): Promise<string> {
-  const [url] = await bucket.file(objectName).getSignedUrl({
-    action: "read",
-    expires: Date.now() + 3 * 86_400_000, // 3 days
-  });
-  const { data } = await axios.get<string>(url);
-  return data;
-}
+// Legacy helper removed: we now rely on transcript-derived page counts from jobs
 
 /* ───────── LIST all summaries ───────── */
 router.get(
@@ -78,20 +73,8 @@ router.get(
             ? toObjectName(job.summaryCsvUrl)
             : file?.summaryFileName ?? `summary-${job.id}.md`;
 
-          /* page estimate – fall back to prior values; only fetch when finished and object exists */
-          let pages = file?.pages ?? job.totalPages ?? 0;
-          if (job.status === "complete") {
-            try {
-              const [exists] = await bucket.file(objectName).exists();
-              if (exists) {
-                const txt = await fetchSummaryText(objectName);
-                const words = txt.trim().split(/\s+/).length;
-                if (words > 0) pages = Math.ceil(words / WORDS_PER_PAGE);
-              }
-            } catch {
-              // Silently ignore fetch errors (e.g., 404 for expired/missing object)
-            }
-          }
+          // Accurate page counts: report the transcript page count from the job
+          const pages = job.totalPages;
 
           /* signed URL (3 days) */
           const [signedUrl] = await bucket.file(objectName).getSignedUrl({
@@ -137,6 +120,40 @@ router.get(
     } catch (err) {
       console.error("[/api/summaries] Error:", err);
       res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+/* ───────── PROMPT CONFIG (GET/PUT) ───────── */
+router.get(
+  "/prompt-config",
+  authenticateToken,
+  async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const cfg = loadPromptConfig();
+      res.json(cfg);
+    } catch (err) {
+      console.error("[/api/summaries/prompt-config] Error:", err);
+      res.status(500).json({ error: "Failed to load config" });
+    }
+  }
+);
+
+router.put(
+  "/prompt-config",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { system, temperature, maxTokens } = req.body || {};
+      const saved = savePromptConfig({
+        system: typeof system === "string" ? system : "",
+        temperature: Number(temperature),
+        maxTokens: Number(maxTokens),
+      });
+      res.json(saved);
+    } catch (err) {
+      console.error("[PUT /api/summaries/prompt-config] Error:", err);
+      res.status(500).json({ error: "Failed to save config" });
     }
   }
 );

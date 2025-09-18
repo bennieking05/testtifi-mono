@@ -99,8 +99,8 @@ router.get(
         code, pre { font-family: "Courier New", Courier, monospace; }
       `;
 
-      // ← use job.file.title instead of originalName
-      const coverTitle = job.file?.title || "Deposition Summary";
+      // Prefer File.title, else fall back to the uploaded filename without extension
+      const coverTitle = job.file?.title || (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
       // ← use job.file.pages instead of pageCount
       const coverPages = job.file?.pages ?? "";
 

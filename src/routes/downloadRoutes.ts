@@ -14,6 +14,7 @@ import {
   WidthType,
   TextRun,
   ImageRun,
+  BorderStyle,
 } from "docx";
 import PDFDocument from "pdfkit";
 import stream from "stream";
@@ -41,9 +42,15 @@ const objectKey = (u: string) => {
 // Attempt to locate the Testifi AI logo locally.
 function loadLogo(): { buf: Buffer; mime: string; width?: number; height?: number } | null {
   const candidates = [
+    process.env.LIGHT_LOGO_PATH,
     process.env.LOGO_PATH,
     path.resolve(__dirname, "../../../og-image.png"), // typical during runtime (dist/src/routes -> ../../../)
     path.resolve(process.cwd(), "og-image.png"),
+    // Common repo paths during local/dev
+    path.resolve(process.cwd(), "loveable/public/testifi_light_logo.png"),
+    path.resolve(process.cwd(), "loveable/public/testifi_dark_logo.png"),
+    path.resolve(process.cwd(), "public/testifi_light_logo.png"),
+    path.resolve(process.cwd(), "public/testifi_dark_logo.png"),
   ].filter(Boolean) as string[];
 
   for (const p of candidates) {
@@ -65,6 +72,24 @@ function loadLogo(): { buf: Buffer; mime: string; width?: number; height?: numbe
     } catch {}
   }
   return null;
+}
+
+// RFC 5987 encoder for UTF-8 filenames in Content-Disposition
+function encodeRFC5987ValueChars(str: string) {
+  return encodeURIComponent(str)
+    .replace(/['()]/g, escape)
+    .replace(/\*/g, '%2A');
+}
+
+function setAttachmentFilename(res: Response, baseName: string, ext: string) {
+  const asciiFallback = sanitize(stripExt(baseName)) || "summary";
+  const fileAscii = `${asciiFallback}.${ext}`;
+  const fileUtf8 = `${baseName}.${ext}`;
+  const encoded = encodeRFC5987ValueChars(fileUtf8);
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${fileAscii}"; filename*=UTF-8''${encoded}`
+  );
 }
 
 function parseMarkdown(md: string) {
@@ -154,15 +179,8 @@ router.get(
     const key = job.summaryCsvUrl
       ? objectKey(job.summaryCsvUrl)
       : job.file?.summaryFileName ?? `summary-${job.id}.md`;
-    const coverTitle = job.file?.title || "Deposition Summary";
-    const safeTitle = sanitize(
-      stripExt(
-        job.file?.title ||
-          job.file?.summaryFileName ||
-          job.fileName ||
-          "summary"
-      )
-    );
+    const uploadedTitle = job.file?.title || stripExt(job.fileName || "summary");
+    const coverTitle = uploadedTitle;
 
     try {
       const [buf] = await bucket.file(key).download();
@@ -181,11 +199,8 @@ router.get(
           ...rows.map(([p, s]) => p.padEnd(18) + "| " + s),
           line,
         ].join("\n");
-        res.setHeader("Content-Type", "text/plain");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${safeTitle}.txt"`
-        );
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        setAttachmentFilename(res, uploadedTitle, "txt");
         res.send(body);
         return;
       }
@@ -228,6 +243,8 @@ router.get(
           sections: [
             {
               children: [
+                // Add top spacing to visually center cover content vertically
+                new Paragraph({ children: [], spacing: { before: 2400 } }),
                 // Logo (centered)
                 ...(logoRun
                   ? [
@@ -268,12 +285,28 @@ router.get(
                 ...meta.map((m) => new Paragraph(m)),
                 new Table({
                   width: { size: 100, type: WidthType.PERCENTAGE },
+                  borders: {
+                    top: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
+                    bottom: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
+                    left: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
+                    right: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
+                    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" },
+                    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" },
+                  },
                   rows: [
                     new TableRow({
                       children: [
-                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] })] }),
                         new TableCell({
-                          children: [new Paragraph({ children: [new TextRun({ text: "Testimony Summary", bold: true })] })],
+                          width: { size: 20, type: WidthType.PERCENTAGE },
+                          children: [
+                            new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] }),
+                          ],
+                        }),
+                        new TableCell({
+                          width: { size: 80, type: WidthType.PERCENTAGE },
+                          children: [
+                            new Paragraph({ children: [new TextRun({ text: "Testimony Summary", bold: true })] }),
+                          ],
                         }),
                       ],
                     }),
@@ -281,8 +314,14 @@ router.get(
                       ([p, s]) =>
                         new TableRow({
                           children: [
-                            new TableCell({ children: [new Paragraph(p)] }),
-                            new TableCell({ children: [new Paragraph(s)] }),
+                            new TableCell({
+                              width: { size: 20, type: WidthType.PERCENTAGE },
+                              children: [new Paragraph(p)],
+                            }),
+                            new TableCell({
+                              width: { size: 80, type: WidthType.PERCENTAGE },
+                              children: [new Paragraph(s)],
+                            }),
                           ],
                         })
                     ),
@@ -293,14 +332,8 @@ router.get(
           ],
         });
         const docBuf = await Packer.toBuffer(doc);
-        res.setHeader(
-          "Content-Type",
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        );
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${safeTitle}.docx"`
-        );
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        setAttachmentFilename(res, uploadedTitle, "docx");
         res.send(docBuf);
         return;
       }
@@ -311,41 +344,67 @@ router.get(
         const pass = new stream.PassThrough();
         pdf.pipe(pass).pipe(res);
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${safeTitle}.pdf"`
-        );
+        setAttachmentFilename(res, uploadedTitle, "pdf");
         const lm = pdf.page.margins.left;
         const rm = pdf.page.margins.right;
         const full = pdf.page.width - lm - rm;
-        const gap = 8;
-        const pageCol = 90;
+        // Use a clean grid with no gap for enclosed tabular style
+        const gap = 0;
+        const pageCol = 100;
         const sumCol = full - pageCol - gap;
 
-        // Cover page
-        // Try to draw logo centered without stretching
+        // Cover page centered both horizontally and vertically
         try {
+          const pageH = pdf.page.height;
+          const top = pdf.page.margins.top;
+          const bottom = pdf.page.margins.bottom;
+          const usableH = pageH - top - bottom;
+
+          // Measure content block height
+          let contentH = 0;
+          let logoH = 0;
+          let targetW = Math.min(260, full);
           const logo = loadLogo();
           if (logo) {
-            const targetW = Math.min(260, full);
-            const x = lm + (full - targetW) / 2;
-            const y = pdf.y; // current cursor
-            pdf.image(logo.buf, x, y, { width: targetW });
-            pdf.moveDown(2);
+            if (logo.width && logo.height) {
+              const scale = targetW / logo.width;
+              logoH = logo.height * scale;
+            } else {
+              logoH = targetW * 0.33;
+            }
+            contentH += logoH + 16; // add spacing under logo
           }
-        } catch {}
+          // Measure text heights
+          const lineOpts = { width: full, align: "center" as const };
+          pdf.font("Times-Bold").fontSize(22);
+          contentH += pdf.heightOfString(coverTitle, lineOpts) + 6;
+          pdf.font("Times-Roman").fontSize(12);
+          const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
+          contentH += pdf.heightOfString(dateLine, lineOpts) + 2;
+          let hasCase = false;
+          let hasPages = false;
+          if (job.file?.title) {
+            hasCase = true;
+            contentH += pdf.heightOfString(`Case: ${job.file.title}`, lineOpts) + 2;
+          }
+          if (job.file?.pages) {
+            hasPages = true;
+            contentH += pdf.heightOfString(`Pages: ${job.file.pages}`, lineOpts) + 2;
+          }
 
-        pdf.font("Times-Bold").fontSize(22).text(coverTitle, {
-          align: "center",
-        });
-        pdf.moveDown();
-        pdf.font("Times-Roman").fontSize(12).text(`Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`, { align: "center" });
-        if (job.file?.title) {
-          pdf.font("Times-Roman").fontSize(12).text(`Case: ${job.file.title}`, { align: "center" });
-        }
-        if (job.file?.pages) {
-          pdf.font("Times-Roman").fontSize(12).text(`Pages: ${job.file.pages}`, { align: "center" });
-        }
+          const startY = top + Math.max(0, (usableH - contentH) / 2);
+          pdf.y = startY;
+          if (logo) {
+            const x = lm + (full - targetW) / 2;
+            pdf.image(logo.buf, x, pdf.y, { width: targetW });
+            pdf.y += logoH + 16;
+          }
+          pdf.font("Times-Bold").fontSize(22).text(coverTitle, { align: "center" });
+          pdf.moveDown(0.25);
+          pdf.font("Times-Roman").fontSize(12).text(dateLine, { align: "center" });
+          if (hasCase) pdf.text(`Case: ${job.file!.title}`, { align: "center" });
+          if (hasPages) pdf.text(`Pages: ${job.file!.pages}`, { align: "center" });
+        } catch {}
 
         // New page for body
         pdf.addPage();
@@ -355,37 +414,55 @@ router.get(
         meta.forEach((l) => pdf.text(l));
         pdf.moveDown(0.5);
 
-        // Table header
-        let y = pdf.y;
+        // Enclosed table with borders
+        const pad = 6;
+        let y = pdf.y + 18; // add some space after cover
+        const tableLeft = lm;
+        const col1Left = tableLeft + pad;
+        const col2Left = tableLeft + pageCol + gap + pad;
+
+        // Header
         pdf.font("Times-Bold").fontSize(12);
-        pdf.text("Page(s)", lm, y, { width: pageCol });
-        pdf.text("Testimony Summary", lm + pageCol + gap, y, { width: sumCol });
-        y = pdf.y + 6;
-        pdf.moveTo(lm, y).lineTo(lm + full, y).strokeColor('#c8c8c8').stroke();
+        const headerH = Math.max(
+          pdf.heightOfString("Page(s)", { width: pageCol - 2 * pad }),
+          pdf.heightOfString("Testimony Summary", { width: sumCol - 2 * pad })
+        ) + pad * 2;
+        const tableTop = y;
+        pdf.save();
+        pdf.lineWidth(0.5).strokeColor('#bdbdbd').fillColor('#f1f5f9');
+        pdf.rect(tableLeft, y, full, headerH).fillAndStroke('#f1f5f9', '#bdbdbd');
+        pdf.restore();
+        pdf.fillColor('#000');
+        pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
+        pdf.text("Testimony Summary", col2Left, y + pad, { width: sumCol - 2 * pad });
+        y += headerH;
 
         // Rows
         rows.forEach(([p, s]) => {
-          const rowY = pdf.y + 6;
-          pdf.font("Times-Bold").fontSize(11).text(p, lm, rowY, {
-            width: pageCol,
-          });
-          pdf.font("Times-Roman").fontSize(11).text(s, lm + pageCol + gap, rowY, {
-            width: sumCol,
-          });
-          // Row separator
-          pdf.moveTo(lm, pdf.y + 4).lineTo(lm + full, pdf.y + 4).strokeColor('#e0e0e0').stroke();
+          pdf.font("Times-Roman").fontSize(11);
+          const h1 = pdf.heightOfString(p, { width: pageCol - 2 * pad });
+          const h2 = pdf.heightOfString(s, { width: sumCol - 2 * pad });
+          const rowH = Math.max(h1, h2) + pad * 2;
+          // Row box
+          pdf.lineWidth(0.5).strokeColor('#e0e0e0');
+          pdf.rect(tableLeft, y, full, rowH).stroke();
+          // Text
+          pdf.fillColor('#000');
+          pdf.text(p, col1Left, y + pad, { width: pageCol - 2 * pad });
+          pdf.text(s, col2Left, y + pad, { width: sumCol - 2 * pad });
+          y += rowH;
         });
+        // Outer border (left/right) already drawn per-row; draw table outer frame
+        pdf.lineWidth(0.75).strokeColor('#bdbdbd');
+        pdf.rect(tableLeft, tableTop, full, y - tableTop).stroke();
         pdf.end();
         return;
       }
 
       // CSV
       if (format === "csv") {
-        res.setHeader("Content-Type", "text/csv");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${safeTitle}.csv"`
-        );
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        setAttachmentFilename(res, uploadedTitle, "csv");
         res.send(buf);
         return;
       }
