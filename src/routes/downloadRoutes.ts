@@ -25,13 +25,13 @@ const router = express.Router();
 const prisma = new PrismaClient();
 const bucket = new Storage().bucket("deposition-summaries");
 
-const sanitize = (s: string) =>
+export const sanitize = (s: string) =>
   s
     .replace(/[^a-z0-9_.-]+/gi, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-const stripExt = (s: string) => s.replace(/\.[^.]+$/, "");
-const objectKey = (u: string) => {
+export const stripExt = (s: string) => s.replace(/\.[^.]+$/, "");
+export const objectKey = (u: string) => {
   try {
     return new URL(u).pathname.split("/").pop()!;
   } catch {
@@ -92,69 +92,49 @@ function setAttachmentFilename(res: Response, baseName: string, ext: string) {
   );
 }
 
-function parseMarkdown(md: string) {
+export function parseMarkdown(md: string) {
   const clean = (s: string) =>
     s
-      // convert <br> to newlines
+      .replace(/```[\s\S]*?```/g, "")
       .replace(/<br\s*\/?>(\s*)/gi, "\n")
-      // remove bold/italic markdown wrappers (keep inner text)
       .replace(/\*\*(.*?)\*\*/g, "$1")
       .replace(/__(.*?)__/g, "$1")
       .replace(/\*(.*?)\*/g, "$1")
       .trim();
 
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
-
-  const looksLikeHeader = (a: string, b: string) => {
-    const A = clean(a).toLowerCase();
-    const B = clean(b).toLowerCase();
-    const hasPage = /page/.test(A) || /page/.test(B);
-    const hasSummary = /summary/.test(A) || /summary/.test(B);
-    const isDashes = /^-+$/.test(A) || /^-+$/.test(B);
-    return (hasPage && hasSummary) || isDashes;
-  };
+  const pageRegex = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
 
   const meta: string[] = [];
   const rows: string[][] = [];
-  let inTable = false;
+  let seenRow = false;
 
   md.split(/\r?\n/).forEach((raw) => {
-    const trimmed = raw.trim();
+    let trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith("```")) return;
+    if (isRule(trimmed)) return;
+
+    trimmed = clean(trimmed);
     if (!trimmed) return;
-    if (isRule(trimmed)) return; // drop horizontal rules
-    // strip model filler lines
-    if (/\bto be continued\b/i.test(trimmed)) return;
-    if (/\blet me know if you'd like me to continue\b/i.test(trimmed)) return;
-    if (/\bprovide further clarification\b/i.test(trimmed)) return;
 
-    if (trimmed.startsWith("|")) inTable = true;
-
-    if (!inTable) {
-      // Drop markdown headers and a specific Case Metadata heading
-      // Remove any visible Case Metadata headings in various casings
-      if (/^#+\s*/.test(trimmed) || /case\s*metadata/i.test(trimmed)) {
-        return;
-      }
-      // strip leading list marker like "- " or "* "
-      const noBullet = trimmed.replace(/^[*-]\s+/, "");
-      meta.push(clean(noBullet));
+    const rowMatch = trimmed.match(pageRegex);
+    if (rowMatch) {
+      seenRow = true;
+      const label = rowMatch[0].replace(/\s+/g, " ").trim();
+      let remainder = trimmed.slice(rowMatch[0].length).trim();
+      remainder = remainder.replace(/^[-–:|]\s*/, "").trim();
+      rows.push([label || "", remainder || ""]);
       return;
     }
 
-    if (inTable && trimmed.startsWith("|")) {
-      const cols = trimmed
-        .split("|")
-        .slice(1, -1)
-        .map((c) => clean(c));
-      if (cols.length !== 2) return;
-      if (looksLikeHeader(cols[0], cols[1])) return; // skip header row
-      // skip continuation/filler rows accidentally parsed as cells
-      if (cols.some((c) => /to be continued|let me know|provide further clarification/i.test(c))) return;
-      rows.push(cols);
+    if (!seenRow) {
+      meta.push(trimmed);
     }
   });
 
-  return { meta, rows };
+  const typedRows: Array<[string, string]> = rows.map(([a, b]) => [a, b]);
+
+  return { meta, rows: typedRows };
 }
 
 router.get(
@@ -187,16 +167,18 @@ router.get(
       const data = buf.toString("utf-8");
       const { meta, rows } = parseMarkdown(data);
 
-      // TXT
+      // TXT — fixed-width two-column table
       if (format === "txt") {
-        const line = "-".repeat(57);
+        const col1 = 18;
+        const line = "-".repeat(col1 + 2 + 80);
+        const header = `${"Page(s)".padEnd(col1)}| Testimony`;
         const body = [
           ...meta,
           "",
           line,
-          "Page(s)           | Testimony Summary",
+          header,
           line,
-          ...rows.map(([p, s]) => p.padEnd(18) + "| " + s),
+          ...rows.map(([p, s]) => p.padEnd(col1) + "| " + s),
           line,
         ].join("\n");
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -205,7 +187,7 @@ router.get(
         return;
       }
 
-      // DOCX — cover page (logo + title + date + case name/pages), then content
+      // DOCX — cover page (logo + title + date + case name/pages), then bordered table content
       if (format === "docx") {
         const logo = loadLogo();
         const logoMaxWidth = 400; // px in docx units used by docx lib
@@ -286,12 +268,12 @@ router.get(
                 new Table({
                   width: { size: 100, type: WidthType.PERCENTAGE },
                   borders: {
-                    top: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
-                    bottom: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
-                    left: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
-                    right: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
-                    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" },
-                    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" },
+                    top: { style: BorderStyle.SINGLE, size: 2, color: "A0A0A0" },
+                    bottom: { style: BorderStyle.SINGLE, size: 2, color: "A0A0A0" },
+                    left: { style: BorderStyle.SINGLE, size: 2, color: "A0A0A0" },
+                    right: { style: BorderStyle.SINGLE, size: 2, color: "A0A0A0" },
+                    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
+                    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
                   },
                   rows: [
                     new TableRow({
@@ -305,7 +287,7 @@ router.get(
                         new TableCell({
                           width: { size: 80, type: WidthType.PERCENTAGE },
                           children: [
-                            new Paragraph({ children: [new TextRun({ text: "Testimony Summary", bold: true })] }),
+                            new Paragraph({ children: [new TextRun({ text: "Testimony", bold: true })] }),
                           ],
                         }),
                       ],
@@ -338,9 +320,9 @@ router.get(
         return;
       }
 
-      // PDF — cover page (logo + title + date + case name/pages), then content
+      // PDF — cover page (logo + title + date + case name/pages), then bordered table content
       if (format === "pdf") {
-        const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
+      const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
         const pass = new stream.PassThrough();
         pdf.pipe(pass).pipe(res);
         res.setHeader("Content-Type", "application/pdf");
@@ -425,16 +407,16 @@ router.get(
         pdf.font("Times-Bold").fontSize(12);
         const headerH = Math.max(
           pdf.heightOfString("Page(s)", { width: pageCol - 2 * pad }),
-          pdf.heightOfString("Testimony Summary", { width: sumCol - 2 * pad })
+          pdf.heightOfString("Testimony", { width: sumCol - 2 * pad })
         ) + pad * 2;
         const tableTop = y;
         pdf.save();
-        pdf.lineWidth(0.5).strokeColor('#bdbdbd').fillColor('#f1f5f9');
-        pdf.rect(tableLeft, y, full, headerH).fillAndStroke('#f1f5f9', '#bdbdbd');
+        pdf.lineWidth(1).strokeColor('#9da9bb').fillColor('#eef2f7');
+        pdf.rect(tableLeft, y, full, headerH).fillAndStroke('#eef2f7', '#9da9bb');
         pdf.restore();
         pdf.fillColor('#000');
         pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
-        pdf.text("Testimony Summary", col2Left, y + pad, { width: sumCol - 2 * pad });
+        pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
         y += headerH;
 
         // Rows
@@ -443,8 +425,8 @@ router.get(
           const h1 = pdf.heightOfString(p, { width: pageCol - 2 * pad });
           const h2 = pdf.heightOfString(s, { width: sumCol - 2 * pad });
           const rowH = Math.max(h1, h2) + pad * 2;
-          // Row box
-          pdf.lineWidth(0.5).strokeColor('#e0e0e0');
+          // Row box with stronger borders
+          pdf.lineWidth(0.75).strokeColor('#c8d0da');
           pdf.rect(tableLeft, y, full, rowH).stroke();
           // Text
           pdf.fillColor('#000');
@@ -452,18 +434,22 @@ router.get(
           pdf.text(s, col2Left, y + pad, { width: sumCol - 2 * pad });
           y += rowH;
         });
-        // Outer border (left/right) already drawn per-row; draw table outer frame
-        pdf.lineWidth(0.75).strokeColor('#bdbdbd');
+        // Outer border (left/right) already drawn per-row; draw table outer frame with stronger stroke
+        pdf.lineWidth(1).strokeColor('#9da9bb');
         pdf.rect(tableLeft, tableTop, full, y - tableTop).stroke();
         pdf.end();
         return;
       }
 
-      // CSV
+      // CSV — strict two-column table with header: Page(s),Testimony
       if (format === "csv") {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         setAttachmentFilename(res, uploadedTitle, "csv");
-        res.send(buf);
+        const esc = (s: string) => '"' + s.replace(/"/g, '""') + '"';
+        const header = '"Page(s)","Testimony"';
+        const lines = rows.map(([p, s]) => `${esc(p)},${esc(s)}`);
+        const csv = [header, ...lines].join("\n");
+        res.send(csv);
         return;
       }
 

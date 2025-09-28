@@ -2,13 +2,11 @@
 import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
-import MarkdownIt from "markdown-it";
 import { authenticateToken } from "../middlewares/authMiddleware";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const bucket = new Storage().bucket("deposition-summaries");
-const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 
 /* ───────── helpers ───────── */
 const toObjectName = (u: string) => {
@@ -48,7 +46,32 @@ router.get(
       const [buf] = await bucket.file(objectName).download();
       const raw = buf.toString("utf-8");
       const cleaned = stripContinuations(raw);
-      const htmlBody = md.render(cleaned);
+      const summaryName = (job as any)?.summaryName as string | null;
+      const deponent = (job as any)?.deponent ?? job.file?.deponent ?? undefined;
+      const titleRow = summaryName || job.file?.title || "Deposition Summary";
+      const headerMeta = buildHeaderMeta(job, titleRow, typeof deponent === "string" ? deponent : undefined);
+      const { meta, rows } = parseToRows(cleaned);
+      const combinedMeta = [...new Set([...headerMeta, ...meta])];
+      const metaHtml = combinedMeta.map((m) => `<p>${escapeHtml(m)}</p>`).join("\n");
+      const tableRowsHtml = rows
+        .map(
+          ([p, s]) =>
+            `<tr><td>${escapeHtml(p)}</td><td>${escapeHtml(s).replace(/\n/g, '<br/>')}</td></tr>`
+        )
+        .join("\n");
+      const tableHtml = `
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">Page(s)</th>
+              <th>Testimony</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRowsHtml}
+          </tbody>
+        </table>`;
+      const htmlBody = `${metaHtml}\n${tableHtml}`;
 
       const css = `
         /* Professional legal-style document */
@@ -83,6 +106,8 @@ router.get(
           margin: 10pt 0 16pt;
           table-layout: fixed;
         }
+        table, th, td { border: 1px solid #c8d0da; }
+        th, td { border-left: 1px solid #c8d0da; border-right: 1px solid #c8d0da; }
         thead th {
           background: #eef2f7;
           border: 1px solid #c8d0da;
@@ -138,4 +163,67 @@ function stripContinuations(text: string): string {
   function any(l:string, arr:RegExp[]){
     return arr.some(re=>re.test(l));
   }
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildHeaderMeta(job: any, title: string, deponent?: string): string[] {
+  return [
+    title,
+    `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`,
+    ...(job.file?.title ? [`Case: ${job.file.title}`] : []),
+    ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
+    ...(deponent ? [`Deponent: ${deponent}`] : []),
+    "Pagination: Each PDF page contains 4 scanned transcript pages. All references use the inner transcript page numbers.",
+  ];
+}
+
+function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
+  const clean = (s: string) =>
+    s
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/<br\s*\/?>(\s*)/gi, "\n")
+      .replace(/\*\*(.*?)\*\*/g, "$1")
+      .replace(/__(.*?)__/g, "$1")
+      .replace(/\*(.*?)\*/g, "$1")
+      .trim();
+
+  const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
+  const pageRegex = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
+
+  const meta: string[] = [];
+  const rows: string[][] = [];
+  let seenRow = false;
+
+  mdText.split(/\r?\n/).forEach((raw) => {
+    let trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith("```")) return;
+    if (isRule(trimmed)) return;
+
+    trimmed = clean(trimmed);
+    if (!trimmed) return;
+
+    const rowMatch = trimmed.match(pageRegex);
+    if (rowMatch) {
+      seenRow = true;
+      const label = rowMatch[0].replace(/\s+/g, " ").trim();
+      let remainder = trimmed.slice(rowMatch[0].length).trim();
+      remainder = remainder.replace(/^[-–:|]\s*/, "").trim();
+      rows.push([label || "", remainder || ""]);
+      return;
+    }
+
+    if (!seenRow) {
+      meta.push(trimmed);
+    }
+  });
+
+  return { meta, rows };
 }

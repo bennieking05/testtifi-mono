@@ -6,7 +6,7 @@ import Stripe from "stripe";
 const router = express.Router();
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_API_KEY!, {
-  apiVersion: "2025-06-30.basil",
+  apiVersion: "2025-08-27.basil",
 });
 
 // helper to catch async errors

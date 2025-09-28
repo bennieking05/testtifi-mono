@@ -64,6 +64,8 @@ async function createJobTx(
         totalPages: 0,
         lastPageProcessed: 0,
         notifyOnComplete,
+        summaryName,
+        deponent,
       },
     });
 
@@ -142,13 +144,13 @@ router.post(
         replied = true;
 
         try {
-          const job = await createJobTx(
-            userId,
-            info.filename,
-            summaryName,
-            deponent,
-            notifyOnComplete
-          );
+      const job = await createJobTx(
+        userId,
+        info.filename,
+        summaryName,
+        deponent,
+        notifyOnComplete
+      );
           res.json({ jobId: job.id, status: "processing", totalPages: 0 });
         } catch (err: any) {
           const msg =

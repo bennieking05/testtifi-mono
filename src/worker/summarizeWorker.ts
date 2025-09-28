@@ -382,8 +382,11 @@ async function work() {
       );
 
       const mergedRaw = parts.join("\n");
-      // Ensure legal-style metadata block is present at the top
-      const merged = [meta, sanitizeGeneratedMarkdown(mergedRaw)].join("\n\n");
+      const rowsOnly = sanitizeGeneratedMarkdown(mergedRaw)
+        .replace(/```[\s\S]*?```/g, "")
+        .trim();
+      const tableHeader = "| Page/Line | Testimony |\n|---|---|";
+      const merged = [meta, tableHeader, rowsOnly].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 

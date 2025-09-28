@@ -13,6 +13,7 @@ import fineTineRoutes from "./routes/fineTuneRoutes";
 import summariesRoutes from "./routes/summariesRoutes";
 import summaryJobRoutes from "./routes/summaryJobRoutes";
 import previeqwRoutes from "./routes/previewRoutes";
+import validationRoutes from "./routes/validationRoutes";
 import emailNotificationRoutes from "./routes/emailNotificationRoutes";
 import snapshotsRoutes from "./routes/snapshotsRoutes";
 import webCopyRoutes from "./routes/webCopyRoutes";
@@ -61,6 +62,7 @@ app.use("/api/email-notifications", emailNotificationRoutes);
 app.use("/api/preview", previeqwRoutes);
 app.use("/api/snapshots", snapshotsRoutes);
 app.use("/api/webcopy", webCopyRoutes);
+app.use("/api/validation", validationRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>
