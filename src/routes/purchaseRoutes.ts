@@ -1,234 +1,409 @@
-import express, { Request, Response, NextFunction } from "express";
-import { PrismaClient } from "@prisma/client";
-import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
+import express, { Request, Response } from "express";
 import Stripe from "stripe";
+import { Prisma, PrismaClient } from "@prisma/client";
+import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_API_KEY!, {
-  apiVersion: "2025-06-30.basil",
+  apiVersion: "2025-08-27.basil",
 });
 
-// helper to catch async errors
-const asyncHandler =
-  (fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) =>
-  (req: Request, res: Response, next: NextFunction): void => {
-    fn(req, res, next).catch(next);
-  };
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-/**
- * POST /api/purchase/purchase-credits
- * Create a PaymentIntent & record a pending purchase.
- */
-router.post(
-  "/purchase-credits",
-  authenticateToken,
-  asyncHandler(async (req: Request, res: Response) => {
-    const userId = (req as any).user.userId as string;
-    if (!userId) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
+const PAYMENT_LEDGER_PREFIX = "pi:";
+const REFUND_LEDGER_PREFIX = "refund:";
+const DISPUTE_LEDGER_PREFIX = "dispute:";
+
+function parsePositiveInt(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+export function computeCreditsFromLineItems(items: Stripe.LineItem[]): number {
+  return items.reduce((total, item) => {
+    const product = item.price?.product;
+    const quantity = item.quantity ?? 1;
+    let creditsStr: string | undefined;
+    if (product && typeof product !== "string" && !product.deleted) {
+      creditsStr = product.metadata?.credits;
     }
+    const credits = parsePositiveInt(creditsStr ?? "");
+    if (!credits) return total;
+    return total + credits * quantity;
+  }, 0);
+}
 
-    const { plan, tokens, amount } = req.body as {
-      plan?: string;
-      tokens?: number;
-      amount?: number;
-    };
+async function fetchCreditsForSession(session: Stripe.Checkout.Session): Promise<number> {
+  const metadataCredits = parsePositiveInt(session.metadata?.credits ?? "");
+  if (metadataCredits) return metadataCredits;
 
-    const planDetails: Record<
-      string,
-      { creditsToAdd: number; amount: number }
-    > = {
-      individual: { creditsToAdd: 1, amount: 12500 },
-      basic: { creditsToAdd: 10, amount: 120000 },
-      plus: { creditsToAdd: 25, amount: 275000 },
-      premium: { creditsToAdd: 50, amount: 500000 },
-    };
+  const lineItems = session.line_items?.data?.length
+    ? session.line_items.data
+    : (
+        await stripe.checkout.sessions.listLineItems(session.id, {
+          expand: ["data.price.product"],
+          limit: 100,
+        })
+      ).data;
 
-    let creditsToAdd: number;
-    let finalAmount: number;
+  const lineItemCredits = computeCreditsFromLineItems(lineItems);
+  if (lineItemCredits > 0) return lineItemCredits;
 
-    if (plan === "custom") {
-      if (
-        typeof tokens !== "number" ||
-        typeof amount !== "number" ||
-        tokens < 1 ||
-        amount <= 0
-      ) {
-        res.status(400).json({ error: "Invalid custom plan details" });
-        return;
-      }
+  throw new Error("Missing Stripe metadata for credits");
+}
 
-      creditsToAdd = tokens;
-      finalAmount = Math.round(amount * 100); // Convert to cents
-    } else {
-      const selected = planDetails[plan ?? ""];
-      if (!selected) {
-        console.warn("⚠️ Invalid plan sent from frontend:", plan);
-        res.status(400).json({ error: "Invalid plan" });
-        return;
-      }
+async function recordPurchaseCredit(
+  tx: Prisma.TransactionClient,
+  {
+    paymentIntentId,
+    userId,
+    credits,
+    amountCents,
+    currency,
+    receiptUrl,
+  }: {
+    paymentIntentId: string;
+    userId: string;
+    credits: number;
+    amountCents: number;
+    currency: string;
+    receiptUrl?: string | null;
+  }
+): Promise<void> {
+  const purchase = await tx.purchase.upsert({
+    where: { stripePaymentIntentId: paymentIntentId },
+    update: {
+      userId,
+      creditsAdded: credits,
+      amountCents,
+      currency,
+      status: "succeeded",
+      receiptUrl: receiptUrl ?? null,
+    },
+    create: {
+      userId,
+      stripePaymentIntentId: paymentIntentId,
+      creditsAdded: credits,
+      amountCents,
+      currency,
+      status: "succeeded",
+      receiptUrl: receiptUrl ?? null,
+    },
+  });
 
-      creditsToAdd = selected.creditsToAdd;
-      finalAmount = selected.amount;
-    }
+  const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
+  const existing = await tx.ledgerEntry.findUnique({ where: { idempotencyKey } });
+  if (existing) return;
 
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: finalAmount,
-      currency: "usd",
-      description: `Purchase ${creditsToAdd} credits for user ${userId}`,
-      metadata: {
-        userId,
-        credits: String(creditsToAdd),
-        plan: plan ?? "custom",
-      },
+  await tx.ledgerEntry.create({
+    data: {
+      userId,
+      type: "credit",
+      credits,
+      description: `Stripe payment ${paymentIntentId}`,
+      idempotencyKey,
+      purchaseId: purchase.id,
+    },
+  });
+}
+
+function determineRefundCredits(
+  purchaseCredits: number,
+  purchaseAmount: number,
+  refundAmount: number
+): number {
+  if (!purchaseAmount || purchaseAmount <= 0) return purchaseCredits;
+  const proportional = Math.round((purchaseCredits * refundAmount) / purchaseAmount);
+  const credits = Math.min(purchaseCredits, proportional);
+  return credits > 0 ? credits : purchaseCredits;
+}
+
+async function recordRefundLedger(
+  tx: Prisma.TransactionClient,
+  {
+    paymentIntentId,
+    refundId,
+    refundAmount,
+    reason,
+  }: {
+    paymentIntentId: string;
+    refundId: string;
+    refundAmount: number;
+    reason: string;
+  }
+): Promise<void> {
+  const purchase = await tx.purchase.findUnique({ where: { stripePaymentIntentId: paymentIntentId } });
+  if (!purchase) {
+    throw new Error(`Purchase not found for payment_intent ${paymentIntentId}`);
+  }
+
+  const idempotencyKey = `${refundId}`;
+  const existing = await tx.ledgerEntry.findUnique({ where: { idempotencyKey } });
+  if (existing) return;
+
+  const creditsToRevoke = determineRefundCredits(
+    purchase.creditsAdded,
+    purchase.amountCents,
+    refundAmount
+  );
+
+  if (creditsToRevoke <= 0) return;
+
+  const aggregate = await tx.ledgerEntry.aggregate({
+    where: {
+      purchaseId: purchase.id,
+      credits: { lt: 0 },
+    },
+    _sum: { credits: true },
+  });
+
+  const alreadyRevoked = Math.abs(aggregate._sum.credits ?? 0);
+  const remainingCredits = Math.max(purchase.creditsAdded - alreadyRevoked, 0);
+  const creditsToApply = Math.min(creditsToRevoke, remainingCredits);
+
+  if (creditsToApply <= 0) return;
+
+  await tx.ledgerEntry.create({
+    data: {
+      userId: purchase.userId,
+      type: "credit",
+      credits: -Math.abs(creditsToApply),
+      description: reason,
+      idempotencyKey,
+      purchaseId: purchase.id,
+    },
+  });
+
+  const status = creditsToApply >= remainingCredits ? "refunded" : "partially_refunded";
+
+  await tx.purchase.update({
+    where: { id: purchase.id },
+    data: { status },
+  });
+}
+
+async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promise<void> {
+  const userId = intent.metadata?.userId;
+  const credits = parsePositiveInt(intent.metadata?.credits ?? "");
+
+  if (!userId || !credits) {
+    throw new Error("Missing metadata for credits or userId");
+  }
+
+  const amountCents = intent.amount_received ?? intent.amount ?? 0;
+  const currency = intent.currency ?? "usd";
+  const paymentIntentId = intent.id;
+      const receiptUrl = (intent as any).charges?.data?.[0]?.receipt_url ?? null;
+
+  await prisma.$transaction(async (tx) => {
+    await recordPurchaseCredit(tx, {
+      paymentIntentId,
+      userId,
+      credits,
+      amountCents,
+      currency,
+      receiptUrl,
     });
+  });
+}
 
-    await prisma.purchase.create({
-      data: {
-        id: paymentIntent.id,
-        userId,
-        credits: creditsToAdd,
-        amount: finalAmount,
-        success: false,
-      },
+async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session): Promise<void> {
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id;
+
+  if (!paymentIntentId) {
+    throw new Error("Missing payment intent on checkout session");
+  }
+
+  const userId = session.metadata?.userId ?? session.client_reference_id;
+  if (!userId) {
+    throw new Error("Missing userId for checkout session");
+  }
+
+  const credits = await fetchCreditsForSession(session);
+  const amountCents = session.amount_total ?? session.amount_subtotal ?? 0;
+  const currency = session.currency ?? "usd";
+      const receiptUrl = (session as any).latest_charge && typeof (session as any).latest_charge !== "string"
+        ? (session as any).latest_charge.receipt_url
+        : undefined;
+
+  await prisma.$transaction(async (tx) => {
+    await recordPurchaseCredit(tx, {
+      paymentIntentId,
+      userId,
+      credits,
+      amountCents,
+      currency,
+      receiptUrl,
     });
+  });
+}
 
-    res.json({ clientSecret: paymentIntent.client_secret });
-  })
-);
+async function handleRefund(refund: Stripe.Refund): Promise<void> {
+  const paymentIntentId = refund.payment_intent;
+  if (!paymentIntentId) return;
 
-/**
- * POST /api/purchase/complete
- * Manually finalize a pending purchase.
- */
-router.post(
-  "/complete",
-  authenticateToken,
-  asyncHandler(async (req: Request, res: Response) => {
-    const userId = (req as any).user.userId as string;
-    const { paymentIntentId } = req.body as { paymentIntentId?: string };
-    if (!paymentIntentId) {
-      res.status(400).json({ error: "Missing paymentIntentId" });
-      return;
-    }
+  const refundAmount = refund.amount ?? 0;
+  if (refundAmount <= 0) return;
 
-    const purchase = await prisma.purchase.findUnique({
-      where: { id: paymentIntentId },
+  await prisma.$transaction(async (tx) => {
+    await recordRefundLedger(tx, {
+      paymentIntentId: paymentIntentId as string,
+      refundId: `${REFUND_LEDGER_PREFIX}${refund.id}`,
+      refundAmount,
+      reason: `Refund ${refund.id}`,
     });
-    if (!purchase) {
-      res.status(404).json({ error: "Purchase not found" });
-      return;
-    }
+  });
+}
 
-    if (!purchase.success) {
-      await prisma.purchase.update({
-        where: { id: paymentIntentId },
-        data: { success: true },
-      });
-      await prisma.user.update({
-        where: { id: userId },
-        data: { credits: { increment: purchase.credits } },
-      });
-    }
+async function handleDispute(dispute: Stripe.Dispute): Promise<void> {
+  const paymentIntentId = dispute.payment_intent;
+  if (!paymentIntentId) return;
 
-    res.json({ ok: true, creditsAdded: purchase.credits });
-  })
-);
+  const amount = dispute.amount ?? 0;
+  if (amount <= 0) return;
 
-/**
- * This handler is exported so we can mount it *before* express.json()
- * in server.ts, using bodyParser.raw().
- */
-export const stripeWebhookHandler = async (
-  req: Request,
-  res: Response
-): Promise<void> => {
+  await prisma.$transaction(async (tx) => {
+    await recordRefundLedger(tx, {
+      paymentIntentId: paymentIntentId as string,
+      refundId: `${DISPUTE_LEDGER_PREFIX}${dispute.id}`,
+      refundAmount: amount,
+      reason: `Charge dispute ${dispute.id}`,
+    });
+  });
+}
+
+export const stripeWebhookHandler = async (req: Request, res: Response): Promise<void> => {
+  if (!webhookSecret) {
+    res.status(500).json({ error: "Missing STRIPE_WEBHOOK_SECRET" });
+    return;
+  }
+
+  const signature = req.headers["stripe-signature"] as string | undefined;
+  if (!signature) {
+    res.status(400).json({ error: "Missing stripe-signature header" });
+    return;
+  }
+
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body, // raw Buffer
-      req.headers["stripe-signature"] as string,
-      process.env.STRIPE_WEBHOOK_SECRET!
-    );
+    event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
   } catch (err: any) {
-    console.error("Webhook signature error:", err.message);
+    console.error("Stripe webhook signature verification failed", err.message);
     res.status(400).send(`Webhook Error: ${err.message}`);
     return;
   }
 
-  if (
-    event.type === "payment_intent.succeeded" ||
-    event.type === "payment_intent.payment_failed"
-  ) {
-    const pi = event.data.object as Stripe.PaymentIntent;
-    const { userId, credits: creditsStr } = pi.metadata;
-    const creditsToAdd = parseInt(creditsStr as string, 10);
-    const success = event.type === "payment_intent.succeeded";
-
-    try {
-      await prisma.purchase.update({
-        where: { id: pi.id },
-        data: { success },
-      });
-      if (success) {
-        await prisma.user.update({
-          where: { id: userId as string },
-          data: { credits: { increment: creditsToAdd } },
-        });
-      }
-    } catch (dbErr) {
-      console.error("DB update error:", dbErr);
+  try {
+    switch ((event as any).type) {
+      case "payment_intent.succeeded":
+        await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
+        break;
+      case "checkout.session.completed":
+        await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
+        break;
+      case "charge.refund.created":
+        await handleRefund((event as any).data.object as Stripe.Refund);
+        break;
+      case "charge.dispute.created":
+        await handleDispute(event.data.object as Stripe.Dispute);
+        break;
+      default:
+        break;
     }
+  } catch (err: any) {
+    console.error("Stripe webhook processing error", err);
+    res.status(500).json({ error: err.message || "Webhook processing failed" });
+    return;
   }
 
   res.json({ received: true });
 };
 
-/**
- * GET /api/purchase/history
- *   – admin only: return all past purchases with user info
- */
+router.post("/purchase-credits", authenticateToken, async (req: Request, res: Response) => {
+  const userId = (req as any).user.userId as string;
+  const { amountCents, credits } = req.body as { amountCents?: number; credits?: number };
+
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  if (!amountCents || !credits) {
+    res.status(400).json({ error: "Missing amountCents or credits" });
+    return;
+  }
+
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: amountCents,
+    currency: "usd",
+    metadata: {
+      userId,
+      credits: String(credits),
+    },
+  });
+
+  await prisma.purchase.upsert({
+    where: { stripePaymentIntentId: paymentIntent.id },
+    update: {
+      userId,
+      amountCents,
+      creditsAdded: credits,
+      currency: "usd",
+      status: "requires_payment_method",
+    },
+    create: {
+      userId,
+      stripePaymentIntentId: paymentIntent.id,
+      amountCents,
+      creditsAdded: credits,
+      currency: "usd",
+      status: "requires_payment_method",
+    },
+  });
+
+  res.json({ clientSecret: paymentIntent.client_secret });
+});
+
 router.get(
   "/history",
   authenticateToken,
   requireAdmin,
-  async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      const raw = await prisma.purchase.findMany({
-        orderBy: { createdAt: "desc" },
-        include: { user: { select: { name: true, email: true } } },
-      });
+  async (_req: Request, res: Response) => {
+    const purchases = await prisma.purchase.findMany({
+      include: { user: { select: { email: true, name: true } } },
+      orderBy: { createdAt: "desc" },
+    });
 
-      const history = raw.map(
-        (p: {
-          id: any;
-          user: { name: any; email: any };
-          createdAt: { toISOString: () => any };
-          credits: any;
-          amount: any;
-        }) => ({
-          id: p.id,
-          user: p.user.name,
-          email: p.user.email,
-          date: p.createdAt.toISOString(),
-          plan: `${p.credits} Credits`,
-          amount: p.amount,
-        })
-      );
-
-      res.json(history);
-    } catch (err) {
-      next(err);
-    }
+    res.json(
+      purchases.map((purchase) => ({
+        id: purchase.id,
+        paymentIntent: purchase.stripePaymentIntentId,
+        amountCents: purchase.amountCents,
+        currency: purchase.currency,
+        creditsAdded: purchase.creditsAdded,
+        status: purchase.status,
+        receiptUrl: purchase.receiptUrl,
+        user: purchase.user,
+        createdAt: purchase.createdAt,
+      }))
+    );
   }
 );
 
 export default router;
+export {
+  handlePaymentIntentSucceeded,
+  handleCheckoutSessionCompleted,
+  handleRefund,
+  handleDispute,
+  recordPurchaseCredit,
+  determineRefundCredits,
+};
+

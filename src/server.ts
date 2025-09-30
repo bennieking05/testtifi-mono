@@ -6,6 +6,7 @@ import bodyParser from "body-parser";
 import authRoutes from "./routes/authRoutes";
 import uploadRoutes from "./routes/uploadRoutes";
 import purchaseRoutes, { stripeWebhookHandler } from "./routes/purchaseRoutes";
+import billingRoutes from "./routes/billingRoutes";
 import downloadRoutes from "./routes/downloadRoutes";
 import userRoutes from "./routes/userRoutes";
 import supportRoutes from "./routes/supportRoutes";
@@ -16,6 +17,7 @@ import previeqwRoutes from "./routes/previewRoutes";
 import emailNotificationRoutes from "./routes/emailNotificationRoutes";
 import snapshotsRoutes from "./routes/snapshotsRoutes";
 import webCopyRoutes from "./routes/webCopyRoutes";
+import validationRoutes from "./routes/validationRoutes";
 
 dotenv.config();
 
@@ -51,6 +53,7 @@ app.use((req, _res, next) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/purchase", purchaseRoutes);
+app.use("/api/billing", billingRoutes);
 app.use("/api/summaries", summariesRoutes);
 app.use("/api/download", downloadRoutes);
 app.use("/api/user", userRoutes);
@@ -61,6 +64,7 @@ app.use("/api/email-notifications", emailNotificationRoutes);
 app.use("/api/preview", previeqwRoutes);
 app.use("/api/snapshots", snapshotsRoutes);
 app.use("/api/webcopy", webCopyRoutes);
+app.use("/api/validation", validationRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>

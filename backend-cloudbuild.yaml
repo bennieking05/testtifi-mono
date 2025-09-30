@@ -1,6 +1,7 @@
 steps:
   # Build backend (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
+    dir: backend
     args:
       [
         "build",
@@ -14,6 +15,7 @@ steps:
 
   # Build summarize-worker (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
+    dir: backend
     args:
       [
         "build",
@@ -47,13 +49,13 @@ steps:
         gcloud container clusters get-credentials "${_CLUSTER}" --zone "${_CLUSTER_LOCATION}"
         NS="${_NAMESPACE}"
         echo "Updating backend image to $BUILD_ID..."
-        kubectl -n "$$NS" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
-        kubectl -n "$$NS" rollout status deployment/backend --timeout=300s
+        kubectl -n "$NS" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
+        kubectl -n "$NS" rollout status deployment/backend --timeout=300s
         echo "Rolling summarize-worker with scale-to-zero to avoid CPU surge..."
-        kubectl -n "$$NS" scale deployment summarize-worker --replicas=0
-        kubectl -n "$$NS" set image deployment/summarize-worker summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
-        kubectl -n "$$NS" scale deployment summarize-worker --replicas=1
-        kubectl -n "$$NS" rollout status deployment/summarize-worker --timeout=600s
+        kubectl -n "$NS" scale deployment summarize-worker --replicas=0
+        kubectl -n "$NS" set image deployment/summarize-worker summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
+        kubectl -n "$NS" scale deployment summarize-worker --replicas=1
+        kubectl -n "$NS" rollout status deployment/summarize-worker --timeout=600s
 
 images:
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
