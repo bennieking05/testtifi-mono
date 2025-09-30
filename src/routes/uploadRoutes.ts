@@ -18,7 +18,7 @@ const allowedMime = new Set<string>([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
-/** wraps the DB work in a single transaction (create File + create SummaryJob + credit‐decrement) */
+/** wraps the DB work in a single transaction (create File + create SummaryJob) */
 async function createJobTx(
   userId: string,
   fileName: string,
@@ -32,13 +32,7 @@ async function createJobTx(
   }/${encodeURIComponent(fileName)}`;
 
   return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // 1) deduct one credit
-    await tx.user.update({
-      where: { id: userId },
-      data: { credits: { decrement: 1 } },
-    });
-
-    // 2) create file record
+    // 1) create file record
     const file = await tx.file.create({
       data: {
         id: fileId,
@@ -53,7 +47,7 @@ async function createJobTx(
       },
     });
 
-    // 3) create summary job
+    // 2) create summary job
     const job = await tx.summaryJob.create({
       data: {
         userId,
@@ -64,8 +58,6 @@ async function createJobTx(
         totalPages: 0,
         lastPageProcessed: 0,
         notifyOnComplete,
-        summaryName,
-        deponent,
       },
     });
 
@@ -85,12 +77,6 @@ router.post(
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       res.status(401).json({ error: "User not found" });
-      return;
-    }
-
-    // make sure they have at least one credit to spend
-    if (user.credits < 1) {
-      res.status(402).json({ error: "Not enough credits" });
       return;
     }
 
@@ -144,21 +130,17 @@ router.post(
         replied = true;
 
         try {
-      const job = await createJobTx(
-        userId,
-        info.filename,
-        summaryName,
-        deponent,
-        notifyOnComplete
-      );
+          const job = await createJobTx(
+            userId,
+            info.filename,
+            summaryName,
+            deponent,
+            notifyOnComplete
+          );
           res.json({ jobId: job.id, status: "processing", totalPages: 0 });
         } catch (err: any) {
-          const msg =
-            err?.code === "P2000" || /credits/i.test(err?.message || "")
-              ? "Not enough credits"
-              : "Internal error";
-          const code = /credits/i.test(msg) ? 402 : 500;
-          res.status(code).json({ error: msg });
+          console.error("Upload error:", err);
+          res.status(500).json({ error: "Internal error" });
         }
       });
     });

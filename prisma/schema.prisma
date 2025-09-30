@@ -27,6 +27,7 @@ model User {
   refreshTokens  RefreshToken?
   supportTickets SupportTicket[]
   trainingAssets TrainingAsset[]
+  ledgerEntries  LedgerEntry[]
 }
 
 model File {
@@ -66,8 +67,6 @@ model SummaryJob {
   totalPages        Int
   error             String?  @db.Text
   notifyOnComplete  Boolean  @default(false)
-  summaryName       String?
-  deponent          String?
 
   /* ───── timing  ───── */
   startedAt         DateTime @default(now())  // when the row is inserted
@@ -80,15 +79,50 @@ model SummaryJob {
   @@index([fileId], map: "fk_SummaryJob_file")
 }
 model Purchase {
-  id        String   @id @default(uuid())
-  userId    String
-  credits   Int
-  amount    Float
-  createdAt DateTime @default(now())
-  success   Boolean
-  user      User     @relation(fields: [userId], references: [id])
+  id                     String             @id @default(uuid())
+  userId                 String
+  stripePaymentIntentId  String             @unique
+  amountCents            Int
+  currency               String             @default("usd")
+  creditsAdded           Int
+  status                 PurchaseStatus     @default(succeeded)
+  receiptUrl             String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  user                   User               @relation(fields: [userId], references: [id])
+  ledgerEntries          LedgerEntry[]
+  creditAllocations      CreditAllocation[]
 
   @@index([userId], map: "Purchase_userId_fkey")
+}
+
+model LedgerEntry {
+  id              String             @id @default(uuid())
+  userId          String
+  type            LedgerEntryType
+  credits         Int
+  summaryId       String?
+  description     String?
+  idempotencyKey  String             @unique
+  purchaseId      String?
+  createdAt       DateTime           @default(now())
+  user            User               @relation(fields: [userId], references: [id])
+  purchase        Purchase?          @relation(fields: [purchaseId], references: [id])
+  creditAllocations CreditAllocation[]
+
+  @@index([userId, createdAt])
+}
+
+model CreditAllocation {
+  id             String      @id @default(uuid())
+  debitLedgerId  String
+  purchaseId     String
+  creditsUsed    Int
+  debitLedger    LedgerEntry @relation(fields: [debitLedgerId], references: [id])
+  purchase       Purchase    @relation(fields: [purchaseId], references: [id])
+
+  @@index([debitLedgerId])
+  @@index([purchaseId])
 }
 
 model Email {
@@ -183,4 +217,17 @@ enum AssetType {
   human_summary
   training_pair
   generated_pair
+}
+
+enum PurchaseStatus {
+  succeeded
+  refunded
+  partially_refunded
+  requires_payment_method
+}
+
+enum LedgerEntryType {
+  credit
+  debit
+  adjustment
 }
