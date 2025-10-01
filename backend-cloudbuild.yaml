@@ -47,7 +47,7 @@ steps:
         set -euo pipefail
         echo "Getting GKE credentials for ${_CLUSTER} in ${_CLUSTER_LOCATION}..."
         gcloud container clusters get-credentials "${_CLUSTER}" --zone "${_CLUSTER_LOCATION}"
-        NS="$NAMESPACE"
+        NS="${_NAMESPACE}"
         echo "Updating backend image to $BUILD_ID..."
         kubectl -n "$NS" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
         kubectl -n "$NS" rollout status deployment/backend --timeout=300s
@@ -66,7 +66,7 @@ images:
 substitutions:
   _CLUSTER: testifi
   _CLUSTER_LOCATION: us-central1-c
-  NAMESPACE: default
+  _NAMESPACE: default
 
 options:
   logging: CLOUD_LOGGING_ONLY
