@@ -39,7 +39,7 @@ steps:
 
   # ===== Deploy to GKE (pin to this build's tag) =====
   - id: "Deploy to GKE (pin and rollouts)"
-    name: "gcr.io/cloud-builders/gcloud"
+    name: "gcr.io/cloud-builders/gke-deploy"
     entrypoint: "bash"
     args:
       - "-c"
