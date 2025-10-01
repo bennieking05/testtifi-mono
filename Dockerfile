@@ -8,10 +8,16 @@ RUN apk add --no-cache python3 make g++ gcc bash curl net-tools
 COPY package*.json ./
 RUN npm install
 
+# Copy Prisma schema first
+COPY prisma ./prisma
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Copy rest of the code
 COPY . .
 
 RUN npm rebuild bcrypt --build-from-source
-RUN npx prisma generate
 
 # -------- Stage 2: Build TypeScript --------
 FROM base AS build
@@ -26,6 +32,7 @@ WORKDIR /usr/src/app
 COPY --from=build /usr/src/app/package*.json ./
 COPY --from=build /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/prisma ./prisma
 
 EXPOSE 4000
 ENV NODE_ENV=production
@@ -35,12 +42,12 @@ CMD ["node", "dist/server.js"]
 # -------- Stage 3b: Runtime for Summarize Worker --------
 FROM node:20-alpine AS summarize-worker
 
-
 WORKDIR /usr/src/app
 
 COPY --from=build /usr/src/app/package*.json ./
 COPY --from=build /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/prisma ./prisma
 
 ENV NODE_ENV=production
 
