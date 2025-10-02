@@ -397,6 +397,37 @@ router.get(
   }
 );
 
+router.get(
+  "/user-history",
+  authenticateToken,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).user.userId as string;
+
+    if (!userId) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const purchases = await prisma.purchase.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json(
+      purchases.map((purchase) => ({
+        id: purchase.id,
+        paymentIntent: purchase.stripePaymentIntentId,
+        amountCents: purchase.amountCents,
+        currency: purchase.currency,
+        creditsAdded: purchase.creditsAdded,
+        status: purchase.status,
+        receiptUrl: purchase.receiptUrl,
+        createdAt: purchase.createdAt,
+      }))
+    );
+  }
+);
+
 export default router;
 export {
   handlePaymentIntentSucceeded,
