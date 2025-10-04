@@ -64,13 +64,24 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     const userId = req.user!.userId;
 
-    const balanceAgg = await prisma.ledgerEntry.aggregate({
-      _sum: { credits: true },
-      where: { userId },
-    });
+    try {
+      const balanceAgg = await prisma.ledgerEntry.aggregate({
+        _sum: { credits: true },
+        where: { userId },
+      });
 
-    const balance = toNumber(balanceAgg._sum.credits);
-    res.json({ balance });
+      const balance = toNumber(balanceAgg._sum.credits);
+      res.json({ balance });
+    } catch (err: any) {
+      // If the billing tables are not yet present in production, avoid 500s
+      // Prisma P2021: table does not exist
+      const code: string | undefined = err?.code || err?.meta?.code || err?.name;
+      if (code === "P2021") {
+        res.json({ balance: 0 });
+        return;
+      }
+      throw err;
+    }
   }
 );
 
@@ -85,106 +96,121 @@ router.get(
     const cursor = decodeCursor(req.query.cursor);
     const wantsCsv = req.headers.accept?.includes("text/csv");
 
-    const filters: Prisma.LedgerEntryWhereInput = {
-      userId,
-      type,
-      createdAt: {
-        gte: from,
-        lte: to,
-      },
-    };
+    try {
+      const filters: Prisma.LedgerEntryWhereInput = {
+        userId,
+        type,
+        createdAt: {
+          gte: from,
+          lte: to,
+        },
+      };
 
-    if (!from && !to) {
-      delete filters.createdAt;
-    } else {
+      if (!from && !to) {
+        delete filters.createdAt;
+      } else {
         if (!from && filters.createdAt && typeof filters.createdAt === "object" && "gte" in filters.createdAt) {
           delete (filters.createdAt as Prisma.DateTimeFilter).gte;
         }
         if (!to && filters.createdAt && typeof filters.createdAt === "object" && "lte" in filters.createdAt) {
           delete (filters.createdAt as Prisma.DateTimeFilter).lte;
         }
-    }
+      }
 
-    const entries = await prisma.ledgerEntry.findMany({
-      where: filters,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: PAGE_SIZE + 1,
-      ...(cursor
-        ? {
-            skip: 1,
-            cursor: { createdAt: cursor.createdAt, id: cursor.id },
-          }
-        : {}),
-      include: {
-        purchase: true,
-        creditAllocations: {
-          include: { purchase: true },
+      const entries = await prisma.ledgerEntry.findMany({
+        where: filters,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: PAGE_SIZE + 1,
+        ...(cursor
+          ? {
+              skip: 1,
+              cursor: { createdAt: cursor.createdAt, id: cursor.id },
+            }
+          : {}),
+        include: {
+          purchase: true,
+          creditAllocations: {
+            include: { purchase: true },
+          },
         },
-      },
-    });
+      });
 
-    const hasMore = entries.length > PAGE_SIZE;
-    const sliced = hasMore ? entries.slice(0, PAGE_SIZE) : entries;
-    const nextCursor = hasMore
-      ? encodeCursor({ id: sliced[sliced.length - 1]!.id, createdAt: sliced[sliced.length - 1]!.createdAt })
-      : null;
+      const hasMore = entries.length > PAGE_SIZE;
+      const sliced = hasMore ? entries.slice(0, PAGE_SIZE) : entries;
+      const nextCursor = hasMore
+        ? encodeCursor({ id: sliced[sliced.length - 1]!.id, createdAt: sliced[sliced.length - 1]!.createdAt })
+        : null;
 
-    const balanceAgg = await prisma.ledgerEntry.aggregate({
-      _sum: { credits: true },
-      where: { userId },
-    });
-    const balance = toNumber(balanceAgg._sum.credits);
+      const balanceAgg = await prisma.ledgerEntry.aggregate({
+        _sum: { credits: true },
+        where: { userId },
+      });
+      const balance = toNumber(balanceAgg._sum.credits);
 
-    if (wantsCsv) {
-      const csv = stringify(
-        sliced.map((entry) => ({
+      if (wantsCsv) {
+        const csv = stringify(
+          sliced.map((entry) => ({
+            id: entry.id,
+            date: entry.createdAt.toISOString(),
+            type: entry.type,
+            credits: entry.credits,
+            description: entry.description ?? "",
+            summaryId: entry.summaryId ?? "",
+            purchaseIntent: entry.purchase?.stripePaymentIntentId ?? "",
+            purchaseId: entry.purchaseId ?? "",
+            allocations: entry.creditAllocations
+              .map((alloc) => `${alloc.purchase?.stripePaymentIntentId ?? alloc.purchaseId}:${alloc.creditsUsed}`)
+              .join("|"),
+          })),
+          { header: true }
+        );
+
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", "attachment; filename=billing-history.csv");
+        res.send(csv);
+        return;
+      }
+
+      res.json({
+        balance,
+        entries: sliced.map((entry) => ({
           id: entry.id,
-          date: entry.createdAt.toISOString(),
           type: entry.type,
           credits: entry.credits,
-          description: entry.description ?? "",
-          summaryId: entry.summaryId ?? "",
-          purchaseIntent: entry.purchase?.stripePaymentIntentId ?? "",
-          purchaseId: entry.purchaseId ?? "",
-          allocations: entry.creditAllocations
-            .map((alloc) => `${alloc.purchase?.stripePaymentIntentId ?? alloc.purchaseId}:${alloc.creditsUsed}`)
-            .join("|"),
+          description: entry.description,
+          summaryId: entry.summaryId,
+          createdAt: entry.createdAt,
+          purchase: entry.purchase
+            ? {
+                id: entry.purchase.id,
+                stripePaymentIntentId: entry.purchase.stripePaymentIntentId,
+                receiptUrl: entry.purchase.receiptUrl,
+              }
+            : null,
+          allocations: entry.creditAllocations.map((alloc) => ({
+            id: alloc.id,
+            purchaseId: alloc.purchaseId,
+            creditsUsed: alloc.creditsUsed,
+            stripePaymentIntentId: alloc.purchase?.stripePaymentIntentId ?? null,
+          })),
         })),
-        { header: true }
-      );
-
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", "attachment; filename=billing-history.csv");
-      res.send(csv);
-      return;
+        nextCursor,
+        hasMore,
+      });
+    } catch (err: any) {
+      const code: string | undefined = err?.code || err?.meta?.code || err?.name;
+      if (code === "P2021") {
+        if (wantsCsv) {
+          res.setHeader("Content-Type", "text/csv");
+          res.setHeader("Content-Disposition", "attachment; filename=billing-history.csv");
+          res.send("id,date,type,credits,description,summaryId,purchaseIntent,purchaseId,allocations\n");
+          return;
+        }
+        res.json({ balance: 0, entries: [], nextCursor: null, hasMore: false });
+        return;
+      }
+      throw err;
     }
-
-    res.json({
-      balance,
-      entries: sliced.map((entry) => ({
-        id: entry.id,
-        type: entry.type,
-        credits: entry.credits,
-        description: entry.description,
-        summaryId: entry.summaryId,
-        createdAt: entry.createdAt,
-        purchase: entry.purchase
-          ? {
-              id: entry.purchase.id,
-              stripePaymentIntentId: entry.purchase.stripePaymentIntentId,
-              receiptUrl: entry.purchase.receiptUrl,
-            }
-          : null,
-        allocations: entry.creditAllocations.map((alloc) => ({
-          id: alloc.id,
-          purchaseId: alloc.purchaseId,
-          creditsUsed: alloc.creditsUsed,
-          stripePaymentIntentId: alloc.purchase?.stripePaymentIntentId ?? null,
-        })),
-      })),
-      nextCursor,
-      hasMore,
-    });
   }
 );
 

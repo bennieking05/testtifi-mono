@@ -1,7 +1,7 @@
 steps:
   # Build backend (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
-    dir: testifi/backend
+    dir: backend
     args:
       [
         "build",
@@ -15,7 +15,7 @@ steps:
 
   # Build summarize-worker (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
-    dir: testifi/backend
+    dir: backend
     args:
       [
         "build",
@@ -47,15 +47,19 @@ steps:
         set -euo pipefail
         echo "Getting GKE credentials for ${_CLUSTER} in ${_CLUSTER_LOCATION}..."
         gcloud container clusters get-credentials "${_CLUSTER}" --zone "${_CLUSTER_LOCATION}"
-        NS="${_NAMESPACE}"
         echo "Updating backend image to $BUILD_ID..."
-        kubectl -n "$NS" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
-        kubectl -n "$NS" rollout status deployment/backend --timeout=300s
+        kubectl -n "${_NAMESPACE}" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
+        kubectl -n "${_NAMESPACE}" rollout status deployment/backend --timeout=300s
+
+        echo "Running Prisma migrations in-cluster (non-destructive)..."
+        # Apply any pending Prisma migrations using the newly rolled backend pod (Cloud SQL proxy sidecar attached)
+        kubectl -n "${_NAMESPACE}" exec deploy/backend -c backend -- npx prisma migrate deploy
+
         echo "Rolling summarize-worker with scale-to-zero to avoid CPU surge..."
-        kubectl -n "$NS" scale deployment summarize-worker --replicas=0
-        kubectl -n "$NS" set image deployment/summarize-worker summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
-        kubectl -n "$NS" scale deployment summarize-worker --replicas=1
-        kubectl -n "$NS" rollout status deployment/summarize-worker --timeout=600s
+        kubectl -n "${_NAMESPACE}" scale deployment summarize-worker --replicas=0
+        kubectl -n "${_NAMESPACE}" set image deployment/summarize-worker summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
+        kubectl -n "${_NAMESPACE}" scale deployment summarize-worker --replicas=1
+        kubectl -n "${_NAMESPACE}" rollout status deployment/summarize-worker --timeout=600s
 
 images:
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
