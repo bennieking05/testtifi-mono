@@ -1,60 +1,79 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backend
-  namespace: staging
+  name: summarize-worker
+  namespace: default
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: backend
+      app: summarize-worker
   template:
     metadata:
       labels:
-        app: backend
+        app: summarize-worker
     spec:
       containers:
+        # Cloud SQL Proxy sidecar
         - name: cloud-sql-proxy
           image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
           command:
-            - "/cloud_sql_proxy"
-            - "-instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306"
-            - "-credential_file=/secrets/cloudsql/credentials.json"
+            - /cloud_sql_proxy
+            - -instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306
+            - -credential_file=/secrets/cloudsql/credentials.json
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
           volumeMounts:
             - name: cloudsql-instance-credentials
               mountPath: /secrets/cloudsql
               readOnly: true
-          resources:
-            requests:
-              memory: "128Mi"
-              cpu: "100m"
-            limits:
-              memory: "256Mi"
-              cpu: "200m"
 
-        - name: backend
-          image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
+        # Summarize Worker
+        - name: summarize-worker
+          image: gcr.io/golden-cosmos-450417-i8/summarize-worker:latest
+          command:
+            - node
+            - dist/worker/summarizeWorker.js
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "250m"
+              cpu: 500m
+              memory: 1Gi
             limits:
-              memory: "2Gi"
-              cpu: "1000m"
+              cpu: "2"
+              memory: 2Gi
           volumeMounts:
             - name: gcp-service-account
               mountPath: /var/secrets/google
               readOnly: true
+            - name: cloudsql-instance-credentials
+              mountPath: /secrets/cloudsql
+              readOnly: true
+
           env:
             - name: NODE_ENV
               value: "staging"
+            - name: DB_HOST
+              value: "127.0.0.1"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json
+            
+            # Worker tuning
+            - name: WORKER_CONCURRENCY
+              value: "1"  # Sequential processing to avoid rate limits
+            - name: PAGE_RANGE_SIZE
+              value: "5"  # Pages per chunk
+            
+            # Database connection
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
                   key: DATABASE_URL
-            - name: DB_HOST
-              value: "127.0.0.1"
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -70,46 +89,19 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: DB_NAME
+            
+            # Email
             - name: SENDGRID_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
                   key: SENDGRID_API_KEY
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: OPENAI_API_KEY
             - name: BREVO_SENDER_EMAIL
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
                   key: EMAIL_USER
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: JWT_SECRET
-            - name: BASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: BASE_URL
-            - name: BACKEND_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: BACKEND_URL
-            - name: STRIPE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: STRIPE_API_KEY
-            - name: STRIPE_WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: STRIPE_WEBHOOK_SECRET
+            
             # ---------- Azure OpenAI (STAGING - Stable GPT-4) ----------
             - name: AZURE_OPENAI_API_KEY
               valueFrom:
@@ -123,19 +115,10 @@ spec:
                   key: AZURE_OPENAI_ENDPOINT
             # Staging uses stable GPT-4 for reliability testing
             - name: AZURE_OPENAI_DEPLOYMENT_NAME
-              value: "gpt-4o"  # Your stable GPT-4 deployment name
+              value: "gpt-4o"  # Your stable GPT-4 deployment name in Azure
             - name: AZURE_API_VERSION
               value: "2024-08-01-preview"  # Stable API version
-            - name: GOOGLE_APPLICATION_CREDENTIALS
-              value: /var/secrets/google/key.json
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 4000
-            initialDelaySeconds: 15
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 10
+
       volumes:
         - name: cloudsql-instance-credentials
           secret:
@@ -143,7 +126,4 @@ spec:
         - name: gcp-service-account
           secret:
             secretName: service-account-json
-
-
-
 
