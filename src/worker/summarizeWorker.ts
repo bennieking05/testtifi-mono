@@ -91,9 +91,10 @@ async function extractTextWithVision(gcsUri: string, jobId: string): Promise<str
 }
 
 function splitPages(txt: string) {
-  // Detect explicit page markers and use their numeric value when present.
-  // Common patterns: "Page 147", "147", "PAGE 147" centered on a line.
-  const marker = /^\s*(?:Page\s*)?(\d{1,5})\s*$/i;
+  // Detect explicit page markers - handles multi-page scans (4 transcript pages per PDF page)
+  // Look for: "Page 147", "147", standalone numbers, or "147:1" format
+  // Be aggressive in finding page numbers since they may appear in corners/margins
+  
   let currentPage: number | null = null;
   let buf: string[] = [];
   const out: { page: number; text: string }[] = [];
@@ -106,31 +107,51 @@ function splitPages(txt: string) {
   };
 
   for (const raw of txt.split(/\r?\n/)) {
-    const line = raw;
-    const m = line.trim().match(marker);
-    if (m) {
-      // Starting a new page segment; flush previous
+    const line = raw.trim();
+    
+    // Pattern 1: Standalone page number (most common)
+    // Matches: "147", "Page 147", "PAGE 147"
+    const standaloneMatch = line.match(/^(?:Page\s*)?(\d{1,5})$/i);
+    if (standaloneMatch) {
       push();
-      const nextPage = parseInt(m[1], 10);
-      if (currentPage !== null && nextPage < currentPage) {
-        // If page markers jump backwards due to headers/footers, treat as a new section but keep order
-        // by flushing and continuing. We'll sort at the end.
-      }
-      currentPage = nextPage;
-      // Do not include the page marker line itself in content
+      currentPage = parseInt(standaloneMatch[1], 10);
       continue;
     }
-    buf.push(line);
+    
+    // Pattern 2: Page:Line format (e.g., "147:1-15")
+    // Common in transcripts - extract just the page number
+    const pageLineMatch = line.match(/^(\d{1,5}):\d/);
+    if (pageLineMatch) {
+      push();
+      currentPage = parseInt(pageLineMatch[1], 10);
+      continue;
+    }
+    
+    // Pattern 3: Line starts or ends with just a number (corner numbers)
+    // E.g., "147 " or " 147"
+    if (line.length <= 6 && /^\d{1,5}$/.test(line)) {
+      const num = parseInt(line, 10);
+      // Only treat as page marker if it's reasonably sequential or first page
+      if (currentPage === null || num === currentPage + 1 || num > currentPage) {
+        push();
+        currentPage = num;
+        continue;
+      }
+    }
+    
+    buf.push(raw); // Keep original line with whitespace
   }
 
   // Flush last buffer
   push();
+  
   // Deduplicate by page number, keeping the longest text segment per page
   const byPage = new Map<number, string>();
   for (const { page, text } of out) {
     const prev = byPage.get(page) || "";
     if (text.length > prev.length) byPage.set(page, text);
   }
+  
   return Array.from(byPage.entries())
     .map(([page, text]) => ({ page, text }))
     .sort((a, b) => a.page - b.page);
