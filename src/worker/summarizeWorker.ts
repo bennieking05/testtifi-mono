@@ -27,8 +27,8 @@ console.log("=== Worker starting ===");
 
 // Tuning knobs (env‑overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
-const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 4 : 6);
-const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 3800 : 3200);
+const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 5 : 6);
+const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 3);
 const WORKER_ID = process.env.WORKER_ID || os.hostname();
 
@@ -197,10 +197,42 @@ function makePrompt(
       role: "user",
       content: isFirst
         ? `
-Summarize pages ${chunk.start}–${chunk.end} as a PAGE‑LINE deposition summary.\n\n${metaSection}\n\nNow output ONLY Markdown table rows with EXACTLY two columns: Page/Line and Testimony. No header row. Keep each row concise yet specific, capturing key Q&A, objections, exhibits, and dates. Aim for ~5:1 compression overall.\n\nTranscript:\n${chunk.text}
+Produce a comprehensive PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end}.
+
+${metaSection}
+
+Output ONLY Markdown table rows with EXACTLY two columns: Page Number | Testimony.
+- No header row, rows only
+- Use page ranges (e.g., "12", "12-13", "15-16") in the first column
+- For each page/section, write 3-6 complete sentences capturing:
+  * The main topic or subject matter
+  * All specific names, titles, entities, dates, and figures mentioned
+  * Document references (exhibits, emails, declarations) with context
+  * Key facts, admissions, or statements by the witness
+  * Any objections or legal procedural matters
+- Be thorough and specific - the attorney should understand the testimony without reading the transcript
+- Break into multiple rows when topics change within a page range
+
+Transcript:
+${chunk.text}
         `.trim()
         : `
-Continue the PAGE‑LINE deposition summary for pages ${chunk.start}–${chunk.end}. Do NOT repeat metadata. Output ONLY additional Markdown table rows with the two columns (Page/Line | Testimony). No header row.\n\nTranscript:\n${chunk.text}
+Continue the PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end}.
+
+Do NOT repeat metadata. Output ONLY additional Markdown table rows with two columns (Page Number | Testimony).
+- No header row, rows only
+- Use page ranges in the first column
+- Maintain the same comprehensive, detailed style:
+  * 3-6 complete sentences per entry for substantive testimony
+  * All specific names, dates, figures, entities
+  * Document references with context
+  * Key facts and admissions
+  * Objections and procedural matters
+- Be thorough and specific
+- Break into multiple rows when topics change
+
+Transcript:
+${chunk.text}
         `.trim(),
     },
   ];
@@ -385,8 +417,8 @@ async function work() {
       const rowsOnly = sanitizeGeneratedMarkdown(mergedRaw)
         .replace(/```[\s\S]*?```/g, "")
         .trim();
-      const tableHeader = "| Page/Line | Testimony |\n|---|---|";
-      const merged = [meta, tableHeader, rowsOnly].join("\n\n");
+      const tableHeader = "| Page Number | Testimony |\n|-------------|-----------|";
+      const merged = [meta, "", tableHeader, rowsOnly].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 

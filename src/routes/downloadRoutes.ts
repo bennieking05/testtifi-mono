@@ -160,12 +160,21 @@ router.get(
       ? objectKey(job.summaryCsvUrl)
       : job.file?.summaryFileName ?? `summary-${job.id}.md`;
     const uploadedTitle = job.file?.title || stripExt(job.fileName || "summary");
+    const sourceFileName = job.fileName || "Unknown Source";
     const coverTitle = uploadedTitle;
 
     try {
       const [buf] = await bucket.file(key).download();
       const data = buf.toString("utf-8");
       const { meta, rows } = parseMarkdown(data);
+      
+      // Extract deponent from metadata
+      let deponentName = "Unknown";
+      const deponentLine = meta.find(l => l.match(/(?:deponent|deposition\s+of):\s*(.+)/i));
+      if (deponentLine) {
+        const match = deponentLine.match(/(?:deponent|deposition\s+of|title\s+of\s+document):\s*(?:transcript\s+summary\s+of\s+)?(.+)/i);
+        if (match) deponentName = match[1].trim();
+      }
 
       // TXT — fixed-width two-column table
       if (format === "txt") {
@@ -238,30 +247,39 @@ router.get(
                   : []),
                 // Cover page
                 new Paragraph({
-                  text: coverTitle,
+                  text: "DEPOSITION SUMMARY",
                   alignment: "center",
                   heading: "Heading1",
                 }),
+                new Paragraph({ children: [], spacing: { before: 120 } }),
                 new Paragraph({
-                  text: `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`,
+                  children: [new TextRun({ text: "Deponent:", bold: true }), new TextRun(` ${deponentName}`)],
                   alignment: "center",
                 }),
-                ...(job.file?.title
-                  ? [
-                      new Paragraph({
-                        text: `Case: ${job.file.title}`,
-                        alignment: "center",
-                      }),
-                    ]
-                  : []),
+                new Paragraph({ children: [], spacing: { before: 80 } }),
+                new Paragraph({
+                  children: [new TextRun({ text: "Case Title:", bold: true }), new TextRun(` ${coverTitle}`)],
+                  alignment: "center",
+                }),
+                new Paragraph({ children: [], spacing: { before: 80 } }),
+                new Paragraph({
+                  children: [new TextRun({ text: "Source File:", bold: true }), new TextRun(` ${sourceFileName}`)],
+                  alignment: "center",
+                }),
                 ...(job.file?.pages
                   ? [
+                      new Paragraph({ children: [], spacing: { before: 80 } }),
                       new Paragraph({
-                        text: `Pages: ${job.file.pages}`,
+                        children: [new TextRun({ text: "Pages:", bold: true }), new TextRun(` ${job.file.pages}`)],
                         alignment: "center",
                       }),
                     ]
                   : []),
+                new Paragraph({ children: [], spacing: { before: 80 } }),
+                new Paragraph({
+                  children: [new TextRun({ text: "Date:", bold: true }), new TextRun(` ${new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
+                  alignment: "center",
+                }),
                 new Paragraph({ children: [], pageBreakBefore: true }),
                 // Body from parsed markdown
                 ...meta.map((m) => new Paragraph(m)),
@@ -358,34 +376,66 @@ router.get(
           }
           // Measure text heights
           const lineOpts = { width: full, align: "center" as const };
-          pdf.font("Times-Bold").fontSize(22);
-          contentH += pdf.heightOfString(coverTitle, lineOpts) + 6;
+          pdf.font("Times-Bold").fontSize(24);
+          const titleLine = "DEPOSITION SUMMARY";
+          contentH += pdf.heightOfString(titleLine, lineOpts) + 20;
+          
+          pdf.font("Times-Bold").fontSize(14);
+          const deponentLine = `Deponent: ${deponentName}`;
+          contentH += pdf.heightOfString(deponentLine, lineOpts) + 10;
+          
+          const caseLine = `Case Title: ${coverTitle}`;
+          contentH += pdf.heightOfString(caseLine, lineOpts) + 10;
+          
+          const fileLine = `Source File: ${sourceFileName}`;
+          contentH += pdf.heightOfString(fileLine, lineOpts) + 10;
+          
+          let hasPages = false;
+          if (job.file?.pages) {
+            hasPages = true;
+            contentH += pdf.heightOfString(`Pages: ${job.file.pages}`, lineOpts) + 10;
+          }
+          
           pdf.font("Times-Roman").fontSize(12);
           const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
           contentH += pdf.heightOfString(dateLine, lineOpts) + 2;
-          let hasCase = false;
-          let hasPages = false;
-          if (job.file?.title) {
-            hasCase = true;
-            contentH += pdf.heightOfString(`Case: ${job.file.title}`, lineOpts) + 2;
-          }
-          if (job.file?.pages) {
-            hasPages = true;
-            contentH += pdf.heightOfString(`Pages: ${job.file.pages}`, lineOpts) + 2;
-          }
 
           const startY = top + Math.max(0, (usableH - contentH) / 2);
           pdf.y = startY;
           if (logo) {
             const x = lm + (full - targetW) / 2;
             pdf.image(logo.buf, x, pdf.y, { width: targetW });
-            pdf.y += logoH + 16;
+            pdf.y += logoH + 20;
           }
-          pdf.font("Times-Bold").fontSize(22).text(coverTitle, { align: "center" });
-          pdf.moveDown(0.25);
-          pdf.font("Times-Roman").fontSize(12).text(dateLine, { align: "center" });
-          if (hasCase) pdf.text(`Case: ${job.file!.title}`, { align: "center" });
-          if (hasPages) pdf.text(`Pages: ${job.file!.pages}`, { align: "center" });
+          
+          pdf.font("Times-Bold").fontSize(24).text(titleLine, { align: "center" });
+          pdf.moveDown(1);
+          
+          pdf.font("Times-Bold").fontSize(14);
+          pdf.text("Deponent:", { continued: true, align: "center" });
+          pdf.font("Times-Roman").fontSize(14).text(` ${deponentName}`, { align: "center" });
+          pdf.moveDown(0.5);
+          
+          pdf.font("Times-Bold").fontSize(14);
+          pdf.text("Case Title:", { continued: true, align: "center" });
+          pdf.font("Times-Roman").fontSize(14).text(` ${coverTitle}`, { align: "center" });
+          pdf.moveDown(0.5);
+          
+          pdf.font("Times-Bold").fontSize(14);
+          pdf.text("Source File:", { continued: true, align: "center" });
+          pdf.font("Times-Roman").fontSize(14).text(` ${sourceFileName}`, { align: "center" });
+          pdf.moveDown(0.5);
+          
+          if (hasPages) {
+            pdf.font("Times-Bold").fontSize(14);
+            pdf.text("Pages:", { continued: true, align: "center" });
+            pdf.font("Times-Roman").fontSize(14).text(` ${job.file!.pages}`, { align: "center" });
+            pdf.moveDown(0.5);
+          }
+          
+          pdf.font("Times-Bold").fontSize(12);
+          pdf.text("Date:", { continued: true, align: "center" });
+          pdf.font("Times-Roman").fontSize(12).text(` ${new Date(job.createdAt || new Date()).toLocaleDateString()}`, { align: "center" });
         } catch {}
 
         // New page for body
