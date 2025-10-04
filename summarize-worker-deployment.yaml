@@ -115,9 +115,9 @@ spec:
                   key: AZURE_OPENAI_ENDPOINT
             # Production uses GPT-5 for best quality summaries
             - name: AZURE_OPENAI_DEPLOYMENT_NAME
-              value: "gpt-5"  # Your GPT-5 deployment name in Azure
+              value: "gpt-5-testifi"  # Your GPT-5 deployment name in Azure
             - name: AZURE_API_VERSION
-              value: "2024-10-01-preview"  # Latest API version for GPT-5
+              value: "2025-01-01-preview"  # Latest API version for GPT-5
 
       volumes:
         - name: cloudsql-instance-credentials
