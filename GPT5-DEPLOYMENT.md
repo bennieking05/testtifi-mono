@@ -14,10 +14,10 @@ Your TestifiAI backend now supports **two separate deployment environments** wit
   - `summarize-worker-deployment.yaml`
 
 ### **Staging Environment** 🧪
-- **Model:** GPT-4o (stable)
-- **Deployment Name:** `gpt-4o`
-- **API Version:** `2024-08-01-preview`
-- **Purpose:** Reliability testing and baseline comparison
+- **Model:** GPT-5 (same as production for now)
+- **Deployment Name:** `gpt-5`
+- **API Version:** `2024-10-01-preview`
+- **Purpose:** Testing before production deployment. Can be upgraded to GPT-6 or newer models first to test before moving production.
 - **Files:**
   - `backend-deployment.staging.yaml`
   - `summarize-worker-deployment.staging.yaml`
@@ -26,23 +26,20 @@ Your TestifiAI backend now supports **two separate deployment environments** wit
 
 ## Prerequisites
 
-### 1. Create Azure OpenAI Deployments
+### 1. Create Azure OpenAI Deployment
 
-In Azure Portal, create TWO deployments:
+In Azure Portal, create ONE GPT-5 deployment (used by both prod and staging):
 
 ```
 Azure OpenAI Studio → Deployments → + Create new deployment
 
-Deployment 1 (Production):
+Deployment:
   Model: gpt-5 or gpt-5-preview
   Deployment name: gpt-5
   TPM Rate Limit: 150K+ recommended
-  
-Deployment 2 (Staging):
-  Model: gpt-4o
-  Deployment name: gpt-4o
-  TPM Rate Limit: 100K+ recommended
 ```
+
+**Note:** Both production and staging will share the same GPT-5 deployment. In the future, you can create a second deployment (e.g., `gpt-6-preview`) for staging to test newer models before upgrading production.
 
 ### 2. Update Deployment Names (if different)
 
@@ -149,49 +146,71 @@ Cloud Build will:
 
 ---
 
-## Model Comparison
+## GPT-5 Advantages
 
-### GPT-5 Advantages (Production):
 - ✅ More detailed summaries (longer context window)
 - ✅ Better legal terminology understanding
 - ✅ Improved metadata extraction
 - ✅ More accurate page number detection
 - ✅ Better handling of complex multi-party depositions
+- ✅ Improved reasoning for complex testimony
+- ✅ Better document reference extraction
 
-### GPT-4o Advantages (Staging):
-- ✅ Proven stable performance
-- ✅ Lower latency
-- ✅ More predictable token usage
-- ✅ Good baseline for comparison testing
+## Future: Staging as Preview Environment
+
+When GPT-6 or newer models are available, you can:
+1. Create a second deployment (e.g., `gpt-6-preview`)
+2. Update `backend-deployment.staging.yaml` to use it
+3. Test thoroughly in staging
+4. Once validated, upgrade production to GPT-6
 
 ---
 
 ## Cost Considerations
 
 ### Token Pricing (approximate):
-- **GPT-5:** $0.03/1K input tokens, $0.06/1K output tokens
-- **GPT-4o:** $0.005/1K input tokens, $0.015/1K output tokens
+- **GPT-5:** $0.03/1K input tokens, $0.06/1K output tokens (estimate, check Azure pricing)
 
 ### Per Deposition Estimate:
 - **241 PDF pages (~964 transcript pages)**
 - **~48 chunks × 4000 tokens = ~192K tokens**
-  - GPT-5: ~$8-10 per deposition
-  - GPT-4o: ~$1.50-2 per deposition
+  - Estimated cost: ~$8-10 per deposition
 
-Use staging for testing, production for paying customers.
+**Note:** Both production and staging use the same deployment, so costs are combined. Monitor Azure OpenAI usage to optimize.
 
 ---
 
 ## Rollback
 
-If GPT-5 has issues, quickly rollback to stable GPT-4o:
+If GPT-5 has issues, you can:
 
+### Option 1: Create a fallback GPT-4o deployment
 ```bash
-# Quick rollback - deploy staging config to production
-kubectl apply -f backend-deployment.staging.yaml -n default
-kubectl apply -f summarize-worker-deployment.staging.yaml -n default
-kubectl rollout status deployment/backend -n default
-kubectl rollout status deployment/summarize-worker -n default
+# Create GPT-4o deployment in Azure
+az cognitiveservices account deployment create \
+  --name YOUR_RESOURCE \
+  --resource-group YOUR_RG \
+  --deployment-name "gpt-4o-fallback" \
+  --model-name "gpt-4o" \
+  --model-version "2024-08-06" \
+  --model-format OpenAI \
+  --sku-capacity 100 \
+  --sku-name "Standard"
+
+# Update deployments to use fallback
+kubectl set env deployment/backend AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o-fallback -n default
+kubectl set env deployment/summarize-worker AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o-fallback -n default
+```
+
+### Option 2: Roll back to previous Docker image
+```bash
+# Get previous working image
+kubectl rollout history deployment/backend -n default
+kubectl rollout history deployment/summarize-worker -n default
+
+# Rollback
+kubectl rollout undo deployment/backend -n default
+kubectl rollout undo deployment/summarize-worker -n default
 ```
 
 ---

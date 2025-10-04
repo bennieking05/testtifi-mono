@@ -110,7 +110,7 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: STRIPE_WEBHOOK_SECRET
-            # ---------- Azure OpenAI (STAGING - Stable GPT-4) ----------
+            # ---------- Azure OpenAI (STAGING - GPT-5) ----------
             - name: AZURE_OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -121,11 +121,11 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: AZURE_OPENAI_ENDPOINT
-            # Staging uses stable GPT-4 for reliability testing
+            # Staging uses GPT-5 (same as production, can be upgraded to test newer models first)
             - name: AZURE_OPENAI_DEPLOYMENT_NAME
-              value: "gpt-4o"  # Your stable GPT-4 deployment name
+              value: "gpt-5"  # Same as production for now
             - name: AZURE_API_VERSION
-              value: "2024-08-01-preview"  # Stable API version
+              value: "2024-10-01-preview"  # Latest API version
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /var/secrets/google/key.json
           readinessProbe:
