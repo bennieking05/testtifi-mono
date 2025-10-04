@@ -1,15 +1,157 @@
-/Users/bennieking/Sites/testifiAi/backend/node_modules/@prisma/client/runtime/library.js:3
-`),o=o.replace(/\\r/g,"\r")),r[i]=o}return r}function lp(e){let r=Rs(e),t=B.configDotenv({path:r});if(!t.parsed){let s=new Error(`MISSING_DATA: Cannot parse ${r} for an unknown reason`);throw s.code="MISSING_DATA",s}let n=Ss(e).split(","),i=n.length,o;for(let s=0;s<i;s++)try{let a=n[s].trim(),l=cp(t,a);o=B.decrypt(l.ciphertext,l.key);break}catch(a){if(s+1>=i)throw a}return B.parse(o)}function up(e){console.log(`[dotenv@${Ts}][WARN] ${e}`)}function ot(e){console.log(`[dotenv@${Ts}][DEBUG] ${e}`)}function Ss(e){return e&&e.DOTENV_KEY&&e.DOTENV_KEY.length>0?e.DOTENV_KEY:process.env.DOTENV_KEY&&process.env.DOTENV_KEY.length>0?process.env.DOTENV_KEY:""}function cp(e,r){let t;try{t=new URL(r)}catch(a){if(a.code==="ERR_INVALID_URL"){let l=new Error("INVALID_DOTENV_KEY: Wrong format. Must be in valid uri format like dotenv://:key_1234@dotenvx.com/vault/.env.vault?environment=development");throw l.code="INVALID_DOTENV_KEY",l}throw a}let n=t.password;if(!n){let a=new Error("INVALID_DOTENV_KEY: Missing key part");throw a.code="INVALID_DOTENV_KEY",a}let i=t.searchParams.get("environment");if(!i){let a=new Error("INVALID_DOTENV_KEY: Missing environment part");throw a.code="INVALID_DOTENV_KEY",a}let o=`DOTENV_VAULT_${i.toUpperCase()}`,s=e.parsed[o];if(!s){let a=new Error(`NOT_FOUND_DOTENV_ENVIRONMENT: Cannot locate environment ${o} in your .env.vault file.`);throw a.code="NOT_FOUND_DOTENV_ENVIRONMENT",a}return{ciphertext:s,key:n}}function Rs(e){let r=null;if(e&&e.path&&e.path.length>0)if(Array.isArray(e.path))for(let t of e.path)Fi.existsSync(t)&&(r=t.endsWith(".vault")?t:`${t}.vault`);else r=e.path.endsWith(".vault")?e.path:`${e.path}.vault`;else r=Mi.resolve(process.cwd(),".env.vault");return Fi.existsSync(r)?r:null}function Ps(e){return e[0]==="~"?Mi.join(np.homedir(),e.slice(1)):e}function pp(e){!!(e&&e.debug)&&ot("Loading env from encrypted .env.vault");let t=B._parseVault(e),n=process.env;return e&&e.processEnv!=null&&(n=e.processEnv),B.populate(n,t,e),{parsed:t}}function dp(e){let r=Mi.resolve(process.cwd(),".env"),t="utf8",n=!!(e&&e.debug);e&&e.encoding?t=e.encoding:n&&ot("No encoding is specified. UTF-8 is used by default");let i=[r];if(e&&e.path)if(!Array.isArray(e.path))i=[Ps(e.path)];else{i=[];for(let l of e.path)i.push(Ps(l))}let o,s={};for(let l of i)try{let u=B.parse(Fi.readFileSync(l,{encoding:t}));B.populate(s,u,e)}catch(u){n&&ot(`Failed to load ${l} ${u.message}`),o=u}let a=process.env;return e&&e.processEnv!=null&&(a=e.processEnv),B.populate(a,s,e),o?{parsed:s,error:o}:{parsed:s}}function mp(e){if(Ss(e).length===0)return B.configDotenv(e);let r=Rs(e);return r?B._configVault(e):(up(`You set DOTENV_KEY but you are missing a .env.vault file at ${r}. Did you forget to build it?`),B.configDotenv(e))}function fp(e,r){let t=Buffer.from(r.slice(-64),"hex"),n=Buffer.from(e,"base64"),i=n.subarray(0,12),o=n.subarray(-16);n=n.subarray(12,-16);try{let s=ip.createDecipheriv("aes-256-gcm",t,i);return s.setAuthTag(o),`${s.update(n)}${s.final()}`}catch(s){let a=s instanceof RangeError,l=s.message==="Invalid key length",u=s.message==="Unsupported state or unable to authenticate data";if(a||l){let c=new Error("INVALID_DOTENV_KEY: It must be 64 characters long (or more)");throw c.code="INVALID_DOTENV_KEY",c}else if(u){let c=new Error("DECRYPTION_FAILED: Please check your DOTENV_KEY");throw c.code="DECRYPTION_FAILED",c}else throw s}}function gp(e,r,t={}){let n=!!(t&&t.debug),i=!!(t&&t.override);if(typeof r!="object"){let o=new Error("OBJECT_REQUIRED: Please check the processEnv argument being passed to populate");throw o.code="OBJECT_REQUIRED",o}for(let o of Object.keys(r))Object.prototype.hasOwnProperty.call(e,o)?(i===!0&&(e[o]=r[o]),n&&ot(i===!0?`"${o}" is already defined and WAS overwritten`:`"${o}" is already defined and was NOT overwritten`)):e[o]=r[o]}var B={configDotenv:dp,_configVault:pp,_parseVault:lp,config:mp,decrypt:fp,parse:ap,populate:gp};_e.exports.configDotenv=B.configDotenv;_e.exports._configVault=B._configVault;_e.exports._parseVault=B._parseVault;_e.exports.config=B.config;_e.exports.decrypt=B.decrypt;_e.exports.parse=B.parse;_e.exports.populate=B.populate;_e.exports=B});var Os=ue((Kh,cn)=>{"use strict";cn.exports=(e={})=>{let r;if(e.repoUrl)r=e.repoUrl;else if(e.user&&e.repo)r=`https://github.com/${e.user}/${e.repo}`;else throw new Error("You need to specify either the `repoUrl` option or both the `user` and `repo` options");let t=new URL(`${r}/issues/new`),n=["body","title","labels","template","milestone","assignee","projects"];for(let i of n){let o=e[i];if(o!==void 0){if(i==="labels"||i==="projects"){if(!Array.isArray(o))throw new TypeError(`The \`${i}\` option should be an array`);o=o.join(",")}t.searchParams.set(i,o)}}return t.toString()};cn.exports.default=cn.exports});var Ki=ue((vb,ea)=>{"use strict";ea.exports=function(){function e(r,t,n,i,o){return r<t||n<t?r>n?n+1:r+1:i===o?t:t+1}return function(r,t){if(r===t)return 0;if(r.length>t.length){var n=r;r=t,t=n}for(var i=r.length,o=t.length;i>0&&r.charCodeAt(i-1)===t.charCodeAt(o-1);)i--,o--;for(var s=0;s<i&&r.charCodeAt(s)===t.charCodeAt(s);)s++;if(i-=s,o-=s,i===0||o<3)return o;var a=0,l,u,c,p,d,f,h,g,I,T,S,b,D=[];for(l=0;l<i;l++)D.push(l+1),D.push(r.charCodeAt(s+l));for(var me=D.length-1;a<o-3;)for(I=t.charCodeAt(s+(u=a)),T=t.charCodeAt(s+(c=a+1)),S=t.charCodeAt(s+(p=a+2)),b=t.charCodeAt(s+(d=a+3)),f=a+=4,l=0;l<me;l+=2)h=D[l],g=D[l+1],u=e(h,u,c,I,g),c=e(u,c,p,T,g),p=e(c,p,d,S,g),f=e(p,d,f,b,g),D[l]=f,d=p,p=c,c=u,u=h;for(;a<o;)for(I=t.charCodeAt(s+(u=a)),f=++a,l=0;l<me;l+=2)h=D[l],D[l]=f=e(h,u,f,I,D[l+1]),u=h;return f}}()});var oa=Do(()=>{"use strict"});var sa=Do(()=>{"use strict"});var jf={};tr(jf,{DMMF:()=>ct,Debug:()=>N,Decimal:()=>Fe,Extensions:()=>ni,MetricsClient:()=>Lr,PrismaClientInitializationError:()=>P,PrismaClientKnownRequestError:()=>z,PrismaClientRustPanicError:()=>ae,PrismaClientUnknownRequestError:()=>V,PrismaClientValidationError:()=>Z,Public:()=>ii,Sql:()=>ie,createParam:()=>va,defineDmmfProperty:()=>Ca,deserializeJsonResponse:()=>Vr,deserializeRawResult:()=>Xn,dmmfToRuntimeDataModel:()=>Ns,empty:()=>Oa,getPrismaClient:()=>fu,getRuntime:()=>Kn,join:()=>Da,makeStrictEnum:()=>gu,makeTypedQueryFactory:()=>Ia,objectEnumValues:()=>On,raw:()=>no,serializeJsonQuery:()=>$n,skip:()=>Mn,sqltag:()=>io,warnEnvConflicts:()=>hu,warnOnce:()=>at});module.exports=vu(jf);var ni={};tr(ni,{defineExtension:()=>ko,getExtensionContext:()=>_o});function ko(e){return typeof e=="function"?e:r=>r.$extends(e)}function _o(e){return e}var ii={};tr(ii,{validator:()=>No});function No(...e){return r=>r}var Bt={};tr(Bt,{$:()=>qo,bgBlack:()=>ku,bgBlue:()=>Fu,bgCyan:()=>$u,bgGreen:()=>Nu,bgMagenta:()=>Mu,bgRed:()=>_u,bgWhite:()=>qu,bgYellow:()=>Lu,black:()=>Cu,blue:()=>nr,bold:()=>W,cyan:()=>De,dim:()=>Ce,gray:()=>Hr,green:()=>qe,grey:()=>Ou,hidden:()=>Ru,inverse:()=>Su,italic:()=>Tu,magenta:()=>Iu,red:()=>ce,reset:()=>Pu,strikethrough:()=>Au,underline:()=>Y,white:()=>Du,yellow:()=>Ie});var oi,Lo,Fo,Mo,$o=!0;typeof process<"u"&&({FORCE_COLOR:oi,NODE_DISABLE_COLORS:Lo,NO_COLOR:Fo,TERM:Mo}=process.env||{},$o=process.stdout&&process.stdout.isTTY);var qo={enabled:!Lo&&Fo==null&&Mo!=="dumb"&&(oi!=null&&oi!=="0"||$o)};function F(e,r){let t=new RegExp(`\\x1b\\[${r}m`,"g"),n=`\x1B[${e}m`,i=`\x1B[${r}m`;return function(o){return!qo.enabled||o==null?o:n+(~(""+o).indexOf(i)?o.replace(t,i+n):o)+i}}var Pu=F(0,0),W=F(1,22),Ce=F(2,22),Tu=F(3,23),Y=F(4,24),Su=F(7,27),Ru=F(8,28),Au=F(9,29),Cu=F(30,39),ce=F(31,39),qe=F(32,39),Ie=F(33,39),nr=F(34,39),Iu=F(35,39),De=F(36,39),Du=F(37,39),Hr=F(90,39),Ou=F(90,39),ku=F(40,49),_u=F(41,49),Nu=F(42,49),Lu=F(43,49),Fu=F(44,49),Mu=F(45,49),$u=F(46,49),qu=F(47,49);var Vu=100,Vo=["green","yellow","blue","magenta","cyan","red"],Yr=[],jo=Date.now(),ju=0,si=typeof process<"u"?process.env:{};globalThis.DEBUG??=si.DEBUG??"";globalThis.DEBUG_COLORS??=si.DEBUG_COLORS?si.DEBUG_COLORS==="true":!0;var zr={enable(e){typeof e=="string"&&(globalThis.DEBUG=e)},disable(){let e=globalThis.DEBUG;return globalThis.DEBUG="",e},enabled(e){let r=globalThis.DEBUG.split(",").map(i=>i.replace(/[.+?^${}()|[\]\\]/g,"\\$&")),t=r.some(i=>i===""||i[0]==="-"?!1:e.match(RegExp(i.split("*").join(".*")+"$"))),n=r.some(i=>i===""||i[0]!=="-"?!1:e.match(RegExp(i.slice(1).split("*").join(".*")+"$")));return t&&!n},log:(...e)=>{let[r,t,...n]=e;(console.warn??console.log)(`${r} ${t}`,...n)},formatters:{}};function Bu(e){let r={color:Vo[ju++%Vo.length],enabled:zr.enabled(e),namespace:e,log:zr.log,extend:()=>{}},t=(...n)=>{let{enabled:i,namespace:o,color:s,log:a}=r;if(n.length!==0&&Yr.push([o,...n]),Yr.length>Vu&&Yr.shift(),zr.enabled(o)||i){let l=n.map(c=>typeof c=="string"?c:Uu(c)),u=`+${Date.now()-jo}ms`;jo=Date.now(),globalThis.DEBUG_COLORS?a(Bt[s](W(o)),...l,Bt[s](u)):a(o,...l,u)}};return new Proxy(t,{get:(n,i)=>r[i],set:(n,i,o)=>r[i]=o})}var N=new Proxy(Bu,{get:(e,r)=>zr[r],set:(e,r,t)=>zr[r]=t});function Uu(e,r=2){let t=new Set;return JSON.stringify(e,(n,i)=>{if(typeof i=="object"&&i!==null){if(t.has(i))return"[Circular *]";t.add(i)}else if(typeof i=="bigint")return i.toString();return i},r)}function Bo(e=7500){let r=Yr.map(([t,...n])=>`${t} ${n.map(i=>typeof i=="string"?i:JSON.stringify(i)).join(" ")}`).join(`
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
 
-SyntaxError: Unexpected token '??='
-    at wrapSafe (internal/modules/cjs/loader.js:1001:16)
-    at Module._compile (internal/modules/cjs/loader.js:1049:27)
-    at Object.Module._extensions..js (internal/modules/cjs/loader.js:1114:10)
-    at Module.load (internal/modules/cjs/loader.js:950:32)
-    at Function.Module._load (internal/modules/cjs/loader.js:790:12)
-    at Module.require (internal/modules/cjs/loader.js:974:19)
-    at require (internal/modules/cjs/helpers.js:93:18)
-    at Object.<anonymous> (/Users/bennieking/Sites/testifiAi/backend/node_modules/.prisma/client/index.js:29:5)
-    at Module._compile (internal/modules/cjs/loader.js:1085:14)
-    at Object.Module._extensions..js (internal/modules/cjs/loader.js:1114:10)
+> backend@1.0.0 dev
+> ts-node src/server.ts
+
+✔️  Backend listening on port 4000
+[2025-10-04T03:29:19.647Z] GET /api/user
+[2025-10-04T03:29:19.713Z] GET /api/billing/balance
+[2025-10-04T03:29:19.726Z] GET /api/user/credits
+[2025-10-04T03:29:19.730Z] GET /api/user
+[2025-10-04T03:29:19.734Z] GET /api/billing/balance
+[2025-10-04T03:29:19.941Z] GET /api/purchase/user-history
+[2025-10-04T13:10:13.844Z] GET /api/user
+[2025-10-04T13:10:13.856Z] GET /api/billing/balance
+[2025-10-04T13:10:14.866Z] GET /api/billing/balance
+[2025-10-04T13:10:14.868Z] GET /api/user
+[2025-10-04T13:10:16.876Z] GET /api/billing/balance
+[2025-10-04T13:10:16.879Z] GET /api/user
+[2025-10-04T13:10:20.885Z] GET /api/billing/balance
+[2025-10-04T13:10:20.887Z] GET /api/user
+[2025-10-04T13:10:23.012Z] POST /api/auth/login
+[2025-10-04T13:10:23.217Z] GET /api/user
+[2025-10-04T13:10:23.219Z] GET /api/billing/balance
+[2025-10-04T13:10:27.251Z] GET /api/billing/balance
+[2025-10-04T13:10:28.523Z] GET /api/user/credits
+[2025-10-04T13:10:28.528Z] GET /api/billing/balance
+[2025-10-04T13:10:28.545Z] GET /api/purchase/user-history
+[2025-10-04T13:12:42.819Z] GET /api/user/credits
+[2025-10-04T13:12:42.824Z] GET /api/user
+[2025-10-04T13:12:42.828Z] GET /api/billing/balance
+[2025-10-04T13:12:42.836Z] GET /api/user
+[2025-10-04T13:12:43.011Z] GET /api/billing/balance
+[2025-10-04T13:12:43.277Z] GET /api/purchase/user-history
+[2025-10-04T13:15:06.024Z] GET /api/user
+[2025-10-04T13:15:06.030Z] GET /api/billing/balance
+[2025-10-04T13:15:06.042Z] GET /api/user
+[2025-10-04T13:15:06.045Z] GET /api/user/credits
+[2025-10-04T13:15:06.047Z] GET /api/billing/balance
+[2025-10-04T13:15:06.058Z] GET /api/purchase/user-history
+[2025-10-04T13:15:42.584Z] GET /api/billing/balance
+[2025-10-04T13:16:09.628Z] GET /api/billing/balance
+[2025-10-04T13:16:09.650Z] GET /api/summaries
+[2025-10-04T13:16:11.103Z] GET /api/preview?id=d7cf6880-c07b-45af-93fa-53689ca859de
+[2025-10-04T13:16:17.777Z] GET /api/billing/balance
+[2025-10-04T13:16:37.255Z] POST /api/upload
+[2025-10-04T13:16:46.267Z] POST /api/billing/debit
+[2025-10-04T13:16:46.327Z] GET /api/billing/balance
+[2025-10-04T13:17:31.333Z] GET /api/billing/balance
+[2025-10-04T13:48:26.182Z] GET /api/user
+[2025-10-04T13:48:26.190Z] GET /api/billing/balance
+[2025-10-04T13:48:26.193Z] GET /api/user/credits
+[2025-10-04T13:48:26.209Z] GET /api/user
+[2025-10-04T13:48:26.211Z] GET /api/billing/balance
+[2025-10-04T13:48:26.216Z] GET /api/purchase/user-history
+[2025-10-04T16:39:01.681Z] GET /api/user
+[2025-10-04T16:39:01.748Z] GET /api/billing/balance
+[2025-10-04T16:39:02.756Z] GET /api/user
+[2025-10-04T16:39:02.761Z] GET /api/billing/balance
+[2025-10-04T16:39:04.768Z] GET /api/user
+[2025-10-04T16:39:04.771Z] GET /api/billing/balance
+[2025-10-04T16:39:08.711Z] POST /api/auth/login
+[2025-10-04T16:39:09.046Z] GET /api/user
+[2025-10-04T16:39:09.079Z] GET /api/billing/balance
+[2025-10-04T16:39:15.175Z] GET /api/billing/balance
+[2025-10-04T16:39:19.197Z] GET /api/billing/balance
+[2025-10-04T16:39:19.201Z] GET /api/summaries
+[2025-10-04T16:39:20.424Z] GET /api/billing/balance
+[2025-10-04T16:39:42.847Z] POST /api/upload
+[2025-10-04T16:39:55.135Z] POST /api/billing/debit
+[2025-10-04T16:39:55.197Z] GET /api/billing/balance
+[2025-10-04T16:39:55.223Z] GET /api/summaries
+[2025-10-04T16:39:56.524Z] POST /api/email-notifications
+[2025-10-04T16:40:05.359Z] GET /api/summaries
+[2025-10-04T16:40:15.386Z] GET /api/summaries
+[2025-10-04T16:40:25.422Z] GET /api/summaries
+[2025-10-04T16:40:35.458Z] GET /api/summaries
+[2025-10-04T16:40:45.488Z] GET /api/summaries
+[2025-10-04T16:40:55.525Z] GET /api/summaries
+[2025-10-04T16:41:05.564Z] GET /api/summaries
+[2025-10-04T16:41:15.600Z] GET /api/summaries
+[2025-10-04T16:41:25.637Z] GET /api/summaries
+[2025-10-04T16:41:35.673Z] GET /api/summaries
+[2025-10-04T16:41:45.709Z] GET /api/summaries
+[2025-10-04T16:41:55.746Z] GET /api/summaries
+[2025-10-04T16:42:05.780Z] GET /api/summaries
+[2025-10-04T16:42:15.817Z] GET /api/summaries
+[2025-10-04T16:42:25.857Z] GET /api/summaries
+[2025-10-04T16:42:35.893Z] GET /api/summaries
+[2025-10-04T16:42:45.931Z] GET /api/summaries
+[2025-10-04T16:42:55.967Z] GET /api/summaries
+[2025-10-04T16:43:05.995Z] GET /api/summaries
+[2025-10-04T16:43:16.029Z] GET /api/summaries
+[2025-10-04T16:43:26.066Z] GET /api/summaries
+[2025-10-04T16:43:36.102Z] GET /api/summaries
+[2025-10-04T16:43:46.132Z] GET /api/summaries
+[2025-10-04T16:43:56.158Z] GET /api/summaries
+[2025-10-04T16:44:06.195Z] GET /api/summaries
+[2025-10-04T16:44:16.231Z] GET /api/summaries
+[2025-10-04T16:44:26.268Z] GET /api/summaries
+[2025-10-04T16:44:36.305Z] GET /api/summaries
+[2025-10-04T16:44:46.344Z] GET /api/summaries
+[2025-10-04T16:44:56.383Z] GET /api/summaries
+[2025-10-04T16:45:06.419Z] GET /api/summaries
+[2025-10-04T16:45:16.454Z] GET /api/summaries
+[2025-10-04T16:45:26.493Z] GET /api/summaries
+[2025-10-04T16:45:36.553Z] GET /api/summaries
+[2025-10-04T16:45:46.591Z] GET /api/summaries
+[2025-10-04T16:45:56.629Z] GET /api/summaries
+[2025-10-04T16:46:06.664Z] GET /api/summaries
+[2025-10-04T16:46:16.702Z] GET /api/summaries
+[2025-10-04T16:46:26.741Z] GET /api/summaries
+[2025-10-04T16:46:36.780Z] GET /api/summaries
+[2025-10-04T16:46:46.816Z] GET /api/summaries
+[2025-10-04T16:46:56.854Z] GET /api/summaries
+[2025-10-04T16:47:06.888Z] GET /api/summaries
+[2025-10-04T16:47:16.946Z] GET /api/summaries
+[2025-10-04T16:47:26.987Z] GET /api/summaries
+[2025-10-04T16:47:37.025Z] GET /api/summaries
+[2025-10-04T16:47:47.059Z] GET /api/summaries
+[2025-10-04T16:47:57.095Z] GET /api/summaries
+[2025-10-04T16:48:07.132Z] GET /api/summaries
+[2025-10-04T16:48:17.170Z] GET /api/summaries
+[2025-10-04T16:48:27.199Z] GET /api/summaries
+[2025-10-04T16:48:37.234Z] GET /api/summaries
+[2025-10-04T16:48:47.275Z] GET /api/summaries
+[2025-10-04T16:48:57.313Z] GET /api/summaries
+[2025-10-04T16:49:07.355Z] GET /api/summaries
+[2025-10-04T16:49:17.391Z] GET /api/summaries
+[2025-10-04T16:49:27.451Z] GET /api/summaries
+[2025-10-04T16:49:37.497Z] GET /api/summaries
+[2025-10-04T16:49:47.534Z] GET /api/summaries
+[2025-10-04T16:49:57.574Z] GET /api/summaries
+[2025-10-04T16:50:07.613Z] GET /api/summaries
+[2025-10-04T16:50:17.664Z] GET /api/summaries
+[2025-10-04T16:50:27.702Z] GET /api/summaries
+[2025-10-04T16:50:37.737Z] GET /api/summaries
+[2025-10-04T16:50:47.774Z] GET /api/summaries
+[2025-10-04T16:50:57.810Z] GET /api/summaries
+[2025-10-04T16:51:07.848Z] GET /api/summaries
+[2025-10-04T16:51:17.886Z] GET /api/summaries
+[2025-10-04T16:51:27.922Z] GET /api/summaries
+[2025-10-04T16:51:37.959Z] GET /api/summaries
+[2025-10-04T16:51:48.019Z] GET /api/summaries
+[2025-10-04T16:51:58.058Z] GET /api/summaries
+[2025-10-04T16:52:08.096Z] GET /api/summaries
+[2025-10-04T16:52:18.622Z] GET /api/user
+[2025-10-04T16:52:18.624Z] GET /api/billing/balance
+[2025-10-04T16:52:18.624Z] GET /api/summaries
+[2025-10-04T16:52:22.699Z] GET /api/preview?id=d7cf6880-c07b-45af-93fa-53689ca859de
+[2025-10-04T16:52:28.664Z] GET /api/summaries
+[2025-10-04T16:52:38.695Z] GET /api/summaries
+[2025-10-04T16:52:48.726Z] GET /api/summaries
+[2025-10-04T16:52:49.881Z] GET /api/billing/balance
+[2025-10-04T16:52:51.181Z] GET /api/billing/balance
+[2025-10-04T16:53:00.732Z] GET /api/billing/balance
+[2025-10-04T16:53:05.845Z] GET /api/download?jobId=d7cf6880-c07b-45af-93fa-53689ca859de&format=txt
+[2025-10-04T17:12:19.913Z] GET /api/user
+[2025-10-04T17:12:19.944Z] GET /api/billing/balance

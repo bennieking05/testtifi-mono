@@ -18,6 +18,7 @@ import emailNotificationRoutes from "./routes/emailNotificationRoutes";
 import snapshotsRoutes from "./routes/snapshotsRoutes";
 import webCopyRoutes from "./routes/webCopyRoutes";
 import validationRoutes from "./routes/validationRoutes";
+import adminRoutes from "./routes/adminRoutes";
 
 dotenv.config();
 
@@ -65,6 +66,7 @@ app.use("/api/preview", previeqwRoutes);
 app.use("/api/snapshots", snapshotsRoutes);
 app.use("/api/webcopy", webCopyRoutes);
 app.use("/api/validation", validationRoutes);
+app.use("/api/admin", adminRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>
