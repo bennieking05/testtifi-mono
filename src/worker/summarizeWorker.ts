@@ -29,7 +29,7 @@ console.log("=== Worker starting ===");
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
 const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 5 : 6);
 const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
-const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 3);
+const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1); // Reduced from 3 to 1 to avoid rate limits
 const WORKER_ID = process.env.WORKER_ID || os.hostname();
 
 async function extractFullText(
@@ -401,7 +401,7 @@ async function work() {
                   typeof cfg.temperature === "number" ? cfg.temperature : 0.0
                 );
               },
-              { retries: 3, minDelayMs: 1000, maxDelayMs: 5000 }
+              { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 } // Increased retries and delays for rate limits
             );
             parts[i] = resp.choices[0].message.content.trim();
             // Best-effort progress update
