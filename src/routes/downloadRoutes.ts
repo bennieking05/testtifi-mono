@@ -46,6 +46,7 @@ function loadLogo(): { buf: Buffer; mime: string; width?: number; height?: numbe
     process.env.LOGO_PATH,
     path.resolve(__dirname, "../../../og-image.png"), // typical during runtime (dist/src/routes -> ../../../)
     path.resolve(process.cwd(), "og-image.png"),
+    path.resolve(process.cwd(), "backend/og-image.png"),
     // Common repo paths during local/dev
     path.resolve(process.cwd(), "loveable/public/testifi_light_logo.png"),
     path.resolve(process.cwd(), "loveable/public/testifi_dark_logo.png"),
@@ -68,9 +69,13 @@ function loadLogo(): { buf: Buffer; mime: string; width?: number; height?: numbe
         mime = "image/jpeg";
         // JPEG parsing omitted; we won't have intrinsic size for DOCX scaling.
       }
+      console.log(`✓ Logo loaded successfully from: ${p}`);
       return { buf, mime, width, height };
-    } catch {}
+    } catch (err) {
+      console.log(`✗ Failed to load logo from: ${p}`, err);
+    }
   }
+  console.warn("⚠ No logo file found. Checked paths:", candidates);
   return null;
 }
 
@@ -163,18 +168,36 @@ router.get(
     const sourceFileName = job.fileName || "Unknown Source";
     const coverTitle = uploadedTitle;
 
+    console.log(`[Download] Job ID: ${jobId}, Format: ${format}`);
+    console.log(`[Download] File data:`, {
+      title: job.file?.title,
+      deponent: job.file?.deponent,
+      pages: job.file?.pages,
+      fileName: job.fileName
+    });
+
     try {
       const [buf] = await bucket.file(key).download();
       const data = buf.toString("utf-8");
       const { meta, rows } = parseMarkdown(data);
       
-      // Extract deponent from metadata
-      let deponentName = "Unknown";
-      const deponentLine = meta.find(l => l.match(/(?:deponent|deposition\s+of):\s*(.+)/i));
-      if (deponentLine) {
-        const match = deponentLine.match(/(?:deponent|deposition\s+of|title\s+of\s+document):\s*(?:transcript\s+summary\s+of\s+)?(.+)/i);
-        if (match) deponentName = match[1].trim();
+      // Use deponent from database first, then try to extract from metadata as fallback
+      let deponentName = job.file?.deponent || "Unknown";
+      if (!job.file?.deponent || deponentName === "Unknown") {
+        const deponentLine = meta.find(l => l.match(/(?:deponent|deposition\s+of):\s*(.+)/i));
+        if (deponentLine) {
+          const match = deponentLine.match(/(?:deponent|deposition\s+of|title\s+of\s+document):\s*(?:transcript\s+summary\s+of\s+)?(.+)/i);
+          if (match) deponentName = match[1].trim();
+        }
       }
+      
+      console.log(`[Download] Cover page info:`, {
+        deponentName,
+        coverTitle,
+        sourceFileName,
+        pages: job.file?.pages,
+        date: new Date(job.createdAt || new Date()).toLocaleDateString()
+      });
 
       // TXT — fixed-width two-column table
       if (format === "txt") {

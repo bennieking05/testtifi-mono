@@ -35,7 +35,7 @@ spec:
 
         # ───────────── Main backend container ───────────────
         - name: backend
-          image: ghcr.io/bennieking05/testifi-backend:latest
+          image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
           resources:
             requests:
               memory: "512Mi" # ← enough for normal operation

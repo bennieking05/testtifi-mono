@@ -155,3 +155,34 @@
 [2025-10-04T16:53:05.845Z] GET /api/download?jobId=d7cf6880-c07b-45af-93fa-53689ca859de&format=txt
 [2025-10-04T17:12:19.913Z] GET /api/user
 [2025-10-04T17:12:19.944Z] GET /api/billing/balance
+[2025-10-04T17:15:00.217Z] GET /api/billing/balance
+[2025-10-04T17:15:00.820Z] GET /api/billing/balance
+[2025-10-04T17:15:00.824Z] GET /api/summaries
+[2025-10-04T17:15:03.443Z] GET /api/preview?id=d7cf6880-c07b-45af-93fa-53689ca859de
+[2025-10-04T17:15:10.919Z] GET /api/summaries
+[2025-10-04T17:15:20.958Z] GET /api/summaries
+✔️  /health check received
+[2025-10-04T20:20:13.514Z] GET /api/user/credits
+[2025-10-04T20:20:16.094Z] GET /api/purchase/user-history
+✔️  /health check received
+✔️  /health check received
+[2025-10-04T20:20:48.176Z] GET /api/user/credits
+[2025-10-04T20:20:48.263Z] GET /api/purchase/user-history
+[2025-10-04T20:50:05.292Z] GET /api/user/credits
+[2025-10-04T20:50:05.309Z] GET /api/user
+[2025-10-04T20:50:05.314Z] GET /api/billing/balance
+[2025-10-04T20:50:05.321Z] GET /api/purchase/user-history
+[2025-10-04T20:50:05.322Z] GET /api/user
+[2025-10-04T20:50:05.324Z] GET /api/billing/balance
+[2025-10-04T20:50:05.329Z] GET /api/summaries
+[2025-10-05T03:15:26.878Z] GET /api/user
+[2025-10-05T03:15:26.891Z] GET /api/billing/balance
+[2025-10-05T03:15:28.916Z] GET /api/user
+[2025-10-05T03:15:28.917Z] GET /api/billing/balance
+[2025-10-05T03:53:36.183Z] GET /api/user/credits
+[2025-10-05T03:53:36.211Z] GET /api/user
+[2025-10-05T03:53:36.214Z] GET /api/user
+[2025-10-05T03:53:36.216Z] GET /api/billing/balance
+[2025-10-05T03:53:36.223Z] GET /api/billing/balance
+[2025-10-05T03:53:36.225Z] GET /api/purchase/user-history
+[2025-10-05T03:53:36.226Z] GET /api/summaries
