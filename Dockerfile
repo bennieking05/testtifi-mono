@@ -34,6 +34,9 @@ COPY --from=build /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
 COPY --from=build /usr/src/app/prisma ./prisma
 COPY --from=build /usr/src/app/config ./config
+COPY --from=build /usr/src/app/public/testifi_light_logo.png ./public/testifi_light_logo.png
+COPY --from=build /usr/src/app/public/testifi_dark_logo.png ./public/testifi_dark_logo.png
+COPY --from=build /usr/src/app/public/og-image.png ./public/og-image.png
 
 EXPOSE 4000
 ENV NODE_ENV=production
@@ -50,6 +53,9 @@ COPY --from=build /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
 COPY --from=build /usr/src/app/prisma ./prisma
 COPY --from=build /usr/src/app/config ./config
+COPY --from=build /usr/src/app/public/testifi_light_logo.png ./public/testifi_light_logo.png
+COPY --from=build /usr/src/app/public/testifi_dark_logo.png ./public/testifi_dark_logo.png
+COPY --from=build /usr/src/app/public/og-image.png ./public/og-image.png
 
 ENV NODE_ENV=production
 

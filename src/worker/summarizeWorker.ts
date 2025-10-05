@@ -425,10 +425,11 @@ async function work() {
               { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 } // Increased retries and delays for rate limits
             );
             parts[i] = resp.choices[0].message.content.trim();
-            // Best-effort progress update
+            // Best-effort progress update - cap at reasonable value
+            const cappedPage = Math.min(chunk.end, 10000); // Cap at 10,000 to avoid showing huge numbers
             await prisma.summaryJob.update({
               where: { id: job.id },
-              data: { lastPageProcessed: chunk.end },
+              data: { lastPageProcessed: cappedPage },
             });
           })
         )
@@ -460,7 +461,7 @@ async function work() {
         data: {
           status: "complete",
           summaryCsvUrl: signedUrl,
-          lastPageProcessed: pages.length ? pages[pages.length - 1].page : 0,
+          lastPageProcessed: pages.length ? Math.min(pages[pages.length - 1].page, 10000) : 0,
           totalPages: pages.length,
           finishedAt: new Date(),
         },
