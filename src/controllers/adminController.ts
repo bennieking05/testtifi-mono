@@ -110,6 +110,30 @@ export class AdminController {
       next(error);
     }
   }
+
+  async resetStuckJobs(
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const { PrismaClient } = require('@prisma/client');
+      const prisma = new PrismaClient();
+      
+      const result = await prisma.summaryJob.updateMany({
+        where: { 
+          status: 'processing',
+          id: { in: ['a98dffa1-d1dc-4cd3-ad03-fc63e887f3f0', 'e0c176c8-69c9-47fa-a898-76a56974062b'] }
+        },
+        data: { status: 'queued' }
+      });
+      
+      await prisma.$disconnect();
+      res.json({ message: `Reset ${result.count} stuck jobs to queued status` });
+    } catch (error) {
+      console.error("[AdminController.resetStuckJobs] Error:", error);
+      next(error);
+    }
+  }
 }
 
 export default new AdminController();

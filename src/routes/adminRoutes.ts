@@ -55,5 +55,11 @@ router.get("/metrics/support", (_req, res, next) => adminController.getSupportMe
  */
 router.get("/metrics/system-health", (_req, res, next) => adminController.getSystemHealth(res, next));
 
+/**
+ * POST /api/admin/reset-stuck-jobs
+ * Resets stuck processing jobs to queued status
+ */
+router.post("/reset-stuck-jobs", (_req, res, next) => adminController.resetStuckJobs(res, next));
+
 export default router;
 
