@@ -18,8 +18,7 @@ import {
 } from "docx";
 import PDFDocument from "pdfkit";
 import stream from "stream";
-import fs from "fs";
-import path from "path";
+import { loadLogo } from "../utils/logo";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -38,46 +37,6 @@ export const objectKey = (u: string) => {
     return u;
   }
 };
-
-// Attempt to locate the Testifi AI logo locally.
-function loadLogo(): { buf: Buffer; mime: string; width?: number; height?: number } | null {
-  const candidates = [
-    process.env.LIGHT_LOGO_PATH,
-    process.env.LOGO_PATH,
-    path.resolve(__dirname, "../../../og-image.png"), // typical during runtime (dist/src/routes -> ../../../)
-    path.resolve(process.cwd(), "og-image.png"),
-    path.resolve(process.cwd(), "backend/og-image.png"),
-    // Common repo paths during local/dev
-    path.resolve(process.cwd(), "loveable/public/testifi_light_logo.png"),
-    path.resolve(process.cwd(), "loveable/public/testifi_dark_logo.png"),
-    path.resolve(process.cwd(), "public/testifi_light_logo.png"),
-    path.resolve(process.cwd(), "public/testifi_dark_logo.png"),
-  ].filter(Boolean) as string[];
-
-  for (const p of candidates) {
-    try {
-      if (!fs.existsSync(p)) continue;
-      const buf = fs.readFileSync(p);
-      // Minimal PNG size parsing (IHDR at bytes 16..24)
-      let width: number | undefined;
-      let height: number | undefined;
-      let mime = "image/png";
-      if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-        width = buf.readUInt32BE(16);
-        height = buf.readUInt32BE(20);
-      } else if (buf.length > 2 && buf[0] === 0xff && buf[1] === 0xd8) {
-        mime = "image/jpeg";
-        // JPEG parsing omitted; we won't have intrinsic size for DOCX scaling.
-      }
-      console.log(`✓ Logo loaded successfully from: ${p}`);
-      return { buf, mime, width, height };
-    } catch (err) {
-      console.log(`✗ Failed to load logo from: ${p}`, err);
-    }
-  }
-  console.warn("⚠ No logo file found. Checked paths:", candidates);
-  return null;
-}
 
 // RFC 5987 encoder for UTF-8 filenames in Content-Disposition
 function encodeRFC5987ValueChars(str: string) {

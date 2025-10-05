@@ -3,6 +3,7 @@ import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
+import { getLogoDataUri } from "../utils/logo";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -87,6 +88,7 @@ router.get(
         }
         .cover h1 { font-size: 30pt; margin: 0 0 8pt 0; font-weight: 700; }
         .cover p  { font-size: 12pt; margin: 2pt 0; }
+        .cover img { max-width: 280px; height: auto; margin-bottom: 16pt; }
         .page {
           max-width: 7in;
           margin: 1in auto;
@@ -128,6 +130,8 @@ router.get(
       const coverTitle = job.file?.title || (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
       // ← use job.file.pages instead of pageCount
       const coverPages = job.file?.pages ?? "";
+      const logoDataUri = getLogoDataUri();
+      const logoHtml = logoDataUri ? `<img src="${logoDataUri}" alt="Testifi AI Logo" />` : "";
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`<!doctype html>
@@ -135,6 +139,7 @@ router.get(
 <head><meta charset="utf-8"/><title>Preview</title><style>${css}</style></head>
 <body>
   <div class="cover">
+    ${logoHtml}
     <h1>${coverTitle}</h1>
     ${coverPages ? `<p>Pages: ${coverPages}</p>` : ""}
   </div>
