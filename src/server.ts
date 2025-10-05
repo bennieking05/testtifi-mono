@@ -34,6 +34,28 @@ const health: RequestHandler = (_req, res) => {
 app.get("/health", health); // k8s liveness / readiness
 app.get("/api/health", health); // public Ingress
 
+// Emergency endpoint to reset stuck jobs (no auth required)
+app.post("/api/emergency/reset-stuck-jobs", async (req, res) => {
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    
+    const result = await prisma.summaryJob.updateMany({
+      where: { 
+        status: 'processing',
+        id: { in: ['a98dffa1-d1dc-4cd3-ad03-fc63e887f3f0', 'e0c176c8-69c9-47fa-a898-76a56974062b'] }
+      },
+      data: { status: 'queued' }
+    });
+    
+    await prisma.$disconnect();
+    res.json({ message: `Reset ${result.count} stuck jobs to queued status` });
+  } catch (error) {
+    console.error("Emergency reset error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /* ─────────────── MIDDLEWARE ─────────────────── */
 app.use(cors());
 app.use(express.json());
