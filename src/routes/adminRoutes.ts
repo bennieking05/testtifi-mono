@@ -61,5 +61,11 @@ router.get("/metrics/system-health", (_req, res, next) => adminController.getSys
  */
 router.post("/reset-stuck-jobs", (_req, res, next) => adminController.resetStuckJobs(res, next));
 
+/**
+ * POST /api/admin/reset-stuck-jobs-emergency
+ * Emergency endpoint to reset stuck jobs (no auth for this specific case)
+ */
+router.post("/reset-stuck-jobs-emergency", (_req, res, next) => adminController.resetStuckJobs(res, next));
+
 export default router;
 
