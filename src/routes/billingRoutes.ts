@@ -70,14 +70,31 @@ router.get(
         where: { userId },
       });
 
-      const balance = toNumber(balanceAgg._sum.credits);
-      res.json({ balance });
+      const ledgerBalance = toNumber(balanceAgg._sum.credits);
+      
+      // If ledger is empty, fall back to User.credits for backward compatibility
+      if (ledgerBalance === 0) {
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { credits: true },
+        });
+        const balance = user?.credits ?? 0;
+        res.json({ balance });
+        return;
+      }
+
+      res.json({ balance: ledgerBalance });
     } catch (err: any) {
-      // If the billing tables are not yet present in production, avoid 500s
+      // If the billing tables are not yet present in production, fall back to User.credits
       // Prisma P2021: table does not exist
       const code: string | undefined = err?.code || err?.meta?.code || err?.name;
       if (code === "P2021") {
-        res.json({ balance: 0 });
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { credits: true },
+        });
+        const balance = user?.credits ?? 0;
+        res.json({ balance });
         return;
       }
       throw err;
