@@ -35,7 +35,7 @@ app.get("/health", health); // k8s liveness / readiness
 app.get("/api/health", health); // public Ingress
 
 // Emergency endpoint to reset stuck jobs (no auth required)
-app.post("/api/emergency/reset-stuck-jobs", async (req, res) => {
+app.post("/api/emergency/reset-stuck-jobs", async (_req, res) => {
   try {
     const { PrismaClient } = require('@prisma/client');
     const prisma = new PrismaClient();
@@ -50,7 +50,7 @@ app.post("/api/emergency/reset-stuck-jobs", async (req, res) => {
     
     await prisma.$disconnect();
     res.json({ message: `Reset ${result.count} stuck jobs to queued status` });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Emergency reset error:", error);
     res.status(500).json({ error: error.message });
   }
