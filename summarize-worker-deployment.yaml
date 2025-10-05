@@ -23,10 +23,10 @@ spec:
             - -credential_file=/secrets/cloudsql/credentials.json
           resources:
             requests:
-              cpu: 100m
+              cpu: 50m
               memory: 128Mi
             limits:
-              cpu: 200m
+              cpu: 100m
               memory: 256Mi
           volumeMounts:
             - name: cloudsql-instance-credentials
@@ -41,7 +41,7 @@ spec:
             - dist/worker/summarizeWorker.js
           resources:
             requests:
-              cpu: 500m
+              cpu: 200m
               memory: 1Gi
             limits:
               cpu: "2"
