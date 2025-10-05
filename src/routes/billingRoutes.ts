@@ -254,67 +254,101 @@ router.post(
     }
 
     try {
-      const { entry, allocations } = await prisma.$transaction(async (tx) => {
-        const existing = await tx.ledgerEntry.findUnique({
-          where: { idempotencyKey: `summary:${summaryId}` },
-          include: {
-            creditAllocations: {
-              include: { purchase: true },
+      // Try the new ledger system first
+      try {
+        const { entry, allocations } = await prisma.$transaction(async (tx) => {
+          const existing = await tx.ledgerEntry.findUnique({
+            where: { idempotencyKey: `summary:${summaryId}` },
+            include: {
+              creditAllocations: {
+                include: { purchase: true },
+              },
             },
-          },
-        });
-        if (existing) {
-          return { entry: existing, allocations: existing.creditAllocations };
-        }
-
-        const allocation = await allocateCreditsFIFO(tx, userId, creditsToDebit);
-
-        const ledgerEntry = await tx.ledgerEntry.create({
-          data: {
-            userId,
-            type: "debit",
-            credits: -creditsToDebit,
-            summaryId,
-            description: summaryName ?? undefined,
-            idempotencyKey: `summary:${summaryId}`,
-          },
-        });
-
-        if (allocation.allocations.length > 0) {
-          await tx.creditAllocation.createMany({
-            data: allocation.allocations.map((alloc) => ({
-              debitLedgerId: ledgerEntry.id,
-              purchaseId: alloc.purchaseId,
-              creditsUsed: alloc.creditsUsed,
-            })),
           });
-        }
+          if (existing) {
+            return { entry: existing, allocations: existing.creditAllocations };
+          }
 
-        const entryWithAllocations = await tx.ledgerEntry.findUnique({
-          where: { id: ledgerEntry.id },
-          include: {
-            creditAllocations: {
-              include: { purchase: true },
+          const allocation = await allocateCreditsFIFO(tx, userId, creditsToDebit);
+
+          const ledgerEntry = await tx.ledgerEntry.create({
+            data: {
+              userId,
+              type: "debit",
+              credits: -creditsToDebit,
+              summaryId,
+              description: summaryName ?? undefined,
+              idempotencyKey: `summary:${summaryId}`,
             },
-          },
+          });
+
+          if (allocation.allocations.length > 0) {
+            await tx.creditAllocation.createMany({
+              data: allocation.allocations.map((alloc) => ({
+                debitLedgerId: ledgerEntry.id,
+                purchaseId: alloc.purchaseId,
+                creditsUsed: alloc.creditsUsed,
+              })),
+            });
+          }
+
+          const entryWithAllocations = await tx.ledgerEntry.findUnique({
+            where: { id: ledgerEntry.id },
+            include: {
+              creditAllocations: {
+                include: { purchase: true },
+              },
+            },
+          });
+
+          return {
+            entry: entryWithAllocations!,
+            allocations: entryWithAllocations?.creditAllocations ?? [],
+          };
         });
 
-        return {
-          entry: entryWithAllocations!,
-          allocations: entryWithAllocations?.creditAllocations ?? [],
-        };
-      });
+        const balanceAggregate = await prisma.ledgerEntry.aggregate({
+          _sum: { credits: true },
+          where: { userId },
+        });
 
-      const balanceAggregate = await prisma.ledgerEntry.aggregate({
-        _sum: { credits: true },
-        where: { userId },
-      });
+        res.json({
+          entry,
+          allocations,
+          balance: Number(balanceAggregate._sum.credits ?? 0),
+        });
+        return;
+      } catch (ledgerError: any) {
+        // If the billing tables are not yet present in production, fall back to User.credits
+        // Prisma P2021: table does not exist
+        const code: string | undefined = ledgerError?.code || ledgerError?.meta?.code || ledgerError?.name;
+        if (code === "P2021") {
+          // Fallback to old User.credits system
+          const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { credits: true },
+          });
+          
+          if (!user || user.credits < creditsToDebit) {
+            res.status(400).json({ error: "Insufficient credits" });
+            return;
+          }
 
-      res.json({
-        entry,
-        allocations,
-        balance: Number(balanceAggregate._sum.credits ?? 0),
-      });
+          // Debit from User.credits
+          await prisma.user.update({
+            where: { id: userId },
+            data: { credits: { decrement: creditsToDebit } },
+          });
+
+          res.json({
+            entry: null,
+            allocations: [],
+            balance: user.credits - creditsToDebit,
+          });
+          return;
+        }
+        throw ledgerError;
+      }
     } catch (error) {
       if (error instanceof InsufficientCreditsError) {
         res.status(402).json({ error: "INSUFFICIENT_CREDITS", required: error.required, available: error.available });
