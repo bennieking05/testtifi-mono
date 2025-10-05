@@ -56,6 +56,25 @@ app.post("/api/emergency/reset-stuck-jobs", async (_req, res) => {
   }
 });
 
+// Emergency endpoint to check job status (no auth required)
+app.get("/api/emergency/job-status", async (_req, res) => {
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    
+    const jobs = await prisma.summaryJob.findMany({
+      where: { status: { in: ['queued', 'processing'] } },
+      select: { id: true, status: true, fileName: true, createdAt: true, lastPageProcessed: true, totalPages: true }
+    });
+    
+    await prisma.$disconnect();
+    res.json({ jobs });
+  } catch (error: any) {
+    console.error("Job status error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /* ─────────────── MIDDLEWARE ─────────────────── */
 app.use(cors());
 app.use(express.json());
