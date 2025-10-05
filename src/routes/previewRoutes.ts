@@ -179,9 +179,10 @@ function buildHeaderMeta(job: any, title: string, deponent?: string): string[] {
     title,
     `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`,
     ...(job.file?.title ? [`Case: ${job.file.title}`] : []),
-    ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
     ...(deponent ? [`Deponent: ${deponent}`] : []),
-    "Pagination: Each PDF page contains 4 scanned transcript pages. All references use the inner transcript page numbers.",
+    ...(job.file?.pages ? [`Transcript Pages: ${job.file.pages}`] : []),
+    "",
+    "NOTE: Page references below use the actual transcript page numbers (found in corners/headers of each page), not PDF scan page numbers. The source PDF contains 4 transcript pages per scanned page.",
   ];
 }
 

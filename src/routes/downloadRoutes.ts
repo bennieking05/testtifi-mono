@@ -204,8 +204,11 @@ router.get(
         const col1 = 18;
         const line = "-".repeat(col1 + 2 + 80);
         const header = `${"Page(s)".padEnd(col1)}| Testimony`;
+        const noteText = "NOTE: Page references use actual transcript page numbers (found in corners/headers), not PDF scan page numbers. The source PDF contains 4 transcript pages per scanned page.";
         const body = [
           ...meta,
+          "",
+          noteText,
           "",
           line,
           header,
@@ -306,6 +309,14 @@ router.get(
                 new Paragraph({ children: [], pageBreakBefore: true }),
                 // Body from parsed markdown
                 ...meta.map((m) => new Paragraph(m)),
+                new Paragraph({ children: [], spacing: { before: 80 } }),
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: "NOTE: ", bold: true }),
+                    new TextRun("Page references use actual transcript page numbers (found in corners/headers), not PDF scan page numbers. The source PDF contains 4 transcript pages per scanned page.")
+                  ],
+                }),
+                new Paragraph({ children: [], spacing: { before: 160 } }),
                 new Table({
                   width: { size: 100, type: WidthType.PERCENTAGE },
                   borders: {
@@ -468,6 +479,13 @@ router.get(
         pdf.font("Times-Roman").fontSize(12);
         meta.forEach((l) => pdf.text(l));
         pdf.moveDown(0.5);
+        
+        // Note about page numbering
+        pdf.font("Times-Bold").fontSize(11);
+        pdf.text("NOTE: ", { continued: true });
+        pdf.font("Times-Roman").fontSize(11);
+        pdf.text("Page references use actual transcript page numbers (found in corners/headers), not PDF scan page numbers. The source PDF contains 4 transcript pages per scanned page.");
+        pdf.moveDown(0.8);
 
         // Enclosed table with borders
         const pad = 6;
