@@ -425,8 +425,8 @@ async function work() {
               { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 } // Increased retries and delays for rate limits
             );
             parts[i] = resp.choices[0].message.content.trim();
-            // Best-effort progress update - cap at reasonable value
-            const cappedPage = Math.min(chunk.end, 10000); // Cap at 10,000 to avoid showing huge numbers
+            // Best-effort progress update - cap at total pages
+            const cappedPage = Math.min(chunk.end, pages.length); // Cap at total pages to avoid showing huge numbers
             await prisma.summaryJob.update({
               where: { id: job.id },
               data: { lastPageProcessed: cappedPage },
@@ -461,7 +461,7 @@ async function work() {
         data: {
           status: "complete",
           summaryCsvUrl: signedUrl,
-          lastPageProcessed: pages.length ? Math.min(pages[pages.length - 1].page, 10000) : 0,
+          lastPageProcessed: pages.length ? Math.min(pages[pages.length - 1].page, pages.length) : 0,
           totalPages: pages.length,
           finishedAt: new Date(),
         },
@@ -475,7 +475,7 @@ async function work() {
       if (fresh?.notifyOnComplete && user?.email) {
         console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
         try {
-          const dashboardUrl = `${process.env.BASE_URL}`;
+          const dashboardUrl = `${process.env.BASE_URL}/summaries`;
           try {
             const { subject, body } = await getRenderedEmailTemplate(4, {
               name: user.name || user.email,

@@ -34,6 +34,20 @@ const health: RequestHandler = (_req, res) => {
 app.get("/health", health); // k8s liveness / readiness
 app.get("/api/health", health); // public Ingress
 
+// Stripe webhook must be registered BEFORE any body-parsing middleware
+// so we can access the raw body for signature verification
+app.post(
+  "/api/purchase/stripe-webhook",
+  bodyParser.raw({ type: "application/json" }),
+  stripeWebhookHandler
+);
+
+// Test endpoint for debugging
+app.post("/api/test", (req, res) => {
+  console.log("Test endpoint hit:", req.body);
+  res.json({ message: "Test successful", body: req.body });
+});
+
 // Emergency endpoint to reset stuck jobs (no auth required)
 app.post("/api/emergency/reset-stuck-jobs", async (_req, res) => {
   try {
@@ -80,11 +94,15 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.post(
-  "/api/purchase/stripe-webhook",
-  bodyParser.raw({ type: "application/json" }),
-  stripeWebhookHandler
-);
+// Graceful JSON parse error handler so bad bodies don't crash routes
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err?.type === "entity.parse.failed" || (err instanceof SyntaxError && (err as any).status === 400)) {
+    res.status(400).json({ error: "INVALID_JSON" });
+    return;
+  }
+  next(err);
+});
 
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);

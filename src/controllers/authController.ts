@@ -10,13 +10,24 @@ dotenv.config();
 
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET as string;
-const senderEmail = process.env.EMAIL_USER ?? "admin@testifi.ai";
+const senderEmail = process.env.BREVO_SENDER_EMAIL ?? "admin@testifi.ai";
+
+if (!process.env.BREVO_SENDER_EMAIL) {
+  console.warn(
+    "[authController] BREVO_SENDER_EMAIL not set – using admin@testifi.ai as fallback"
+  );
+}
+
+const sendgridApiKey = process.env.SENDGRID_API_KEY;
+if (!sendgridApiKey) {
+  console.warn("[authController] SENDGRID_API_KEY is not configured – transactional emails will fail.");
+} else {
+  sgMail.setApiKey(sendgridApiKey);
+}
 const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
   /\/+$/,
   ""
 );
-
-sgMail.setApiKey(process.env.SENDGRID_API_KEY as string);
 
 /* ----------------------------------------------------------------------- */
 /*                        SHARED  –  EMAIL HELPER                          */
