@@ -6,6 +6,8 @@ import { Storage } from "@google-cloud/storage";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { randomUUID } from "crypto";
+import { debitCreditsForSummary } from "./billingRoutes";
+import { InsufficientCreditsError } from "../billing/fifoAllocator";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -80,6 +82,35 @@ router.post(
       return;
     }
 
+    // Check credits BEFORE accepting the file upload
+    try {
+      const balanceAggregate = await prisma.ledgerEntry.aggregate({
+        _sum: { credits: true },
+        where: { userId },
+      });
+      const balance = Number(balanceAggregate._sum.credits ?? 0);
+      
+      // If ledger is empty or balance is 0, check fallback User.credits
+      const effectiveBalance = balance > 0 ? balance : (user.credits ?? 0);
+      
+      if (effectiveBalance < 1) {
+        res.status(402).json({ error: "Insufficient credits. Please purchase more credits to create a summary." });
+        return;
+      }
+    } catch (ledgerError: any) {
+      // Fallback to User.credits if LedgerEntry table doesn't exist (P2021)
+      const code: string | undefined = ledgerError?.code || ledgerError?.meta?.code || ledgerError?.name;
+      if (code === "P2021") {
+        if ((user.credits ?? 0) < 1) {
+          res.status(402).json({ error: "Insufficient credits. Please purchase more credits to create a summary." });
+          return;
+        }
+      } else {
+        console.error("Error checking credits:", ledgerError);
+        // Continue with upload if credit check fails unexpectedly
+      }
+    }
+
     const bb = Busboy({
       headers: req.headers,
       highWaterMark: 2 * 1024 * 1024,
@@ -137,6 +168,25 @@ router.post(
             deponent,
             notifyOnComplete
           );
+          
+          // Debit credits immediately after job creation
+          try {
+            await debitCreditsForSummary(userId, job.id, summaryName || info.filename);
+          } catch (debitError) {
+            if (debitError instanceof InsufficientCreditsError) {
+              // Delete the job if debit fails
+              await prisma.summaryJob.delete({ where: { id: job.id } }).catch(() => {});
+              await prisma.file.delete({ where: { id: job.fileId! } }).catch(() => {});
+              res.status(402).json({ 
+                error: "Insufficient credits. Please purchase more credits to create a summary.",
+                required: debitError.required,
+                available: debitError.available
+              });
+              return;
+            }
+            throw debitError;
+          }
+          
           res.json({ jobId: job.id, status: "processing", totalPages: 0 });
         } catch (err: any) {
           console.error("Upload error:", err);

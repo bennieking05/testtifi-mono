@@ -12,6 +12,97 @@ const toNumber = (value?: number | bigint | null): number => {
   return typeof value === "bigint" ? Number(value) : value;
 };
 
+/**
+ * Debits credits for a summary job. Returns the new balance.
+ * Throws InsufficientCreditsError if not enough credits.
+ */
+export async function debitCreditsForSummary(
+  userId: string,
+  summaryId: string,
+  summaryName?: string,
+  creditsNeeded?: number
+): Promise<number> {
+  const creditsToDebit = creditsNeeded ?? Number(process.env.CREDITS_PER_SUMMARY ?? 1);
+  
+  if (!Number.isFinite(creditsToDebit) || creditsToDebit <= 0) {
+    throw new Error("Invalid creditsNeeded");
+  }
+
+  try {
+    // Try the new ledger system first
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.ledgerEntry.findUnique({
+        where: { idempotencyKey: `summary:${summaryId}` },
+      });
+      if (existing) {
+        // Already debited, return current balance
+        const balanceAgg = await tx.ledgerEntry.aggregate({
+          _sum: { credits: true },
+          where: { userId },
+        });
+        return Number(balanceAgg._sum.credits ?? 0);
+      }
+
+      const allocation = await allocateCreditsFIFO(tx, userId, creditsToDebit);
+
+      await tx.ledgerEntry.create({
+        data: {
+          userId,
+          type: "debit",
+          credits: -creditsToDebit,
+          summaryId,
+          description: summaryName ?? undefined,
+          idempotencyKey: `summary:${summaryId}`,
+        },
+      });
+
+      if (allocation.allocations.length > 0) {
+        const ledgerEntry = await tx.ledgerEntry.findUnique({
+          where: { idempotencyKey: `summary:${summaryId}` },
+        });
+        if (ledgerEntry) {
+          await tx.creditAllocation.createMany({
+            data: allocation.allocations.map((alloc) => ({
+              debitLedgerId: ledgerEntry.id,
+              purchaseId: alloc.purchaseId,
+              creditsUsed: alloc.creditsUsed,
+            })),
+          });
+        }
+      }
+
+      const balanceAgg = await tx.ledgerEntry.aggregate({
+        _sum: { credits: true },
+        where: { userId },
+      });
+      return Number(balanceAgg._sum.credits ?? 0);
+    });
+
+    return result;
+  } catch (ledgerError: any) {
+    // Fallback to User.credits if LedgerEntry table doesn't exist (P2021)
+    const code: string | undefined = ledgerError?.code || ledgerError?.meta?.code || ledgerError?.name;
+    if (code === "P2021") {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { credits: true },
+      });
+      
+      if (!user || user.credits < creditsToDebit) {
+        throw new InsufficientCreditsError(creditsToDebit, user?.credits ?? 0);
+      }
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { credits: { decrement: creditsToDebit } },
+      });
+
+      return user.credits - creditsToDebit;
+    }
+    throw ledgerError;
+  }
+}
+
 export const __setPrismaClientForTests = (client: PrismaClient): void => {
   prisma = client;
 };
