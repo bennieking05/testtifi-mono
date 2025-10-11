@@ -280,13 +280,17 @@ async function handleDispute(dispute: Stripe.Dispute): Promise<void> {
 }
 
 export const stripeWebhookHandler = async (req: Request, res: Response): Promise<void> => {
+  console.log("🔔 Stripe webhook received");
+  
   if (!webhookSecret) {
+    console.error("❌ Missing STRIPE_WEBHOOK_SECRET");
     res.status(500).json({ error: "Missing STRIPE_WEBHOOK_SECRET" });
     return;
   }
 
   const signature = req.headers["stripe-signature"] as string | undefined;
   if (!signature) {
+    console.error("❌ Missing stripe-signature header");
     res.status(400).json({ error: "Missing stripe-signature header" });
     return;
   }
@@ -294,8 +298,9 @@ export const stripeWebhookHandler = async (req: Request, res: Response): Promise
   let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
+    console.log(`✅ Webhook verified: ${event.type}`);
   } catch (err: any) {
-    console.error("Stripe webhook signature verification failed", err.message);
+    console.error("❌ Stripe webhook signature verification failed:", err.message);
     res.status(400).send(`Webhook Error: ${err.message}`);
     return;
   }
@@ -303,26 +308,36 @@ export const stripeWebhookHandler = async (req: Request, res: Response): Promise
   try {
     switch ((event as any).type) {
       case "payment_intent.succeeded":
+        console.log("💳 Processing payment_intent.succeeded");
         await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
+        console.log("✅ Payment intent processed successfully");
         break;
       case "checkout.session.completed":
+        console.log("🛒 Processing checkout.session.completed");
         await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
+        console.log("✅ Checkout session processed successfully");
         break;
       case "charge.refund.created":
+        console.log("💸 Processing charge.refund.created");
         await handleRefund((event as any).data.object as Stripe.Refund);
+        console.log("✅ Refund processed successfully");
         break;
       case "charge.dispute.created":
+        console.log("⚠️ Processing charge.dispute.created");
         await handleDispute(event.data.object as Stripe.Dispute);
+        console.log("✅ Dispute processed successfully");
         break;
       default:
+        console.log(`ℹ️ Unhandled webhook type: ${event.type}`);
         break;
     }
   } catch (err: any) {
-    console.error("Stripe webhook processing error", err);
+    console.error("❌ Stripe webhook processing error:", err);
     res.status(500).json({ error: err.message || "Webhook processing failed" });
     return;
   }
 
+  console.log("✅ Webhook handled successfully");
   res.json({ received: true });
 };
 
