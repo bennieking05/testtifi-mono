@@ -423,8 +423,13 @@ router.get(
       return;
     }
 
+    // Only show actual Stripe purchases (not manual credits)
     const purchases = await prisma.purchase.findMany({
-      where: { userId },
+      where: { 
+        userId,
+        stripePaymentIntentId: { not: null as any },
+        status: { in: ["succeeded", "partially_refunded", "refunded"] }
+      },
       orderBy: { createdAt: "desc" },
     });
 

@@ -141,8 +141,8 @@ router.get(
       const { meta, rows } = parseMarkdown(data);
       
       // Use deponent from database first, then try to extract from metadata as fallback
-      let deponentName = job.file?.deponent || "Unknown";
-      if (!job.file?.deponent || deponentName === "Unknown") {
+      let deponentName = job.file?.deponent || "Not Specified";
+      if (!job.file?.deponent || deponentName === "Not Specified") {
         const deponentLine = meta.find(l => l.match(/(?:deponent|deposition\s+of):\s*(.+)/i));
         if (deponentLine) {
           const match = deponentLine.match(/(?:deponent|deposition\s+of|title\s+of\s+document):\s*(?:transcript\s+summary\s+of\s+)?(.+)/i);
@@ -163,11 +163,8 @@ router.get(
         const col1 = 18;
         const line = "-".repeat(col1 + 2 + 80);
         const header = `${"Page(s)".padEnd(col1)}| Testimony`;
-        const noteText = "NOTE: Page references use actual transcript page numbers (found in corners/headers), not PDF scan page numbers. The source PDF contains 4 transcript pages per scanned page.";
         const body = [
           ...meta,
-          "",
-          noteText,
           "",
           line,
           header,
@@ -268,13 +265,6 @@ router.get(
                 new Paragraph({ children: [], pageBreakBefore: true }),
                 // Body from parsed markdown
                 ...meta.map((m) => new Paragraph(m)),
-                new Paragraph({ children: [], spacing: { before: 80 } }),
-                new Paragraph({
-                  children: [
-                    new TextRun({ text: "NOTE: ", bold: true }),
-                    new TextRun("Page references use actual transcript page numbers (found in corners/headers), not PDF scan page numbers. The source PDF contains 4 transcript pages per scanned page.")
-                  ],
-                }),
                 new Paragraph({ children: [], spacing: { before: 160 } }),
                 new Table({
                   width: { size: 100, type: WidthType.PERCENTAGE },
@@ -439,13 +429,6 @@ router.get(
         meta.forEach((l) => pdf.text(l));
         pdf.moveDown(0.5);
         
-        // Note about page numbering
-        pdf.font("Times-Bold").fontSize(11);
-        pdf.text("NOTE: ", { continued: true });
-        pdf.font("Times-Roman").fontSize(11);
-        pdf.text("Page references use actual transcript page numbers (found in corners/headers), not PDF scan page numbers. The source PDF contains 4 transcript pages per scanned page.");
-        pdf.moveDown(0.8);
-
         // Enclosed table with borders
         const pad = 6;
         let y = pdf.y + 18; // add some space after cover
@@ -459,7 +442,6 @@ router.get(
           pdf.heightOfString("Page(s)", { width: pageCol - 2 * pad }),
           pdf.heightOfString("Testimony", { width: sumCol - 2 * pad })
         ) + pad * 2;
-        const tableTop = y;
         pdf.save();
         pdf.lineWidth(1).strokeColor('#9da9bb').fillColor('#eef2f7');
         pdf.rect(tableLeft, y, full, headerH).fillAndStroke('#eef2f7', '#9da9bb');
@@ -469,12 +451,36 @@ router.get(
         pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
         y += headerH;
 
-        // Rows
+        // Rows with page overflow handling
+        const pageHeight = pdf.page.height;
+        const bottomMargin = 60; // Leave space at bottom
+        
         rows.forEach(([p, s]) => {
           pdf.font("Times-Roman").fontSize(11);
           const h1 = pdf.heightOfString(p, { width: pageCol - 2 * pad });
           const h2 = pdf.heightOfString(s, { width: sumCol - 2 * pad });
           const rowH = Math.max(h1, h2) + pad * 2;
+          
+          // Check if row will overflow page
+          if (y + rowH > pageHeight - bottomMargin) {
+            // Add new page
+            pdf.addPage();
+            
+            // Reset y position and restart table
+            y = 80; // Top margin on new page
+            
+            // Redraw table header on new page
+            pdf.font("Times-Bold").fontSize(12);
+            pdf.save();
+            pdf.lineWidth(1).strokeColor('#9da9bb').fillColor('#eef2f7');
+            pdf.rect(tableLeft, y, full, headerH).fillAndStroke('#eef2f7', '#9da9bb');
+            pdf.restore();
+            pdf.fillColor('#000');
+            pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
+            pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
+            y += headerH;
+          }
+          
           // Row box with stronger borders
           pdf.lineWidth(0.75).strokeColor('#c8d0da');
           pdf.rect(tableLeft, y, full, rowH).stroke();
@@ -484,9 +490,7 @@ router.get(
           pdf.text(s, col2Left, y + pad, { width: sumCol - 2 * pad });
           y += rowH;
         });
-        // Outer border (left/right) already drawn per-row; draw table outer frame with stronger stroke
-        pdf.lineWidth(1).strokeColor('#9da9bb');
-        pdf.rect(tableLeft, tableTop, full, y - tableTop).stroke();
+        // No final border needed - each row has its own border
         pdf.end();
         return;
       }
