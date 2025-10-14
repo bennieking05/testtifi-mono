@@ -43,7 +43,14 @@ async function extractFullText(
 
   if (isPDF) {
     const parsed = await pdf(buffer);
-    if (parsed.text.trim().length > 100) return parsed.text;
+    const trimmed = parsed.text.trim();
+    // Check for meaningful text (not just whitespace/newlines)
+    const nonWhitespace = trimmed.replace(/\s/g, '').length;
+    if (nonWhitespace > 100) {
+      console.log(`[${jobId}] PDF text extraction successful: ${trimmed.length} chars (${nonWhitespace} non-whitespace)`);
+      return parsed.text;
+    }
+    console.log(`[${jobId}] PDF appears to be scanned/image-based (only ${nonWhitespace} chars), using Vision API...`);
     return extractTextWithVision(gcsUri, jobId);
   }
 
@@ -173,7 +180,7 @@ function groupPagesToChunks(
   return out;
 }
 
-function extractLegalMetadata(tr: string) {
+function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?: string }) {
   const lines = tr.split(/\r?\n/);
   const header = lines.slice(0, 40).join("\n");
 
@@ -186,15 +193,42 @@ function extractLegalMetadata(tr: string) {
     lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
   const caption = captionLine.trim() || `Civil Action No. ${civil}`;
 
-  const contDep = header.match(/continued\s+deposition\s+of\s+([^\n,]+)/i)?.[1];
-  const depOf = header.match(/deposition\s+of\s+([^\n,]+)/i)?.[1];
-  const deponent = (contDep || depOf || "[Unknown]").trim();
+  // Enhanced deponent extraction patterns
+  let extractedDeponent = null;
+  
+  // Pattern 1: "DEPONENT: RICHARD SACKLER, M.D."
+  const deponentPattern1 = header.match(/DEPONENT:\s*([^\n\r]+)/i);
+  if (deponentPattern1) {
+    extractedDeponent = deponentPattern1[1].trim();
+  }
+  
+  // Pattern 2: "continued deposition of" or "deposition of"
+  if (!extractedDeponent) {
+    const contDep = header.match(/continued\s+deposition\s+of\s+([^\n,]+)/i)?.[1];
+    const depOf = header.match(/deposition\s+of\s+([^\n,]+)/i)?.[1];
+    extractedDeponent = (contDep || depOf)?.trim();
+  }
+  
+  const deponent = extractedDeponent || fileData?.deponent || "[Unknown]";
 
-  const top3 = lines.slice(0, 3).join("\n");
-  const dateRegex =
-    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/;
-  const date =
-    top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0] || "[Unknown]";
+  // Enhanced date extraction patterns
+  let extractedDate = null;
+  
+  // Pattern 1: "DATE: AUGUST 28, 2015"
+  const datePattern1 = header.match(/DATE:\s*([^\n\r]+)/i);
+  if (datePattern1) {
+    extractedDate = datePattern1[1].trim();
+  }
+  
+  // Pattern 2: Standard date format in header
+  if (!extractedDate) {
+    const dateRegex =
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i;
+    const top3 = lines.slice(0, 3).join("\n");
+    extractedDate = top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0];
+  }
+  
+  const date = extractedDate || "[Unknown]";
 
   return `
 Case Caption: ${caption}
@@ -364,7 +398,7 @@ async function work() {
         userId: true,
         fileName: true,
         notifyOnComplete: true,
-        file: { select: { title: true } },
+        file: { select: { title: true, deponent: true } },
       },
     });
 
@@ -388,7 +422,10 @@ async function work() {
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
       const chunks = groupPagesToChunks(pages);
-      const meta = extractLegalMetadata(transcript);
+      const meta = extractLegalMetadata(transcript, { 
+        title: job.file?.title, 
+        deponent: job.file?.deponent || undefined 
+      });
 
       // Persist totalPages early for better UI progress feedback
       try {

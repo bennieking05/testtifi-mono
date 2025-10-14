@@ -2,7 +2,7 @@ import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 
 dotenv.config();
-const senderEmail = process.env.BREVO_SENDER_EMAIL!;
+const senderEmail = process.env.EMAIL_USER!;
 sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 
 function stripHtml(html: string): string {

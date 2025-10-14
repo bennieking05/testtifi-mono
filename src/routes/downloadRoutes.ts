@@ -153,20 +153,46 @@ router.get(
       const data = buf.toString("utf-8");
       const { meta, rows } = parseMarkdown(data);
       
-      // Derive deponent and deposition date from metadata when available
+      // Enhanced metadata extraction and title construction
       let deponentName = job.file?.deponent || "Not Specified";
-      const depLine = meta.find(l => /(?:deponent|deposition\s+of)\s*:/.test(l));
       const titleLike = meta.find(l => /transcript\s+summary\s+of\s+/i.test(l));
-      if (!job.file?.deponent) {
-        let m1 = depLine?.match(/(?:deponent|deposition\s+of)\s*:\s*(.+)/i);
-        if (!m1 && titleLike) m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
-        if (m1) deponentName = m1[1].replace(/\[?unknown\]?/i, "").trim() || deponentName;
+      
+      // Extract deponent from metadata if available
+      if (titleLike) {
+        const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
+        if (m1 && !m1[1].includes("[Unknown]")) {
+          deponentName = m1[1].trim();
+        } else if (job.file?.deponent) {
+          deponentName = job.file.deponent;
+        }
       }
 
+      // Extract deposition date
       let depositionDate: string | null = null;
       const dateLine = meta.find(l => /date\s+of\s+deposition\s*:/i.test(l));
-      const mDate = dateLine?.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
-      if (mDate) depositionDate = mDate[1].replace(/\[?unknown\]?/i, "").trim();
+      if (dateLine && !dateLine.includes("[Unknown]")) {
+        const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
+        if (mDate) depositionDate = mDate[1].trim();
+      }
+
+      // Extract company information from case caption
+      let companyName = "";
+      const captionLine = meta.find(l => /case\s+caption:/i.test(l));
+      if (captionLine) {
+        // Look for company patterns like "PURDUE PHARMA L.P."
+        const companyMatch = captionLine.match(/PURDUE\s+PHARMA[^\s]*/i) || 
+                           captionLine.match(/([A-Z\s]+PHARMA[A-Z\s]*)/i) ||
+                           captionLine.match(/([A-Z\s]+L\.P\.)/i);
+        if (companyMatch) {
+          companyName = companyMatch[1] || companyMatch[0];
+        }
+      }
+
+      // Construct enhanced title
+      let titleOfDocument = `Transcript Summary of ${deponentName}`;
+      if (companyName) {
+        titleOfDocument = `Transcript Summary of ${deponentName} from ${companyName}`;
+      }
       
       console.log(`[Download] Cover page info:`, {
         deponentName,
@@ -247,7 +273,7 @@ router.get(
                   : []),
                 // Cover page
                 new Paragraph({
-                  text: "DEPOSITION SUMMARY",
+                  text: titleOfDocument || "DEPOSITION SUMMARY",
                   alignment: "center",
                   heading: "Heading1",
                 }),
@@ -384,7 +410,7 @@ router.get(
           // Measure text heights
           const lineOpts = { width: full, align: "center" as const };
           pdf.font("Times-Bold").fontSize(24);
-          const titleLine = "DEPOSITION SUMMARY";
+          const titleLine = titleOfDocument || "DEPOSITION SUMMARY";
           contentH += pdf.heightOfString(titleLine, lineOpts) + 20;
           
           pdf.font("Times-Bold").fontSize(14);

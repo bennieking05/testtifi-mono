@@ -10,11 +10,11 @@ dotenv.config();
 
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET as string;
-const senderEmail = process.env.BREVO_SENDER_EMAIL ?? "admin@testifi.ai";
+const senderEmail = process.env.EMAIL_USER ?? "admin@testifi.ai";
 
-if (!process.env.BREVO_SENDER_EMAIL) {
+if (!process.env.EMAIL_USER) {
   console.warn(
-    "[authController] BREVO_SENDER_EMAIL not set – using admin@testifi.ai as fallback"
+    "[authController] EMAIL_USER not set – using admin@testifi.ai as fallback"
   );
 }
 

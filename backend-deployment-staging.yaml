@@ -93,7 +93,7 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: OPENAI_API_KEY
-            - name: BREVO_SENDER_EMAIL
+            - name: EMAIL_USER
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
