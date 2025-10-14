@@ -67,7 +67,8 @@ export function parseMarkdown(md: string) {
       .trim();
 
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
-  const pageRegex = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
+  // A single page token that may appear repeatedly at the start, separated by commas
+  const pageToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
 
   const meta: string[] = [];
   const rows: string[][] = [];
@@ -81,17 +82,29 @@ export function parseMarkdown(md: string) {
     trimmed = clean(trimmed);
     if (!trimmed) return;
 
-    const rowMatch = trimmed.match(pageRegex);
-    if (rowMatch) {
+    // Capture one or more page tokens at the beginning
+    const pages: string[] = [];
+    let rest = trimmed;
+    let m = rest.match(pageToken);
+    while (m) {
+      pages.push(m[0].replace(/\s+/g, " ").trim());
+      rest = rest.slice(m[0].length).trim();
+      // remove delimiter(s) between tokens
+      rest = rest.replace(/^\s*[,|]+\s*/, "");
+      m = rest.match(pageToken);
+    }
+    if (pages.length) {
       seenRow = true;
-      const label = rowMatch[0].replace(/\s+/g, " ").trim();
-      let remainder = trimmed.slice(rowMatch[0].length).trim();
-      remainder = remainder.replace(/^[-–:|]\s*/, "").trim();
-      rows.push([label || "", remainder || ""]);
+      rest = rest.replace(/^[−–:,|\s]+/, "").trim();
+      rows.push([pages.join(", "), rest || ""]);
       return;
     }
 
     if (!seenRow) {
+      // Skip obvious table header lines
+      if (/^\|/.test(trimmed)) return;
+      if (/^page\s*\(s\)\s*\|\s*testimony/i.test(trimmed)) return;
+      if (/^page\s*number\s*\|\s*testimony/i.test(trimmed)) return;
       meta.push(trimmed);
     }
   });
@@ -140,15 +153,20 @@ router.get(
       const data = buf.toString("utf-8");
       const { meta, rows } = parseMarkdown(data);
       
-      // Use deponent from database first, then try to extract from metadata as fallback
+      // Derive deponent and deposition date from metadata when available
       let deponentName = job.file?.deponent || "Not Specified";
-      if (!job.file?.deponent || deponentName === "Not Specified") {
-        const deponentLine = meta.find(l => l.match(/(?:deponent|deposition\s+of):\s*(.+)/i));
-        if (deponentLine) {
-          const match = deponentLine.match(/(?:deponent|deposition\s+of|title\s+of\s+document):\s*(?:transcript\s+summary\s+of\s+)?(.+)/i);
-          if (match) deponentName = match[1].trim();
-        }
+      const depLine = meta.find(l => /(?:deponent|deposition\s+of)\s*:/.test(l));
+      const titleLike = meta.find(l => /transcript\s+summary\s+of\s+/i.test(l));
+      if (!job.file?.deponent) {
+        let m1 = depLine?.match(/(?:deponent|deposition\s+of)\s*:\s*(.+)/i);
+        if (!m1 && titleLike) m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
+        if (m1) deponentName = m1[1].replace(/\[?unknown\]?/i, "").trim() || deponentName;
       }
+
+      let depositionDate: string | null = null;
+      const dateLine = meta.find(l => /date\s+of\s+deposition\s*:/i.test(l));
+      const mDate = dateLine?.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
+      if (mDate) depositionDate = mDate[1].replace(/\[?unknown\]?/i, "").trim();
       
       console.log(`[Download] Cover page info:`, {
         deponentName,
@@ -259,12 +277,18 @@ router.get(
                   : []),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
-                  children: [new TextRun({ text: "Date:", bold: true }), new TextRun(` ${new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
+                  children: [new TextRun({ text: "Date:", bold: true }), new TextRun(` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
                   alignment: "center",
                 }),
                 new Paragraph({ children: [], pageBreakBefore: true }),
-                // Body from parsed markdown
-                ...meta.map((m) => new Paragraph(m)),
+                // Body metadata — show only curated items
+                ...(() => {
+                  const paras: Paragraph[] = [];
+                  if (depositionDate) {
+                    paras.push(new Paragraph(`Date of Deposition: ${depositionDate}`));
+                  }
+                  return paras;
+                })(),
                 new Paragraph({ children: [], spacing: { before: 160 } }),
                 new Table({
                   width: { size: 100, type: WidthType.PERCENTAGE },
@@ -394,40 +418,34 @@ router.get(
           pdf.font("Times-Bold").fontSize(24).text(titleLine, { align: "center" });
           pdf.moveDown(1);
           
-          pdf.font("Times-Bold").fontSize(14);
-          pdf.text("Deponent:", { continued: true, align: "center" });
-          pdf.font("Times-Roman").fontSize(14).text(` ${deponentName}`, { align: "center" });
+          // Use single centered lines to avoid layout overlap from continued+centered text
+          pdf.font("Times-Roman").fontSize(14).text(`Deponent: ${deponentName}`, { align: "center" });
           pdf.moveDown(0.5);
-          
-          pdf.font("Times-Bold").fontSize(14);
-          pdf.text("Case Title:", { continued: true, align: "center" });
-          pdf.font("Times-Roman").fontSize(14).text(` ${coverTitle}`, { align: "center" });
+
+          pdf.font("Times-Roman").fontSize(14).text(`Case Title: ${coverTitle}`, { align: "center" });
           pdf.moveDown(0.5);
-          
-          pdf.font("Times-Bold").fontSize(14);
-          pdf.text("Source File:", { continued: true, align: "center" });
-          pdf.font("Times-Roman").fontSize(14).text(` ${sourceFileName}`, { align: "center" });
+
+          pdf.font("Times-Roman").fontSize(14).text(`Source File: ${sourceFileName}`, { align: "center" });
           pdf.moveDown(0.5);
-          
+
           if (hasPages) {
-            pdf.font("Times-Bold").fontSize(14);
-            pdf.text("Pages:", { continued: true, align: "center" });
-            pdf.font("Times-Roman").fontSize(14).text(` ${job.file!.pages}`, { align: "center" });
+            pdf.font("Times-Roman").fontSize(14).text(`Pages: ${job.file!.pages}` , { align: "center" });
             pdf.moveDown(0.5);
           }
-          
-          pdf.font("Times-Bold").fontSize(12);
-          pdf.text("Date:", { continued: true, align: "center" });
-          pdf.font("Times-Roman").fontSize(12).text(` ${new Date(job.createdAt || new Date()).toLocaleDateString()}`, { align: "center" });
+
+          const dateForCover = depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString();
+          pdf.font("Times-Roman").fontSize(12).text(`Date: ${dateForCover}` , { align: "center" });
         } catch {}
 
         // New page for body
         pdf.addPage();
 
-        // Metadata
+        // Metadata — show only clean extracted items
         pdf.font("Times-Roman").fontSize(12);
-        meta.forEach((l) => pdf.text(l));
-        pdf.moveDown(0.5);
+        const details: string[] = [];
+        if (depositionDate) details.push(`Date of Deposition: ${depositionDate}`);
+        details.forEach((l) => pdf.text(l));
+        if (details.length) pdf.moveDown(0.5);
         
         // Enclosed table with borders
         const pad = 6;
@@ -450,6 +468,8 @@ router.get(
         pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
         pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
         y += headerH;
+        // Ensure body text starts with normal font/size
+        pdf.font("Times-Roman").fontSize(11);
 
         // Rows with page overflow handling
         const pageHeight = pdf.page.height;
@@ -479,6 +499,8 @@ router.get(
             pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
             pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
             y += headerH;
+            // Reset font after drawing header so first row on new page is not bold
+            pdf.font("Times-Roman").fontSize(11);
           }
           
           // Row box with stronger borders
