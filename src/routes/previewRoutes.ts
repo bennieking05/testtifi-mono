@@ -133,6 +133,31 @@ router.get(
       const logoDataUri = getLogoDataUri();
       const logoHtml = logoDataUri ? `<img src="${logoDataUri}" alt="Testifi AI Logo" />` : "";
 
+      // Extract deposition date from metadata
+      let depositionDate: string | null = null;
+      const dateLine = meta.find(l => /date\s+of\s+deposition\s*:/i.test(l));
+      if (dateLine && !dateLine.includes("[Unknown]")) {
+        const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
+        if (mDate) depositionDate = mDate[1].trim();
+      }
+
+      // Extract deponent name
+      let deponentName = job.file?.deponent || "Not Specified";
+      const titleLike = meta.find(l => /transcript\s+summary\s+of\s+/i.test(l));
+      if (titleLike) {
+        const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
+        if (m1 && !m1[1].includes("[Unknown]")) {
+          deponentName = m1[1].trim();
+        }
+      }
+
+      // Construct enhanced title to match DOCX format
+      let titleOfDocument = `Transcript Summary of ${deponentName}`;
+      
+      const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
+      const downloadDate = new Date().toLocaleDateString();
+      const dateForCover = depositionDate || uploadDate;
+      
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`<!doctype html>
 <html lang="en">
@@ -140,8 +165,16 @@ router.get(
 <body>
   <div class="cover">
     ${logoHtml}
-    <h1>${coverTitle}</h1>
-    ${coverPages ? `<p>Pages: ${coverPages}</p>` : ""}
+    <h1>${titleOfDocument}</h1>
+    <div style="text-align: left; margin: 20px 0;">
+      <p><strong>Deponent:</strong> ${deponentName}</p>
+      <p><strong>Case Title:</strong> ${coverTitle}</p>
+      <p><strong>Source File:</strong> ${job.fileName || "Unknown"}</p>
+      ${coverPages ? `<p><strong>Pages:</strong> ${coverPages}</p>` : ""}
+      <p><strong>Date:</strong> ${dateForCover}</p>
+      <p><strong>Upload Date:</strong> ${uploadDate}</p>
+      <p><strong>Download Date:</strong> ${downloadDate}</p>
+    </div>
   </div>
   <div class="page">${htmlBody}</div>
 </body>
@@ -180,12 +213,16 @@ function escapeHtml(s: string): string {
 }
 
 function buildHeaderMeta(job: any, title: string, deponent?: string): string[] {
+  // Extract source filename from job.fileName
+  const sourceFileName = job.fileName || "Unknown";
+  
   return [
     title,
+    `Deponent: ${deponent || "Not Specified"}`,
+    `Case Title: ${job.file?.title || "Not Specified"}`,
+    `Source File: ${sourceFileName}`,
+    ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
     `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`,
-    ...(job.file?.title ? [`Case: ${job.file.title}`] : []),
-    ...(deponent ? [`Deponent: ${deponent}`] : [`Deponent: Not Specified`]),
-    ...(job.file?.pages ? [`Transcript Pages: ${job.file.pages}`] : []),
     "",
   ];
 }

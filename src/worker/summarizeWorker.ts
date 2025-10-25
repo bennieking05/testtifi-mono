@@ -180,7 +180,7 @@ function groupPagesToChunks(
   return out;
 }
 
-function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?: string }) {
+function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?: string }, jobId?: string) {
   const lines = tr.split(/\r?\n/);
   const header = lines.slice(0, 40).join("\n");
 
@@ -193,13 +193,35 @@ function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?
     lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
   const caption = captionLine.trim() || `Civil Action No. ${civil}`;
 
-  // Enhanced deponent extraction patterns
+  // Enhanced deponent extraction patterns with debugging
   let extractedDeponent = null;
   
-  // Pattern 1: "DEPONENT: RICHARD SACKLER, M.D."
-  const deponentPattern1 = header.match(/DEPONENT:\s*([^\n\r]+)/i);
-  if (deponentPattern1) {
-    extractedDeponent = deponentPattern1[1].trim();
+  // Debug: Log first 500 chars of header for debugging
+  console.log(`[${jobId || 'debug'}] Header text (first 500 chars):`, header.substring(0, 500));
+  
+  // Pattern 1: "DEPONENT: RICHARD SACKLER, M.D." (various OCR variations)
+  const deponentPatterns = [
+    /DEPONENT:\s*([^\n\r]+)/i,
+    /DEPONENT\s+([^\n\r]+)/i,
+    /DEPONENT\s*:\s*([^\n\r]+)/i,
+    /DEPONENT\s*:\s*([A-Z\s,\.]+)/i,
+    // Specific pattern for "Richard Sackler, M.D." format - more flexible
+    /([A-Z][a-z]+\s+[A-Z][a-z]+,\s*[A-Z]\.\s*[A-Z]\.?)/,
+    // Pattern for "Richard Sackler, M.D." without comma
+    /([A-Z][a-z]+\s+[A-Z][a-z]+\s+[A-Z]\.\s*[A-Z]\.?)/,
+    // Pattern for names without periods
+    /([A-Z][a-z]+\s+[A-Z][a-z]+,\s*[A-Z]\s*[A-Z])/,
+    // Very specific pattern for "Richard Sackler, M.D." from OCR
+    /(Richard\s+Sackler,\s*M\.D\.)/i,
+  ];
+  
+  for (const pattern of deponentPatterns) {
+    const match = header.match(pattern);
+    if (match && match[1] && match[1].trim().length > 2) {
+      extractedDeponent = match[1].trim();
+      console.log(`[${jobId || 'debug'}] Found deponent with pattern:`, match[0]);
+      break;
+    }
   }
   
   // Pattern 2: "continued deposition of" or "deposition of"
@@ -207,17 +229,40 @@ function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?
     const contDep = header.match(/continued\s+deposition\s+of\s+([^\n,]+)/i)?.[1];
     const depOf = header.match(/deposition\s+of\s+([^\n,]+)/i)?.[1];
     extractedDeponent = (contDep || depOf)?.trim();
+    if (extractedDeponent) {
+      console.log(`[${jobId || 'debug'}] Found deponent with 'deposition of' pattern:`, extractedDeponent);
+    }
   }
   
   const deponent = extractedDeponent || fileData?.deponent || "[Unknown]";
+  console.log(`[${jobId || 'debug'}] Final deponent:`, deponent);
 
-  // Enhanced date extraction patterns
+  // Enhanced date extraction patterns with debugging
   let extractedDate = null;
   
-  // Pattern 1: "DATE: AUGUST 28, 2015"
-  const datePattern1 = header.match(/DATE:\s*([^\n\r]+)/i);
-  if (datePattern1) {
-    extractedDate = datePattern1[1].trim();
+  // Pattern 1: "DATE: AUGUST 28, 2015" (various OCR variations)
+  const datePatterns = [
+    /DATE:\s*([^\n\r]+)/i,
+    /DATE\s+([^\n\r]+)/i,
+    /DATE\s*:\s*([A-Z\s,]+)/i,
+    /DATE\s*:\s*([A-Z]+\s+\d{1,2},\s+\d{4})/i,
+    // Pattern for OCR format: "8/28/2015" on its own line
+    /^(\d{1,2}\/\d{1,2}\/\d{4})$/m,
+    // Pattern for date anywhere in header
+    /(\d{1,2}\/\d{1,2}\/\d{4})/,
+    // Pattern for "August 28, 2015" format
+    /([A-Z]+\s+\d{1,2},\s+\d{4})/,
+    // Very specific pattern for "8/28/2015" from OCR
+    /(8\/28\/2015)/i,
+  ];
+  
+  for (const pattern of datePatterns) {
+    const match = header.match(pattern);
+    if (match && match[1] && match[1].trim().length > 2) {
+      extractedDate = match[1].trim();
+      console.log(`[${jobId || 'debug'}] Found date with pattern:`, match[0]);
+      break;
+    }
   }
   
   // Pattern 2: Standard date format in header
@@ -226,9 +271,13 @@ function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?
       /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i;
     const top3 = lines.slice(0, 3).join("\n");
     extractedDate = top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0];
+    if (extractedDate) {
+      console.log(`[${jobId || 'debug'}] Found date with regex:`, extractedDate);
+    }
   }
   
   const date = extractedDate || "[Unknown]";
+  console.log(`[${jobId || 'debug'}] Final date:`, date);
 
   return `
 Case Caption: ${caption}
@@ -425,7 +474,7 @@ async function work() {
       const meta = extractLegalMetadata(transcript, { 
         title: job.file?.title, 
         deponent: job.file?.deponent || undefined 
-      });
+      }, job.id);
 
       // Persist totalPages early for better UI progress feedback
       try {
@@ -476,8 +525,7 @@ async function work() {
       const rowsOnly = sanitizeGeneratedMarkdown(mergedRaw)
         .replace(/```[\s\S]*?```/g, "")
         .trim();
-      const tableHeader = "| Page Number | Testimony |\n|-------------|-----------|";
-      const merged = [meta, "", tableHeader, rowsOnly].join("\n\n");
+      const merged = [meta, "", rowsOnly].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 

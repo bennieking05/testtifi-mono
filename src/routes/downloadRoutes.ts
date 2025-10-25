@@ -202,19 +202,31 @@ router.get(
         date: new Date(job.createdAt || new Date()).toLocaleDateString()
       });
 
-      // TXT — fixed-width two-column table
+      // TXT — clean text format with consistent title page matching DOCX format
       if (format === "txt") {
-        const col1 = 18;
-        const line = "-".repeat(col1 + 2 + 80);
-        const header = `${"Page(s)".padEnd(col1)}| Testimony`;
-        const body = [
-          ...meta,
+        // Create consistent title page format matching DOCX
+        const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
+        const downloadDate = new Date().toLocaleDateString();
+        const dateForCover = depositionDate || uploadDate;
+        
+        const titlePage = [
+          titleOfDocument || "DEPOSITION SUMMARY",
           "",
-          line,
-          header,
-          line,
-          ...rows.map(([p, s]) => p.padEnd(col1) + "| " + s),
-          line,
+          `Deponent: ${deponentName}`,
+          `Case Title: ${coverTitle}`,
+          `Source File: ${sourceFileName}`,
+          ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
+          `Date: ${dateForCover}`,
+          `Upload Date: ${uploadDate}`,
+          `Download Date: ${downloadDate}`,
+          "",
+          "=".repeat(50),
+          "",
+        ];
+        
+        const body = [
+          ...titlePage,
+          ...rows.map(([p, s]) => `${p}\n${s}\n`),
         ].join("\n");
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         setAttachmentFilename(res, uploadedTitle, "txt");
@@ -280,31 +292,41 @@ router.get(
                 new Paragraph({ children: [], spacing: { before: 120 } }),
                 new Paragraph({
                   children: [new TextRun({ text: "Deponent:", bold: true }), new TextRun(` ${deponentName}`)],
-                  alignment: "center",
+                  alignment: "left",
                 }),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
                   children: [new TextRun({ text: "Case Title:", bold: true }), new TextRun(` ${coverTitle}`)],
-                  alignment: "center",
+                  alignment: "left",
                 }),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
                   children: [new TextRun({ text: "Source File:", bold: true }), new TextRun(` ${sourceFileName}`)],
-                  alignment: "center",
+                  alignment: "left",
                 }),
                 ...(job.file?.pages
                   ? [
                       new Paragraph({ children: [], spacing: { before: 80 } }),
                       new Paragraph({
                         children: [new TextRun({ text: "Pages:", bold: true }), new TextRun(` ${job.file.pages}`)],
-                        alignment: "center",
+                        alignment: "left",
                       }),
                     ]
                   : []),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
                   children: [new TextRun({ text: "Date:", bold: true }), new TextRun(` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
-                  alignment: "center",
+                  alignment: "left",
+                }),
+                new Paragraph({ children: [], spacing: { before: 80 } }),
+                new Paragraph({
+                  children: [new TextRun({ text: "Upload Date:", bold: true }), new TextRun(` ${new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
+                  alignment: "left",
+                }),
+                new Paragraph({ children: [], spacing: { before: 80 } }),
+                new Paragraph({
+                  children: [new TextRun({ text: "Download Date:", bold: true }), new TextRun(` ${new Date().toLocaleDateString()}`)],
+                  alignment: "left",
                 }),
                 new Paragraph({ children: [], pageBreakBefore: true }),
                 // Body metadata — show only curated items
@@ -444,23 +466,30 @@ router.get(
           pdf.font("Times-Bold").fontSize(24).text(titleLine, { align: "center" });
           pdf.moveDown(1);
           
-          // Use single centered lines to avoid layout overlap from continued+centered text
-          pdf.font("Times-Roman").fontSize(14).text(`Deponent: ${deponentName}`, { align: "center" });
+          // Align metadata to the left to match DOCX format
+          pdf.font("Times-Roman").fontSize(14).text(`Deponent: ${deponentName}`, { align: "left" });
           pdf.moveDown(0.5);
 
-          pdf.font("Times-Roman").fontSize(14).text(`Case Title: ${coverTitle}`, { align: "center" });
+          pdf.font("Times-Roman").fontSize(14).text(`Case Title: ${coverTitle}`, { align: "left" });
           pdf.moveDown(0.5);
 
-          pdf.font("Times-Roman").fontSize(14).text(`Source File: ${sourceFileName}`, { align: "center" });
+          pdf.font("Times-Roman").fontSize(14).text(`Source File: ${sourceFileName}`, { align: "left" });
           pdf.moveDown(0.5);
 
           if (hasPages) {
-            pdf.font("Times-Roman").fontSize(14).text(`Pages: ${job.file!.pages}` , { align: "center" });
+            pdf.font("Times-Roman").fontSize(14).text(`Pages: ${job.file!.pages}` , { align: "left" });
             pdf.moveDown(0.5);
           }
 
-          const dateForCover = depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString();
-          pdf.font("Times-Roman").fontSize(12).text(`Date: ${dateForCover}` , { align: "center" });
+          const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
+          const downloadDate = new Date().toLocaleDateString();
+          const dateForCover = depositionDate || uploadDate;
+          
+          pdf.font("Times-Roman").fontSize(14).text(`Date: ${dateForCover}` , { align: "left" });
+          pdf.moveDown(0.5);
+          pdf.font("Times-Roman").fontSize(14).text(`Upload Date: ${uploadDate}` , { align: "left" });
+          pdf.moveDown(0.5);
+          pdf.font("Times-Roman").fontSize(14).text(`Download Date: ${downloadDate}` , { align: "left" });
         } catch {}
 
         // New page for body

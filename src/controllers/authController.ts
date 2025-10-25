@@ -40,7 +40,10 @@ export async function sendEmail(
 ) {
   const msg: MailDataRequired = {
     to,
-    from: senderEmail,
+    from: {
+      email: senderEmail,
+      name: "Testifi AI"
+    },
     subject,
     text: text?.trim() || "This is a transactional email from Testifi AI.",
     html: html?.trim() || undefined,

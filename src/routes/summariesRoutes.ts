@@ -158,4 +158,19 @@ router.put(
   }
 );
 
+/* ───────── GET download history ───────── */
+router.get(
+  "/download-history",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      console.log("Download history endpoint called");
+      res.json([]);
+    } catch (err) {
+      console.error("[GET /api/summaries/download-history] Error:", err);
+      res.status(500).json({ error: "Failed to fetch download history" });
+    }
+  }
+);
+
 export default router;
