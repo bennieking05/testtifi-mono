@@ -1,0 +1,15 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: testifi-tls
+  namespace: default
+spec:
+  secretName: testifi-tls
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - app.testifi.ai
+  usages:
+    - digital signature
+    - key encipherment

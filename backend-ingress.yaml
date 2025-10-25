@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: testifi-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt"
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m" # ← allow up to 512 MiB
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600" # (optional) slow uploads
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600" # (optional) slow upstream
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app.testifi.ai
+      secretName: testifi-tls
+  rules:
+    - host: app.testifi.ai
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

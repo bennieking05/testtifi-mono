@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: default
+
+  # GKE will create a stand‑alone Network‑Endpoint‑Group (NEG) for this
+  # service so the HTTPS load‑balancer can route directly to pod IPs.
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+
+spec:
+  # Internal service; the Ingress is what faces the public Internet.
+  type: ClusterIP
+
+  # Must match the `app: backend` label on the Deployment’s pod template
+  selector:
+    app: backend
+
+  ports:
+    - name: http # canonical port name
+      appProtocol: http # ★ new – lets the LB know this is HTTP
+      protocol: TCP
+      port: 80 # the port the Ingress targets
+      targetPort: 4000 # containerPort exposed in the pod

@@ -1,0 +1,18 @@
+# Prevent sending huge, unnecessary files in Docker context
+.git
+.gitignore
+node_modules
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+coverage
+.DS_Store
+.env
+.env.*
+*.local
+*.log
+**/.cache
+prisma/migrations
+# Keep package-lock if you use it
+# package-lock.json
+

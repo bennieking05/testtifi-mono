@@ -1,0 +1,152 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "4"
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"backend","namespace":"default"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"backend"}},"template":{"metadata":{"labels":{"app":"backend"}},"spec":{"containers":[{"command":["/cloud_sql_proxy","-instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306","-credential_file=/secrets/cloudsql/credentials.json"],"image":"gcr.io/cloudsql-docker/gce-proxy:1.33.2","name":"cloud-sql-proxy","resources":{"limits":{"cpu":"200m","memory":"256Mi"},"requests":{"cpu":"100m","memory":"128Mi"}},"volumeMounts":[{"mountPath":"/secrets/cloudsql","name":"cloudsql-instance-credentials","readOnly":true}]},{"env":[{"name":"NODE_ENV","value":"production"},{"name":"DB_HOST","value":"127.0.0.1"},{"name":"DB_USER","valueFrom":{"secretKeyRef":{"key":"DB_USER","name":"backend-secrets"}}},{"name":"DB_PASSWORD","valueFrom":{"secretKeyRef":{"key":"DB_PASSWORD","name":"backend-secrets"}}},{"name":"DB_NAME","valueFrom":{"secretKeyRef":{"key":"DB_NAME","name":"backend-secrets"}}},{"name":"BREVO_API_KEY","valueFrom":{"secretKeyRef":{"key":"SENDGRID_API_KEY","name":"backend-secrets"}}},{"name":"BREVO_DEFAULT_LIST_ID","valueFrom":{"secretKeyRef":{"key":"OPENAI_API_KEY","name":"backend-secrets"}}},{"name":"EMAIL_USER","valueFrom":{"secretKeyRef":{"key":"EMAIL_USER","name":"backend-secrets"}}},{"name":"GOOGLE_PLACES_API_KEY","valueFrom":{"secretKeyRef":{"key":"JWT_SECRET","name":"backend-secrets"}}},{"name":"BASE_URL","valueFrom":{"secretKeyRef":{"key":"BASE_URL","name":"backend-secrets"}}},{"name":"BACKEND_URL","valueFrom":{"secretKeyRef":{"key":"BACKEND_URL","name":"backend-secrets"}}}],"image":"gcr.io/golden-cosmos-450417-i8/testifi-backend:latest","name":"backend","readinessProbe":{"httpGet":{"path":"/health","port":4000},"initialDelaySeconds":5,"periodSeconds":5},"resources":{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"250m","memory":"256Mi"}}}],"volumes":[{"name":"cloudsql-instance-credentials","secret":{"secretName":"your-cloudsql-credentials"}}]}}}}
+  creationTimestamp: "2025-03-13T01:31:25Z"
+  generation: 8
+  name: backend
+  namespace: default
+  resourceVersion: "885600"
+  uid: 607c9e64-ad06-44b8-90f8-17dd4da1d225
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: backend
+    spec:
+      containers:
+      - command:
+        - /cloud_sql_proxy
+        - -instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306
+        - -credential_file=/secrets/cloudsql/credentials.json
+        image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
+        imagePullPolicy: IfNotPresent
+        name: cloud-sql-proxy
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /secrets/cloudsql
+          name: cloudsql-instance-credentials
+          readOnly: true
+      - env:
+        - name: NODE_ENV
+          value: production
+        - name: DB_HOST
+          value: 127.0.0.1
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              key: DB_USER
+              name: backend-secrets
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: DB_PASSWORD
+              name: backend-secrets
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              key: DB_NAME
+              name: backend-secrets
+        - name: BREVO_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: SENDGRID_API_KEY
+              name: backend-secrets
+        - name: BREVO_DEFAULT_LIST_ID
+          valueFrom:
+            secretKeyRef:
+              key: OPENAI_API_KEY
+              name: backend-secrets
+        - name: EMAIL_USER
+          valueFrom:
+            secretKeyRef:
+              key: EMAIL_USER
+              name: backend-secrets
+        - name: GOOGLE_PLACES_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: JWT_SECRET
+              name: backend-secrets
+        - name: BASE_URL
+          valueFrom:
+            secretKeyRef:
+              key: BASE_URL
+              name: backend-secrets
+        - name: BACKEND_URL
+          valueFrom:
+            secretKeyRef:
+              key: BACKEND_URL
+              name: backend-secrets
+        image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
+        imagePullPolicy: Always
+        name: backend
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: 4000
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: cloudsql-instance-credentials
+        secret:
+          defaultMode: 420
+          secretName: your-cloudsql-credentials
+status:
+  conditions:
+  - lastTransitionTime: "2025-03-13T01:31:26Z"
+    lastUpdateTime: "2025-03-13T01:31:26Z"
+    message: Deployment does not have minimum availability.
+    reason: MinimumReplicasUnavailable
+    status: "False"
+    type: Available
+  - lastTransitionTime: "2025-03-13T23:30:27Z"
+    lastUpdateTime: "2025-03-13T23:35:17Z"
+    message: ReplicaSet "backend-6685b697cf" is progressing.
+    reason: ReplicaSetUpdated
+    status: "True"
+    type: Progressing
+  observedGeneration: 8
+  replicas: 3
+  unavailableReplicas: 3
+  updatedReplicas: 1
