@@ -67,5 +67,6 @@ cd backend && npm run build && npm start
 - 405/CORS between FE:3000 and BE:8000 → check FE `VITE_API_BASE_URL` and BE `ALLOWED_ORIGINS`
 - Okta `invalid_request` → add `http://localhost:3000/login/callback` and/or `http://localhost:8000/login/callback`
 - TLS hostname mismatch → ensure cert matches the ingress host; min TLS 1.2
-
+- Stripe webhook 400 signature errors → register `app.post("/api/purchase/stripe-webhook", bodyParser.raw(...))` **before** `express.json()` and avoid any other body parsers on that route.
+- Unexpected HTML 400 responses → keep the JSON parse error handler (`err.type === "entity.parse.failed"`) after `express.json()` to return `{ "error": "INVALID_JSON" }`.
 
