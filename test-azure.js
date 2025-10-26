@@ -18,3 +18,4 @@ console.log('All Azure configuration tests passed');
 process.exit(0);
 
 
+

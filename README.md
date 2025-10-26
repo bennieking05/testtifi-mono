@@ -17,3 +17,4 @@ Prereqs: Docker Desktop running
 - Frontend image passes `VITE_API_URL=http://localhost:4000` at build time.
 - Backend exposes 4000. Add env in docker-compose.yml as needed (DB, SendGrid, etc.).
 # CI/CD Test - Staging Branch Sat Oct 25 14:13:47 CDT 2025
+# Force sync Sat Oct 25 15:12:08 CDT 2025
