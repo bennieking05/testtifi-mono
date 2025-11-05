@@ -9,6 +9,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
+      - STRIPE_API_KEY=${STRIPE_API_KEY}
       # Optional local paths; adjust as needed
       # - WEB_COPY_PATH=/data/webCopy.md
       # - DATABASE_URL=mysql://user:pass@host:3306/dbname
