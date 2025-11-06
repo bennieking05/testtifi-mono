@@ -19,6 +19,7 @@ import snapshotsRoutes from "./routes/snapshotsRoutes";
 import webCopyRoutes from "./routes/webCopyRoutes";
 import validationRoutes from "./routes/validationRoutes";
 import adminRoutes from "./routes/adminRoutes";
+import debugRoutes from "./routes/debugRoutes";
 
 dotenv.config();
 
@@ -126,6 +127,7 @@ app.use("/api/snapshots", snapshotsRoutes);
 app.use("/api/webcopy", webCopyRoutes);
 app.use("/api/validation", validationRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/debug", debugRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>
