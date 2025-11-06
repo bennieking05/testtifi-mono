@@ -1,6 +1,6 @@
-# Testifi‑AI Repository Onboarding
+# Testifi AI Repository Onboarding
 
-This document orients new contributors and AI agents to the Testifi‑AI repo. It summarizes stack, layout, required environment, common commands, CI/CD, and known pitfalls. Treat `appinstructions.md` at the repo root as the source of truth.
+This document orients new contributors and AI agents to the Testifi AI repo. It summarizes stack, layout, required environment, common commands, CI/CD, and known pitfalls. Treat `appinstructions.md` at the repo root as the source of truth.
 
 ## Stack Overview
 - Frontend: Vite + React + TypeScript in `loveable/`

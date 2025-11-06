@@ -1,4 +1,4 @@
-# Testifi-AI — Docker Quickstart
+# Testifi AI — Docker Quickstart
 
 ## Local containers
 

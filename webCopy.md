@@ -143,7 +143,7 @@
 - Video Tutorials
 - Learn by watching step-by-step videos
 - Getting Started
-- Intro to Testifi‑AI, uploading, and reading your first summary.
+- Intro to Testifi AI, uploading, and reading your first summary.
 - Advanced Features
 - Entity extraction, issue spotting, and configurable export options for legal teams.
 - Best Practices

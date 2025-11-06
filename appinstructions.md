@@ -6,7 +6,7 @@
 ---
 
 ## 1) Product Overview
-**Name:** Testifi‑AI  
+**Name:** Testifi AI  
 **Purpose:** End‑to‑end ingestion and summarization of legal depositions/transcripts with page‑referenced citations, parties/case context, exportable DOCX/PDF, and quality controls suitable for regulated environments.
 
 **Primary Jobs‑to‑Be‑Done**

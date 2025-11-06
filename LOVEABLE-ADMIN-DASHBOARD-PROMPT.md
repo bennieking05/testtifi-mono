@@ -1,4 +1,4 @@
-# Admin Dashboard KPI Enhancement - Loveable.dev Prompt
+N and @perNetwee# Admin Dashboard KPI Enhancement - Loveable.dev Prompt
 
 **INSTRUCTIONS: Copy and paste this entire prompt into Loveable.dev chat interface at:**
 https://lovable.dev/projects/308eeec9-a2cf-43d7-8f93-8cdbdb4c350c
@@ -6,7 +6,7 @@ https://lovable.dev/projects/308eeec9-a2cf-43d7-8f93-8cdbdb4c350c
 ---
 
 ## Context
-Create a comprehensive Admin Analytics Dashboard for Testifi-AI with Overview and Analytics tabs.
+Create a comprehensive Admin Analytics Dashboard for Testifi AI with Overview and Analytics tabs.
 
 **Project Details:**
 - Legal deposition AI summarization SaaS platform
