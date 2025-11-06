@@ -6,7 +6,7 @@ import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 const router = express.Router();
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_API_KEY!, {
-  apiVersion: "2025-08-27.basil",
+  apiVersion: "2025-09-30.clover",
 });
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;

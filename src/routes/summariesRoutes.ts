@@ -162,7 +162,7 @@ router.put(
 router.get(
   "/download-history",
   authenticateToken,
-  async (req: Request, res: Response): Promise<void> => {
+  async (_req: Request, res: Response): Promise<void> => {
     try {
       console.log("Download history endpoint called");
       res.json([]);
