@@ -448,6 +448,19 @@ router.get(
   }
 );
 
+router.get(
+  "/stripe-account",
+  authenticateToken,
+  async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const account = await stripe.accounts.retrieve();
+      res.json({ accountId: account.id });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message ?? "Unable to retrieve account" });
+    }
+  }
+);
+
 export default router;
 export {
   handlePaymentIntentSucceeded,
