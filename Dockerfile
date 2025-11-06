@@ -6,12 +6,11 @@ WORKDIR /usr/src/app
 RUN apk add --no-cache python3 make g++ gcc bash curl net-tools
 
 COPY package*.json ./
+# Copy Prisma schema first (required for postinstall prisma generate)
+COPY prisma ./prisma
 RUN npm install
 
-# Copy Prisma schema first
-COPY prisma ./prisma
-
-# Generate Prisma client
+# Generate Prisma client (postinstall also runs, but ensure availability in CI)
 RUN npx prisma generate
 
 # Copy rest of the code
