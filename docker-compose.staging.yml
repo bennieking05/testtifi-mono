@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  backend:
+    image: ghcr.io/bennieking05/testifi-backend:staging-latest
+    container_name: testifiai-backend
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - STRIPE_API_KEY=${STRIPE_API_KEY}
+    ports:
+      - "4000:4000"
+    restart: unless-stopped
+
+  loveable:
+    image: ghcr.io/bennieking05/p-782854:staging-latest
+    container_name: testifiai-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: testifiai-net
