@@ -1,3 +1,5 @@
+
+dist   
 artifacts/
 playwright-report/
 test-results/
@@ -5,3 +7,4 @@ node_modules/
 *.log
 .DS_Store
 notes.txtk*.pdf
+.env
