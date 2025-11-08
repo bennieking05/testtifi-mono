@@ -1,2 +1,0 @@
--- AlterTable
-ALTER TABLE `File` ADD COLUMN `pages` INTEGER NULL DEFAULT 0;

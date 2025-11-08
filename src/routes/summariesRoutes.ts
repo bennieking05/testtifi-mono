@@ -1,17 +1,18 @@
 // ─── src/routes/summariesRoutes.ts ───────────────────────────────────────────
 import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
-import axios from "axios";
+// import axios from "axios";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { Storage } from "@google-cloud/storage";
+import { loadPromptConfig, savePromptConfig } from "../lib/promptConfig";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const bucket = new Storage().bucket("deposition-summaries");
+// Keeping historical constant for reference; no longer used for estimation
+// const WORDS_PER_PAGE = 300;
 
-const WORDS_PER_PAGE = 300;
-
-/* ────────── helpers ────────── */
+/* ───────── helpers ───────── */
 const toObjectName = (u: string): string => {
   try {
     const { pathname } = new URL(u);
@@ -21,16 +22,9 @@ const toObjectName = (u: string): string => {
   }
 };
 
-async function fetchSummaryText(objectName: string): Promise<string> {
-  const [url] = await bucket.file(objectName).getSignedUrl({
-    action: "read",
-    expires: Date.now() + 3 * 86_400_000, // 3 days
-  });
-  const { data } = await axios.get<string>(url);
-  return data;
-}
+// Legacy helper removed: we now rely on transcript-derived page counts from jobs
 
-/* ────────── LIST all summaries ────────── */
+/* ───────── LIST all summaries ───────── */
 router.get(
   "/",
   authenticateToken,
@@ -42,58 +36,75 @@ router.get(
         return;
       }
 
-      /* 1️⃣  jobs + inline file join */
+      /* 1️⃣ main query (+inline File join) */
       const jobs = await prisma.summaryJob.findMany({
         where: { userId },
         orderBy: { createdAt: "desc" },
         include: { file: true },
       });
 
-      /* 2️⃣  orphan file lookup */
-      const orphanNames = jobs.filter((j) => !j.file).map((j) => j.fileName);
-      const extraFiles =
-        orphanNames.length > 0
-          ? await prisma.file.findMany({
-              where: { fileName: { in: orphanNames } },
-            })
-          : [];
+      /* helper types for TS strict-mode */
+      type JobWithFile = (typeof jobs)[number];
+      type FileWithMeta = Awaited<
+        ReturnType<typeof prisma.file.findMany>
+      >[number];
+
+      /* 2️⃣ “orphan” lookup for jobs that lost their File row */
+      const orphanNames = jobs
+        .filter((j: JobWithFile) => !j.file)
+        .map((j: { fileName: any }) => j.fileName);
+
+      const extraFiles: FileWithMeta[] = orphanNames.length
+        ? await prisma.file.findMany({
+            where: { fileName: { in: orphanNames } },
+          })
+        : [];
+
       const fileByName = Object.fromEntries(
         extraFiles.map((f) => [f.fileName, f])
       );
 
-      /* 3️⃣  build API response */
+      /* 3️⃣ build response */
       const summaries = await Promise.all(
-        jobs.map(async (job) => {
+        jobs.map(async (job: JobWithFile) => {
           const file = job.file ?? fileByName[job.fileName];
 
           const objectName = job.summaryCsvUrl
             ? toObjectName(job.summaryCsvUrl)
             : file?.summaryFileName ?? `summary-${job.id}.md`;
 
-          /* page estimate from live word‑count */
-          let pages = file?.pages ?? job.totalPages ?? 0;
-          try {
-            const txt = await fetchSummaryText(objectName);
-            pages = Math.ceil(txt.trim().split(/\s+/).length / WORDS_PER_PAGE);
-          } catch (e) {
-            console.warn("fetchSummaryText failed:", (e as any).message);
-          }
+          // Accurate page counts: report the transcript page count from the job
+          const pages = job.totalPages;
 
-          /* signed URL (3 days) */
-          const signedUrl = (
-            await bucket.file(objectName).getSignedUrl({
-              action: "read",
-              expires: Date.now() + 3 * 86_400_000,
-            })
-          )[0];
+          /* signed URL (3 days) */
+          const [signedUrl] = await bucket.file(objectName).getSignedUrl({
+            action: "read",
+            expires: Date.now() + 3 * 86_400_000,
+          });
+
+          /* duration (mins) – only when finishedAt exists */
+          const timeMinutes =
+            job.finishedAt && job.startedAt
+              ? Math.max(
+                  1,
+                  Math.round(
+                    (job.finishedAt.getTime() - job.startedAt.getTime()) /
+                      1000 /
+                      60
+                  )
+                )
+              : undefined;
 
           return {
             id: job.id,
-            title: file?.title || "Untitled Document",
+            fileTitle: file?.title || job.fileName,
             fileName: file?.fileName || job.fileName,
             summaryUrl: signedUrl,
             date: job.createdAt.toISOString(),
             pages,
+            totalPages: job.totalPages,
+            lastPageProcessed: job.lastPageProcessed,
+            timeMinutes, // ← NEW
             status:
               job.status === "complete"
                 ? "active"
@@ -101,55 +112,63 @@ router.get(
                 ? "error"
                 : "processing",
             error: job.error || undefined,
-            progress: `${job.lastPageProcessed}/${job.totalPages}`,
           };
         })
       );
 
       res.json(summaries);
-      return;
     } catch (err) {
       console.error("[/api/summaries] Error:", err);
       res.status(500).json({ error: "Internal server error" });
-      return;
     }
   }
 );
 
-/* ────────── VIEW one summary as raw markdown ────────── */
+/* ───────── PROMPT CONFIG (GET/PUT) ───────── */
 router.get(
-  "/view",
+  "/prompt-config",
+  authenticateToken,
+  async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const cfg = loadPromptConfig();
+      res.json(cfg);
+    } catch (err) {
+      console.error("[/api/summaries/prompt-config] Error:", err);
+      res.status(500).json({ error: "Failed to load config" });
+    }
+  }
+);
+
+router.put(
+  "/prompt-config",
   authenticateToken,
   async (req: Request, res: Response): Promise<void> => {
-    const { id } = req.query as { id?: string };
-    if (!id) {
-      res.status(400).json({ error: "Missing id" });
-      return;
-    }
-
     try {
-      const userId = (req as any).user?.userId as string;
-      const job = await prisma.summaryJob.findFirst({
-        where: { id, userId },
-        include: { file: true },
+      const { system, temperature, maxTokens } = req.body || {};
+      const saved = savePromptConfig({
+        system: typeof system === "string" ? system : "",
+        temperature: Number(temperature),
+        maxTokens: Number(maxTokens),
       });
-      if (!job) {
-        res.status(404).json({ error: "Summary job not found." });
-        return;
-      }
+      res.json(saved);
+    } catch (err) {
+      console.error("[PUT /api/summaries/prompt-config] Error:", err);
+      res.status(500).json({ error: "Failed to save config" });
+    }
+  }
+);
 
-      const objectName = job.summaryCsvUrl
-        ? toObjectName(job.summaryCsvUrl)
-        : job.file?.summaryFileName ?? `summary-${job.id}.md`;
-
-      const [buf] = await bucket.file(objectName).download();
-      res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-      res.send(buf);
-      return;
-    } catch (e) {
-      console.error("[/api/summaries/view] Error:", e);
-      res.status(404).json({ error: "Summary file not found in storage." });
-      return;
+/* ───────── GET download history ───────── */
+router.get(
+  "/download-history",
+  authenticateToken,
+  async (_req: Request, res: Response): Promise<void> => {
+    try {
+      console.log("Download history endpoint called");
+      res.json([]);
+    } catch (err) {
+      console.error("[GET /api/summaries/download-history] Error:", err);
+      res.status(500).json({ error: "Failed to fetch download history" });
     }
   }
 );

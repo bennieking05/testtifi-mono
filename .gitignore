@@ -1,4 +1,10 @@
-node_modules
-# Keep environment variables out of version control
+
+dist   
+artifacts/
+playwright-report/
+test-results/
+node_modules/
+*.log
+.DS_Store
+notes.txtk*.pdf
 .env
-dist    

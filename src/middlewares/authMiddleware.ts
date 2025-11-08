@@ -57,12 +57,18 @@ export function optionalAuth(
 }
 
 /* ───────────────── admin guard ─────────────────────────── */
+const ADMIN_EMAILS = [
+  "bennieking5@gmail.com",
+  "divaesquire57@gmail.com"
+];
+
 export function requireAdmin(
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ): void {
-  if (req.user?.role !== "admin") {
+  // Check if user email is in the admin whitelist
+  if (!req.user?.email || !ADMIN_EMAILS.includes(req.user.email.toLowerCase())) {
     res.status(403).json({ error: "Admin access required" });
     return;
   }

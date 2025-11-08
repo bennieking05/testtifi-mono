@@ -1,0 +1,67 @@
+{
+  "id": "pi_3SGhBVP0QEFCJzDA1kxr3a8A",
+  "object": "payment_intent",
+  "amount": 5000,
+  "amount_capturable": 0,
+  "amount_details": {
+    "tip": {}
+  },
+  "amount_received": 5000,
+  "application": null,
+  "application_fee_amount": null,
+  "automatic_payment_methods": {
+    "allow_redirects": "never",
+    "enabled": true
+  },
+  "canceled_at": null,
+  "cancellation_reason": null,
+  "capture_method": "automatic_async",
+  "client_secret": "pi_3SGhBVP0QEFCJzDA1kxr3a8A_secret_rIkMrhdBn8RJbfytsA9eNU07O",
+  "confirmation_method": "automatic",
+  "created": 1760106041,
+  "currency": "usd",
+  "customer": null,
+  "description": null,
+  "excluded_payment_method_types": null,
+  "invoice": null,
+  "last_payment_error": null,
+  "latest_charge": "ch_3SGhBVP0QEFCJzDA1ySEwg29",
+  "livemode": false,
+  "metadata": {
+    "credits": "10",
+    "userId": "224adc38-fd8b-4d5f-91af-7995b5413b94"
+  },
+  "next_action": null,
+  "on_behalf_of": null,
+  "payment_method": "pm_1SGhBVP0QEFCJzDA1VfurXUR",
+  "payment_method_configuration_details": {
+    "id": "pmc_1R3l5mP0QEFCJzDAuHCxpHdj",
+    "parent": null
+  },
+  "payment_method_options": {
+    "card": {
+      "installments": null,
+      "mandate_options": null,
+      "network": null,
+      "request_three_d_secure": "automatic"
+    },
+    "link": {
+      "persistent_token": null
+    }
+  },
+  "payment_method_types": [
+    "card",
+    "link"
+  ],
+  "processing": null,
+  "receipt_email": null,
+  "review": null,
+  "setup_future_usage": null,
+  "shipping": null,
+  "source": null,
+  "statement_descriptor": null,
+  "statement_descriptor_suffix": null,
+  "status": "succeeded",
+  "transfer_data": null,
+  "transfer_group": null
+}

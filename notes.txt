@@ -1,0 +1,174 @@
+
+npx prisma migrate deploy inside the live deployment
+
+═══════════════════════════════════════════════════════════════════════════════
+✅ DOWNLOAD COVER PAGE FIX - COMPLETE
+═══════════════════════════════════════════════════════════════════════════════
+
+## Issue Fixed
+Downloaded summaries (DOCX/PDF) were missing logo, deponent, case name, pages.
+
+## What Was Fixed
+✅ Download now uses database fields (File.deponent, File.title, File.pages)
+✅ Logo loading improved with better path detection
+✅ Added debug logging to help troubleshoot
+✅ Both DOCX and PDF formats fixed
+
+## Test It
+```bash
+cd backend
+npm run dev
+# Then download any summary and check cover page
+```
+
+See full details: /DOWNLOAD-COVER-PAGE-FIX.md
+
+═══════════════════════════════════════════════════════════════════════════════
+✅ ADMIN DASHBOARD KPI ENHANCEMENT - COMPLETE
+═══════════════════════════════════════════════════════════════════════════════
+
+## Backend Files Created (Ready to use!)
+
+✅ /backend/src/types/adminTypes.ts
+✅ /backend/src/services/metricsService.ts
+✅ /backend/src/controllers/adminController.ts
+✅ /backend/src/routes/adminRoutes.ts
+✅ /backend/src/server.ts (UPDATED - added admin routes)
+
+**API Endpoints Now Available:**
+- GET /api/admin/metrics/overview
+- GET /api/admin/metrics/revenue?period=30d
+- GET /api/admin/metrics/users?period=30d
+- GET /api/admin/metrics/summaries?period=30d
+- GET /api/admin/metrics/downloads
+- GET /api/admin/metrics/support
+- GET /api/admin/metrics/system-health
+
+All routes protected by: authenticateToken + requireAdmin middleware
+
+═══════════════════════════════════════════════════════════════════════════════
+📋 NEXT STEPS
+═══════════════════════════════════════════════════════════════════════════════
+
+## FRONTEND: Create Components with Loveable.dev
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ LOVEABLE PROMPT CREATED: /LOVEABLE-ADMIN-DASHBOARD-PROMPT.md
+
+**ACTION: Copy the entire contents of LOVEABLE-ADMIN-DASHBOARD-PROMPT.md**
+
+**Then paste into Loveable.dev:**
+👉 https://lovable.dev/projects/308eeec9-a2cf-43d7-8f93-8cdbdb4c350c
+
+Loveable will generate:
+- src/components/admin/KPICard.tsx
+- src/components/admin/AdminOverview.tsx
+- src/components/admin/AdminAnalytics.tsx
+- src/hooks/useAdminMetrics.ts
+- src/pages/Admin.tsx (updated)
+
+═══════════════════════════════════════════════════════════════════════════════
+## BACKEND: Test the Implementation
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Restart your backend server:
+   cd backend
+   npm run dev
+
+2. Test health check:
+   curl http://localhost:4000/health
+
+3. Test admin endpoint (need admin JWT token):
+   curl http://localhost:4000/api/admin/metrics/overview \
+     -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+
+4. Check for any TypeScript errors:
+   cd backend
+   npx tsc --noEmit
+
+5. If errors, run:
+   npm install
+
+═══════════════════════════════════════════════════════════════════════════════
+## DEPLOYMENT
+═══════════════════════════════════════════════════════════════════════════════
+
+Once both backend and frontend are ready:
+
+1. Backend deployment:
+   cd backend
+   npm run build
+   # Deploy to your environment
+   # Run: npx prisma migrate deploy (if needed)
+
+2. Frontend deployment:
+   cd loveable
+   # Loveable.dev will auto-deploy on commit
+   # Or manually: npm run build
+
+3. Verify admin dashboard:
+   - Login as admin user
+   - Navigate to /admin
+   - Click "Overview" tab (should be default)
+   - Verify all KPIs load
+   - Check "Analytics" tab with different periods
+
+4. Test downloads:
+   - Download any summary as DOCX/PDF
+   - Verify cover page has logo, deponent, case name, pages
+
+═══════════════════════════════════════════════════════════════════════════════
+## FEATURES IMPLEMENTED
+═══════════════════════════════════════════════════════════════════════════════
+
+### Admin Dashboard KPIs
+✅ Business Health Metrics (Total Revenue, ARPU, MRR, Growth Rate, etc.)
+✅ User Metrics (Total, Active, Growth, Churn, Retention, Engagement)
+✅ Product Metrics (Summaries, Success Rate, Processing Time, Queue Status)
+✅ Download Metrics (Total, By Format, Top Downloaded, Trends)
+✅ Support Metrics (Tickets, Response Time, Resolution Time, Trends)
+✅ System Health (Queue Depth, Processing Jobs, Error Rate)
+**TOTAL: 39 KPIs Implemented**
+
+### Download Improvements
+✅ Cover pages with logo
+✅ Deponent name from database
+✅ Case title from database
+✅ Page count from database
+✅ Source file name
+✅ Generation date
+✅ Professional formatting
+
+═══════════════════════════════════════════════════════════════════════════════
+## TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════════════════
+
+### If backend errors:
+- Check: npm install (ensure all dependencies)
+- Check: DATABASE_URL in .env
+- Check: JWT_SECRET in .env
+- Check: User has admin role in database
+
+### If frontend errors:
+- Check: VITE_API_URL points to backend
+- Check: User logged in with admin role
+- Check: Browser console for API errors
+- Check: Network tab for failed requests
+
+### If no data shows:
+- Seed some test data in database
+- Create test purchases, users, summaries
+
+### If summarize worker stalls:
+- Monitor `summaryJob` rows stuck in `status: "processing"`
+- Consider adding a safeguard (cron or in-app watchdog) that requeues processing jobs that haven't advanced in N minutes so future restarts don't leave the queue empty
+- Wait 5 minutes for cache to refresh
+
+### If downloads missing cover page:
+- Check backend console for logo loading messages
+- Verify: ls -la backend/og-image.png
+- Copy if needed: cp loveable/public/testifi_light_logo.png backend/og-image.png
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF IMPLEMENTATION GUIDE
+═══════════════════════════════════════════════════════════════════════════════

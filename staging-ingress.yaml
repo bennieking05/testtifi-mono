@@ -1,0 +1,57 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: testifi-staging-frontend
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt"
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app.testifi.ai
+      secretName: testifi-tls
+  rules:
+    - host: app.testifi.ai
+      http:
+        paths:
+          - path: /staging(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-staging
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: testifi-staging-api
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt"
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /api/$2
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app.testifi.ai
+      secretName: testifi-tls
+  rules:
+    - host: app.testifi.ai
+      http:
+        paths:
+          - path: /staging/api(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-staging
+                port:
+                  number: 80

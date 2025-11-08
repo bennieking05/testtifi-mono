@@ -1,20 +1,33 @@
-// ─── src/controllers/authController.ts ────────────────────────────────────────
 import { Request, Response, NextFunction } from "express";
-import bcrypt                                from "bcryptjs";
-import jwt                                   from "jsonwebtoken";
-import { PrismaClient }                      from "@prisma/client";
-import sgMail, { MailDataRequired }          from "@sendgrid/mail";
-import dotenv                                from "dotenv";
-import { fillTemplate }                      from "../utils/emailTemplate";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { PrismaClient } from "@prisma/client";
+import sgMail, { MailDataRequired } from "@sendgrid/mail";
+import dotenv from "dotenv";
+import { fillTemplate } from "../utils/emailTemplate";
 
 dotenv.config();
 
-const prisma        = new PrismaClient();
-const JWT_SECRET    = process.env.JWT_SECRET  as string;
-const senderEmail   = process.env.EMAIL_USER ?? "admin@testifi.ai";
-const frontendUrl   = process.env.FRONTEND_URL ?? "http://localhost:3000"; // ← NEW
+const prisma = new PrismaClient();
+const JWT_SECRET = process.env.JWT_SECRET as string;
+const senderEmail = process.env.EMAIL_USER ?? "admin@testifi.ai";
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY as string);
+if (!process.env.EMAIL_USER) {
+  console.warn(
+    "[authController] EMAIL_USER not set – using admin@testifi.ai as fallback"
+  );
+}
+
+const sendgridApiKey = process.env.SENDGRID_API_KEY;
+if (!sendgridApiKey) {
+  console.warn("[authController] SENDGRID_API_KEY is not configured – transactional emails will fail.");
+} else {
+  sgMail.setApiKey(sendgridApiKey);
+}
+const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
+  /\/+$/,
+  ""
+);
 
 /* ----------------------------------------------------------------------- */
 /*                        SHARED  –  EMAIL HELPER                          */
@@ -27,7 +40,10 @@ export async function sendEmail(
 ) {
   const msg: MailDataRequired = {
     to,
-    from: senderEmail,
+    from: {
+      email: senderEmail,
+      name: "Testifi AI"
+    },
     subject,
     text: text?.trim() || "This is a transactional email from Testifi AI.",
     html: html?.trim() || undefined,
@@ -52,7 +68,9 @@ export const register = async (
       data: { email, password: hashedPassword, name, companyName },
     });
 
-    const registrationEmail = await prisma.email.findUnique({ where: { id: 1 } });
+    const registrationEmail = await prisma.email.findUnique({
+      where: { id: 1 },
+    });
 
     if (registrationEmail) {
       const html = fillTemplate(registrationEmail.body, {
@@ -68,7 +86,9 @@ export const register = async (
       );
     }
 
-    res.status(201).json({ message: "User registered successfully", userId: user.id });
+    res
+      .status(201)
+      .json({ message: "User registered successfully", userId: user.id });
   } catch (error) {
     next(error);
   }
@@ -90,20 +110,20 @@ export const forgotPassword = async (
       return;
     }
 
-    const resetToken    = Math.random().toString(36).substring(2);
+    const resetToken = Math.random().toString(36).substring(2);
     const resetTokenExp = new Date(Date.now() + 3_600_000); // 1 h
 
     await prisma.user.update({
       where: { email },
-      data : { resetToken, resetTokenExp },
+      data: { resetToken, resetTokenExp },
     });
 
-    const resetLink  = `${frontendUrl}/reset-password/${resetToken}`;
+    const resetLink = `${frontendUrl}/reset-password/${resetToken}`;
     const fpTemplate = await prisma.email.findUnique({ where: { id: 2 } });
 
     if (fpTemplate) {
       const html = fillTemplate(fpTemplate.body, {
-        name      : user.name ?? user.email,
+        name: user.name ?? user.email,
         reset_link: resetLink,
       });
       await sendEmail(email, fpTemplate.subject, "", html);
@@ -140,7 +160,7 @@ export const getResetEmail = async (
     }
 
     const user = await prisma.user.findFirst({
-      where : { resetToken: token, resetTokenExp: { gt: new Date() } },
+      where: { resetToken: token, resetTokenExp: { gt: new Date() } },
       select: { email: true },
     });
 
@@ -177,13 +197,13 @@ export const resetPassword = async (
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({
       where: { id: user.id },
-      data : { password: hashedPassword, resetToken: null, resetTokenExp: null },
+      data: { password: hashedPassword, resetToken: null, resetTokenExp: null },
     });
 
     const confTemplate = await prisma.email.findUnique({ where: { id: 3 } });
     if (confTemplate) {
       const html = fillTemplate(confTemplate.body, {
-        name       : user.name ?? user.email,
+        name: user.name ?? user.email,
         support_url: "mailto:support@testifi.ai",
       });
       await sendEmail(user.email, confTemplate.subject, "", html);
@@ -213,11 +233,11 @@ export const refreshAccessToken = async (
     const tokenToVerify = refreshToken.trim();
 
     let decoded: {
-      userId : string;
-      email  : string;
+      userId: string;
+      email: string;
       credits: number;
-      exp    : number;
-      iat    : number;
+      exp: number;
+      iat: number;
     };
     try {
       decoded = jwt.verify(tokenToVerify, JWT_SECRET) as typeof decoded;
@@ -226,14 +246,26 @@ export const refreshAccessToken = async (
       return;
     }
 
-    const storedToken = await prisma.refreshToken.findFirst({ where: { token: tokenToVerify } });
-    if (!storedToken || storedToken.revoked || new Date() > storedToken.expiresAt) {
-      res.status(403).json({ error: "Refresh token is invalid, revoked, or expired" });
+    const storedToken = await prisma.refreshToken.findFirst({
+      where: { token: tokenToVerify },
+    });
+    if (
+      !storedToken ||
+      storedToken.revoked ||
+      new Date() > storedToken.expiresAt
+    ) {
+      res
+        .status(403)
+        .json({ error: "Refresh token is invalid, revoked, or expired" });
       return;
     }
 
     const newAccessToken = jwt.sign(
-      { userId: decoded.userId, email: decoded.email, credits: decoded.credits },
+      {
+        userId: decoded.userId,
+        email: decoded.email,
+        credits: decoded.credits,
+      },
       JWT_SECRET,
       { expiresIn: "115m" }
     );
@@ -261,32 +293,44 @@ export const login = async (
     }
 
     const accessToken = jwt.sign(
-      { userId: user.id, email: user.email, credits: user.credits, role: user.role || "user" },
+      {
+        userId: user.id,
+        email: user.email,
+        credits: user.credits,
+        role: user.role || "user",
+      },
       JWT_SECRET,
       { expiresIn: "115m" }
     );
 
     const refreshToken = jwt.sign(
-      { userId: user.id, email: user.email, credits: user.credits, role: user.role },
+      {
+        userId: user.id,
+        email: user.email,
+        credits: user.credits,
+        role: user.role,
+      },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    const existingToken = await prisma.refreshToken.findFirst({ where: { userId: user.id } });
+    const existingToken = await prisma.refreshToken.findFirst({
+      where: { userId: user.id },
+    });
     if (existingToken) {
       await prisma.refreshToken.update({
         where: { id: existingToken.id },
-        data : {
-          token    : refreshToken,
+        data: {
+          token: refreshToken,
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-          revoked  : false,
+          revoked: false,
         },
       });
     } else {
       await prisma.refreshToken.create({
         data: {
-          token    : refreshToken,
-          userId   : user.id,
+          token: refreshToken,
+          userId: user.id,
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         },
       });
@@ -295,10 +339,10 @@ export const login = async (
     res.json({
       accessToken,
       refreshToken,
-      name   : user.name  || user.email,
-      email  : user.email,
+      name: user.name || user.email,
+      email: user.email,
       credits: user.credits,
-      role   : user.role || "user",
+      role: user.role || "user",
     });
   } catch (error) {
     next(error);

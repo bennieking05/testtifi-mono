@@ -1,6 +1,6 @@
 generator client {
   provider      = "prisma-client-js"
-  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "darwin-arm64"]
 }
 
 datasource db {
@@ -27,6 +27,8 @@ model User {
   refreshTokens  RefreshToken?
   supportTickets SupportTicket[]
   trainingAssets TrainingAsset[]
+  ledgerEntries  LedgerEntry[]
+  summaryJobs    SummaryJob[]
 }
 
 model File {
@@ -49,32 +51,81 @@ model File {
 
 model SummaryJob {
   id                String   @id @default(uuid())
+
+  /* ───── relations ───── */
   userId            String
-  fileName          String
-  fileUrl           String
-  summaryCsvUrl     String?  @db.Text
-  status            String
-  lastPageProcessed Int
-  totalPages        Int
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @default(now()) @updatedAt
-  error             String?  @db.Text
+  user              User     @relation(fields: [userId], references: [id])
   fileId            String?
   file              File?    @relation("FileToSummaryJob", fields: [fileId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_SummaryJob_file")
 
+  /* ───── file info ───── */
+  fileName          String
+  fileUrl           String
+  summaryCsvUrl     String?  @db.Text
+
+  /* ───── job status ───── */
+  status            String
+  lastPageProcessed Int
+  totalPages        Int
+  error             String?  @db.Text
+  notifyOnComplete  Boolean  @default(false)
+
+  /* ───── timing  ───── */
+  startedAt         DateTime @default(now())  // when the row is inserted
+  finishedAt        DateTime?                 // filled by the worker on success
+
+  /* ───── bookkeeping ─── */
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId], map: "SummaryJob_userId_fkey")
   @@index([fileId], map: "fk_SummaryJob_file")
 }
-
 model Purchase {
-  id        String   @id @default(uuid())
-  userId    String
-  credits   Int
-  amount    Float
-  createdAt DateTime @default(now())
-  success   Boolean
-  user      User     @relation(fields: [userId], references: [id])
+  id                     String             @id @default(uuid())
+  userId                 String
+  stripePaymentIntentId  String             @unique
+  amountCents            Int
+  currency               String             @default("usd")
+  creditsAdded           Int
+  status                 PurchaseStatus     @default(succeeded)
+  receiptUrl             String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  user                   User               @relation(fields: [userId], references: [id])
+  ledgerEntries          LedgerEntry[]
+  creditAllocations      CreditAllocation[]
 
   @@index([userId], map: "Purchase_userId_fkey")
+}
+
+model LedgerEntry {
+  id              String             @id @default(uuid())
+  userId          String
+  type            LedgerEntryType
+  credits         Int
+  summaryId       String?
+  description     String?
+  idempotencyKey  String             @unique
+  purchaseId      String?
+  createdAt       DateTime           @default(now())
+  user            User               @relation(fields: [userId], references: [id])
+  purchase        Purchase?          @relation(fields: [purchaseId], references: [id])
+  creditAllocations CreditAllocation[]
+
+  @@index([userId, createdAt])
+}
+
+model CreditAllocation {
+  id             String      @id @default(uuid())
+  debitLedgerId  String
+  purchaseId     String
+  creditsUsed    Int
+  debitLedger    LedgerEntry @relation(fields: [debitLedgerId], references: [id])
+  purchase       Purchase    @relation(fields: [purchaseId], references: [id])
+
+  @@index([debitLedgerId])
+  @@index([purchaseId])
 }
 
 model Email {
@@ -169,4 +220,17 @@ enum AssetType {
   human_summary
   training_pair
   generated_pair
+}
+
+enum PurchaseStatus {
+  succeeded
+  refunded
+  partially_refunded
+  requires_payment_method
+}
+
+enum LedgerEntryType {
+  credit
+  debit
+  adjustment
 }

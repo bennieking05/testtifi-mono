@@ -88,7 +88,7 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: OPENAI_API_KEY
-            - name: BREVO_SENDER_EMAIL
+            - name: EMAIL_USER
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
@@ -121,7 +121,7 @@ spec:
                   name: backend-secrets
                   key: STRIPE_WEBHOOK_SECRET
 
-            # ---------- Azure OpenAI ----------
+            # ---------- Azure OpenAI (PRODUCTION - GPT-5) ----------
             - name: AZURE_OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -132,16 +132,11 @@ spec:
                 secretKeyRef:
                   name: backend-secrets
                   key: AZURE_OPENAI_ENDPOINT
+            # Production uses GPT-5 for best quality
             - name: AZURE_OPENAI_DEPLOYMENT_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_OPENAI_DEPLOYMENT_NAME
+              value: "gpt-5-testifi"  # Your GPT-5 deployment name in Azure
             - name: AZURE_API_VERSION
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: AZURE_API_VERSION
+              value: "2025-01-01-preview"  # Latest API version for GPT-5
 
             # ---------- GCP credentials ----------
             - name: GOOGLE_APPLICATION_CREDENTIALS
@@ -151,8 +146,10 @@ spec:
             httpGet:
               path: /health
               port: 4000
-            initialDelaySeconds: 5
+            initialDelaySeconds: 15 # give backend time to boot
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 10 # allow 10 failures before marking as unhealthy
 
       # ───────────────────── Volumes ─────────────────────
       volumes:

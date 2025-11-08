@@ -50,6 +50,44 @@ router.get(
 );
 
 /**
+ * GET /api/user/credits
+ * Returns the current user's credit balance.
+ * ------------------------------------------------------------------
+ * Response: { credits: number }
+ */
+router.get(
+  "/credits",
+  authenticateToken,
+  async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { credits: true },
+      });
+
+      if (!user) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+
+      res.json({ credits: user.credits });
+    } catch (err) {
+      next(err as Error);
+    }
+  }
+);
+
+/**
  * GET /api/users/signups
  * Admin only: returns all user sign‑ups.
  * ------------------------------------------------------------------

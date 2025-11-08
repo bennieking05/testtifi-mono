@@ -1,0 +1,8 @@
+name: testifi-backend-staging
+description: Build and deploy backend to staging from staging branch
+github:
+  owner: bennieking05
+  name: testifi-backend
+  push:
+    branch: ^staging$
+filename: backend/backend-cloudbuild.yaml

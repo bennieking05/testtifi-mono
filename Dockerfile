@@ -1,40 +1,61 @@
-# Stage 1: Build Stage
-FROM node:20-alpine AS builder
+# -------- Stage 1: Base Build Stage --------
+FROM node:20-alpine AS base
 
 WORKDIR /usr/src/app
 
-# Install system dependencies
 RUN apk add --no-cache python3 make g++ gcc bash curl net-tools
 
-# Copy package.json and install dependencies
 COPY package*.json ./
+# Copy Prisma schema first (required for postinstall prisma generate)
+COPY prisma ./prisma
 RUN npm install
 
-# Copy your entire project (including schema.prisma)
-COPY . .
-
-# Rebuild bcrypt (if needed for Alpine)
-RUN npm rebuild bcrypt --build-from-source
-
-# Generate the Prisma client
+# Generate Prisma client (postinstall also runs, but ensure availability in CI)
 RUN npx prisma generate
 
-# Build your app
-RUN npm run build
+# Copy rest of the code
+COPY . .
 
-# Prune dev dependencies
+RUN npm rebuild bcrypt --build-from-source
+
+# -------- Stage 2: Build TypeScript --------
+FROM base AS build
+RUN npm run build
 RUN npm prune --omit=dev
 
-# Stage 2: Runtime Stage
-FROM node:20-alpine
+# -------- Stage 3a: Runtime for Express API --------
+FROM node:20-alpine AS backend
+
 WORKDIR /usr/src/app
 
-# Copy from builder
-COPY --from=builder /usr/src/app/package*.json ./
-COPY --from=builder /usr/src/app/node_modules ./node_modules
-COPY --from=builder /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/package*.json ./
+COPY --from=build /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/prisma ./prisma
+COPY --from=build /usr/src/app/config ./config
+COPY --from=build /usr/src/app/public/testifi_light_logo.png ./public/testifi_light_logo.png
+COPY --from=build /usr/src/app/public/testifi_dark_logo.png ./public/testifi_dark_logo.png
+COPY --from=build /usr/src/app/public/og-image.png ./public/og-image.png
 
 EXPOSE 4000
 ENV NODE_ENV=production
 
 CMD ["node", "dist/server.js"]
+
+# -------- Stage 3b: Runtime for Summarize Worker --------
+FROM node:20-alpine AS summarize-worker
+
+WORKDIR /usr/src/app
+
+COPY --from=build /usr/src/app/package*.json ./
+COPY --from=build /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/prisma ./prisma
+COPY --from=build /usr/src/app/config ./config
+COPY --from=build /usr/src/app/public/testifi_light_logo.png ./public/testifi_light_logo.png
+COPY --from=build /usr/src/app/public/testifi_dark_logo.png ./public/testifi_dark_logo.png
+COPY --from=build /usr/src/app/public/og-image.png ./public/og-image.png
+
+ENV NODE_ENV=production
+
+CMD ["node", "dist/worker/summarizeWorker.js"]

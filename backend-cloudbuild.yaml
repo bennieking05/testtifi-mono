@@ -1,45 +1,72 @@
 steps:
-  # Step 1: Build the Docker image
+  # Build backend (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
     args:
-      - "build"
-      - "-t"
-      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
-      - "."
+      [
+        "build",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest",
+        "--target=backend",
+        ".",
+      ]
 
-  # Step 2: Push the image to GCR
+  # Build summarize-worker (tag with BUILD_ID and latest)
   - name: "gcr.io/cloud-builders/docker"
     args:
-      - "push"
-      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+      [
+        "build",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID",
+        "-t",
+        "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest",
+        "--target=summarize-worker",
+        ".",
+      ]
 
-  # Step 3: Authenticate and deploy to GKE
-  - name: "gcr.io/cloud-builders/gke-deploy"
+  # Push both images (both tags)
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"]
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest"]
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"]
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"]
+
+  # ===== Deploy to GKE (pin to this build's tag) =====
+  - id: "Deploy to GKE (pin and rollouts)"
+    name: "gcr.io/cloud-builders/gke-deploy"
+    entrypoint: "bash"
     args:
-      - "run"
-      - "--filename=backend-deployment.yaml"
-      - "--image=gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
-      - "--location=us-central1-c"
-      - "--cluster=testifi"
+      - "-c"
+      - |
+        set -euo pipefail
+        echo "Getting GKE credentials for ${_CLUSTER} in ${_CLUSTER_LOCATION}..."
+        gcloud container clusters get-credentials "${_CLUSTER}" --zone "${_CLUSTER_LOCATION}"
+        echo "Updating backend image to $BUILD_ID..."
+        kubectl -n "${_NAMESPACE}" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
+        kubectl -n "${_NAMESPACE}" rollout status deployment/backend --timeout=300s
 
-  # Step 4: Update the Kubernetes deployment to use the new image
-  - name: "gcr.io/cloud-builders/kubectl"
-    args:
-      - "set"
-      - "image"
-      - "deployment/backend"
-      - "backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
-    env:
-      - "CLOUDSDK_COMPUTE_ZONE=us-central1-c"
-      - "CLOUDSDK_CONTAINER_CLUSTER=testifi"
-
-substitutions:
-  _DB_HOST: "127.0.0.1" # Cloud SQL Proxy runs on localhost
+        echo "Rolling summarize-worker with scale-to-zero to avoid CPU surge..."
+        kubectl -n "${_NAMESPACE}" scale deployment summarize-worker --replicas=0
+        kubectl -n "${_NAMESPACE}" set image deployment/summarize-worker summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
+        kubectl -n "${_NAMESPACE}" scale deployment summarize-worker --replicas=1
+        kubectl -n "${_NAMESPACE}" rollout status deployment/summarize-worker --timeout=600s
 
 images:
-  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$SHORT_SHA"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest"
+  - "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"
+  - "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"
+
+substitutions:
+  _CLUSTER: testifi
+  _CLUSTER_LOCATION: us-central1-c
+  _NAMESPACE: default
 
 options:
   logging: CLOUD_LOGGING_ONLY
 
-serviceAccount: "748916208557-compute@developer.gserviceaccount.com"
+# serviceAccount removed so the build runs under Cloud Build's default SA (or the Trigger's SA)

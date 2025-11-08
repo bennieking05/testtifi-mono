@@ -1,0 +1,621 @@
+
+
+/ - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Summaries
+- Review the status of summaries and access completed summaries. Files are deleted after 3 days. Make sure to download completed files on the next screen.
+- Create summary
+- Ready to Create Your First Professional Summary?
+- You haven't created any deposition summaries yet. Upload your transcript to generate a comprehensive, professional-grade summary that will save you hours of work and ensure nothing important is missed.
+- 🚀 Save 165+ Minutes
+- Per deposition summary
+- 🎯 99.5% Accuracy
+- AI-powered precision
+- 🔒 Enterprise Security
+- Bank-level protection
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/login - copy
+- Welcome Back
+- Email
+- Password
+- Remember me
+- Forgot password?
+- Sign in
+- Don't have an account?
+- Sign up
+- Document Summary Made Easy
+- Streamline your document review process with AI-powered summaries that extract key insights instantly.
+
+
+/register - copy
+- Create an Account
+- Full Name
+- Company Name
+- Email
+- Password
+- Confirm Password
+- Sign up
+- Already have an account?
+- Sign in
+- Document Summary Made Easy
+- Streamline your document review process with AI-powered summaries that extract key insights instantly.
+
+
+/forgot-password - copy
+- Reset Your Password
+- Enter your email address and we'll send you a link to reset your password.
+- Email
+- Send Reset Link
+- Remember your password?
+- Sign in
+- Password Reset
+- Forgot your password? No problem. We'll help you get back into your account quickly and securely.
+
+
+/privacy - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Privacy Policy
+- 1. Information We Collect
+- We collect information you provide directly to us, such as when you create or modify your account, request services, contact customer support, or otherwise communicate with us. This information may include your name, email address, phone number, postal address, and other contact or identifying information you choose to provide.
+- 2. How We Use Your Information
+- We use the information we collect to provide, maintain, and improve our services, process transactions, send communications, and personalize your experience.
+- 3. Information Sharing
+- We may share information as required by law, to protect rights and safety, or with your consent. We employ security measures to protect your data and provide options for managing your information.
+- 4. Data Security
+- We take reasonable measures to help protect information about you from loss, theft, misuse, and unauthorized access, disclosure, alteration, and destruction.
+- 5. Your Rights
+- You may have rights to access, correct, or delete your personal information. Contact us to exercise these rights or if you have questions about our privacy practices.
+
+
+/terms - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Terms of Service
+- 1. Acceptance of Terms
+- By accessing or using Testifi AI, you agree to be bound by these Terms of Service and all applicable laws and regulations. If you do not agree with any of these terms, you are prohibited from using or accessing this site.
+- 2. Use License
+- Permission is granted to temporarily access the materials on Testifi AI's website for personal, non-commercial use only. This is the grant of a license, not a transfer of title, and under this license you may not:
+- Modify or copy the materials
+- Use the materials for any commercial purpose
+- Attempt to decompile or reverse engineer any software contained on Testifi AI's website
+- Remove any copyright or other proprietary notations from the materials
+- Transfer the materials to another person or "mirror" the materials on any other server
+- 3. Disclaimer
+- The materials on Testifi AI's website are provided on an 'as is' basis. Testifi AI makes no warranties, expressed or implied, and hereby disclaims and negates all other warranties including, without limitation, implied warranties or conditions of merchantability, fitness for a particular purpose, or non-infringement of intellectual property or other violation of rights.
+- 4. Limitations
+- In no event shall Testifi AI or its suppliers be liable for any damages (including, without limitation, damages for loss of data or profit, or due to business interruption) arising out of the use or inability to use the materials on Testifi AI's website, even if Testifi AI or a Testifi AI authorized representative has been notified orally or in writing of the possibility of such damage.
+- 5. Revisions and Errata
+- The materials appearing on Testifi AI's website could include technical, typographical, or photographic errors. Testifi AI does not warrant that any of the materials on its website are accurate, complete, or current. Testifi AI may make changes to the materials contained on its website at any time without notice.
+
+
+/help - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Find answers to common questions and learn how to use Testifi AI
+- Frequently Asked Questions
+- Get quick answers to common questions
+- How to upload a transcript
+- Go to Create Summary → upload PDF/DOCX/TXT → name it → optionally enable email notification. Processing takes ~15–20 minutes.
+- Understanding summary tokens
+- We chunk by page and line to preserve citations. Your credits cover end‑to‑end processing with legal‑style output.
+- Downloading summaries
+- Open the completed item → Download → choose PDF/DOCX/TXT. The export includes a cover page and a two‑column page‑line table.
+- Billing and subscriptions
+- Manage your plan from the Payment page. Purchases are reflected as credits applied to new summaries.
+- Documentation
+- Detailed guides and reference materials
+- User Guide
+- Step‑by‑step walkthroughs for creating, previewing, and exporting deposition summaries, plus FAQs and troubleshooting tips.
+- Keyboard Shortcuts
+- Navigate faster: use ⌘K to open command menu, ↑/↓ to move through items, and Enter to act.
+- Video Tutorials
+- Learn by watching step-by-step videos
+- Getting Started
+- Intro to Testifi AI, uploading, and reading your first summary.
+- Advanced Features
+- Entity extraction, issue spotting, and configurable export options for legal teams.
+- Best Practices
+- Ensure clean OCR, maintain page markers, and validate citations for accuracy.
+- Tips and Tricks
+- Use email notifications, snapshots, and saved exports for smooth workflows.
+- Contact Support
+- Get help from our support team
+- Need more help? Our support team is available Monday through Friday, 9am to 5pm Eastern Time.
+- Contact Support →
+
+
+/dashboard - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Welcome back,
+- John Doe
+- AI-powered legal intelligence platform for professional law firms
+- Support Center
+- Save 165+ Minutes
+- Per deposition summary
+- 99.5% Accuracy
+- AI-powered precision
+- Trusted by 500+
+- Legal professionals
+- AI Legal Insights
+- Predictive case analytics
+- Get AI-powered insights on case outcomes, witness credibility, and strategic recommendations →
+- Case Preparation
+- Streamlined workflows
+- Manage cases with AI-powered templates, timelines, and collaboration tools →
+- Team Collaboration
+- Real-time teamwork
+- Collaborate seamlessly with real-time document sharing and team workflows →
+- Secure Document Upload
+- SOC 2 Compliant • Bank-Level Security • HIPAA Ready
+- Enterprise Security Features:
+- • End-to-end AES-256 encryption
+- • Automatic file deletion after 3 days
+- • Zero-access policy - Our team cannot view your documents
+- • Full audit trails and compliance logging
+- Drop your files here
+- Drag & drop your deposition files, or
+- browse
+- to upload
+- PDF, DOC, DOCX, TXT
+- Secure Upload
+- AI-Powered Legal Intelligence
+- Advanced AI Features:
+- • Narrative format summaries
+- • Predictive case analytics
+- • Key testimony extraction
+- • Witness credibility analysis
+- • Timeline organization
+- • Strategic recommendations
+- • Exhibit references
+- • Team collaboration tools
+- Professional Deposition Summary
+- Generate comprehensive deposition summaries with AI insights, predictive analytics, and team collaboration features for superior case preparation.
+- Get Started
+- AI Powered
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/summaries - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- AI Generated Summaries
+- Review the status of summaries and access completed summaries. Files are deleted after 3 days.
+- Create Summary
+- Ready to Create Your First Professional Summary?
+- You haven't created any deposition summaries yet. Upload your transcript to generate a comprehensive, professional-grade summary that will save you hours of work and ensure nothing important is missed.
+- Create Your First Summary
+- 🚀 Save 165+ Minutes
+- Per deposition summary
+- 🎯 99.5% Accuracy
+- AI-powered precision
+- 🔒 Enterprise Security
+- Bank-level protection
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/create-summary - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Back to Dashboard
+- Create Summary
+- Upload your file and let Testifi AI summarize it for you.
+- Enterprise Security
+- AI-Powered Analysis
+- Professional Output
+- Summary Name
+- Deponent
+- Selected Document
+- Drop your files here
+- Drag & drop your deposition files, or
+- browse
+- to upload
+- PDF, DOC, DOCX, TXT
+- Secure Upload
+- Continue
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/payment - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Professional Summary Packages
+- Choose the right package for your practice. Testifi AI delivers professional-grade deposition summaries that help you save time, increase accuracy, and focus on what matters most – winning cases.
+- Accuracy
+- Professional-grade AI summaries
+- Trusted by 500+
+- Legal professionals nationwide
+- Professional Terms:
+- All summary tokens expire three (3) days from purchase date to ensure document security. Unused tokens cannot be refunded per our enterprise security protocols. Volume discounts available for firms processing 100+ summaries monthly.
+- Need custom pricing for your firm?
+- Contact our enterprise sales team
+- Professional Packages
+- Individual Summary
+- Perfect for solo practitioners and small cases
+- 125.00
+- USD
+- One-time purchase
+- • Plus applicable tax
+- Includes 1 comprehensive deposition summary with full narrative format, key insights, and PDF download
+- Professional narrative summaries
+- Key testimony & exhibits highlighted
+- Downloadable PDF format
+- Enterprise-grade security
+- Select Plan
+- Basic Package
+- Ideal for small to medium law firms
+- 1200.00
+- 10 summaries included
+- Includes 10 deposition summaries • $120 per additional summary • Volume discounts available
+- MOST POPULAR
+- Select Package
+- Comprehensive solution for active litigation teams
+- 2750.00
+- 25 summaries included
+- Includes 25 deposition summaries • $110 per additional summary • Priority processing • Account management
+- Premium Package
+- Complete solution for large practices and complex cases
+- 5000.00
+- 50 summaries included
+- Includes 50 deposition summaries • $100 per additional summary • Dedicated support • Custom integrations available
+- Proceed to Secure Checkout
+- 🔒 Secure payment powered by Stripe • PCI DSS compliant
+- Questions? Contact our enterprise support team at
+- support@testifi.ai
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/checkout - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Professional Summary Packages
+- Choose the right package for your practice. Testifi AI delivers professional-grade deposition summaries that help you save time, increase accuracy, and focus on what matters most – winning cases.
+- Accuracy
+- Professional-grade AI summaries
+- Trusted by 500+
+- Legal professionals nationwide
+- Professional Terms:
+- All summary tokens expire three (3) days from purchase date to ensure document security. Unused tokens cannot be refunded per our enterprise security protocols. Volume discounts available for firms processing 100+ summaries monthly.
+- Need custom pricing for your firm?
+- Contact our enterprise sales team
+- Professional Packages
+- Individual Summary
+- Perfect for solo practitioners and small cases
+- 125.00
+- USD
+- One-time purchase
+- • Plus applicable tax
+- Includes 1 comprehensive deposition summary with full narrative format, key insights, and PDF download
+- Professional narrative summaries
+- Key testimony & exhibits highlighted
+- Downloadable PDF format
+- Enterprise-grade security
+- Select Plan
+- Basic Package
+- Ideal for small to medium law firms
+- 1200.00
+- 10 summaries included
+- Includes 10 deposition summaries • $120 per additional summary • Volume discounts available
+- MOST POPULAR
+- Select Package
+- Comprehensive solution for active litigation teams
+- 2750.00
+- 25 summaries included
+- Includes 25 deposition summaries • $110 per additional summary • Priority processing • Account management
+- Premium Package
+- Complete solution for large practices and complex cases
+- 5000.00
+- 50 summaries included
+- Includes 50 deposition summaries • $100 per additional summary • Dedicated support • Custom integrations available
+- Proceed to Secure Checkout
+- 🔒 Secure payment powered by Stripe • PCI DSS compliant
+- Questions? Contact our enterprise support team at
+- support@testifi.ai
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/case-preparation - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Case Preparation Center
+- Streamline your case preparation with AI-powered workflows
+- New Case
+- Active Cases
+- 12
+- Due This Week
+- Completed
+- 28
+- Team Members
+- Case Templates
+- Legal Resources
+- Smith v. TechCorp Industries
+- Personal Injury
+- Discovery
+- HIGH
+- Due:
+- 7/14/2024
+- Progress
+- 75
+- Sarah J., Michael C., Emily R.
+- Expert witness deposition scheduled
+- View Details
+- Schedule
+- Collaborate
+- Johnson Medical Malpractice
+- Medical Malpractice
+- Trial Prep
+- CRITICAL
+- 7/7/2024
+- 90
+- Sarah J., David L.
+- Trial brief filed
+- Estate Planning - Williams
+- Estate Planning
+- Documentation
+- MEDIUM
+- 7/21/2024
+- 45
+- Emily R., Robert K.
+- Asset valuation completed
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/ai-insights - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- AI-Powered Legal Insights
+- Advanced analytics and predictive intelligence for your cases
+- Generate Report
+- Cases Analyzed
+- 156
+- Success Rate
+- 78
+- Avg Settlement
+- $2.4M
+- Time Saved
+- 65%
+- AI Insights
+- Case Patterns
+- Predictions
+- Witness Credibility Pattern Detected
+- Analysis shows inconsistencies in testimony timing across 3 depositions
+- HIGH
+- 94
+- % confidence
+- 🎯 AI Recommendation:
+- Focus cross-examination on time-related questions
+- Potential Liability Exposure
+- Similar fact patterns found in 7 comparable cases with adverse outcomes
+- CRITICAL
+- 87
+- Consider early settlement negotiations
+- Favorable Precedent Identified
+- Recent ruling in similar case supports your position
+- MEDIUM
+- 91
+- Cite Johnson v. TechCorp (2024) in motion
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/collaboration - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Team Collaboration
+- Work together seamlessly on case preparation and analysis
+- Invite Team Member
+- Active Users
+- Shared Documents
+- 24
+- Comments Today
+- 47
+- Reviews Pending
+- 12
+- Team Workspace
+- Recent Activity
+- Active Team Members
+- SJ
+- Sarah Johnson
+- Partner
+- online
+- MC
+- Michael Chen
+- Associate
+- reviewing
+- ER
+- Emily Rodriguez
+- Paralegal
+- Collaboration Tools
+- Quick access to team collaboration features
+- Team Chat
+- Document Review
+- Share & Assign
+- Approval Workflow
+- 2025
+- Testifi AI. All rights reserved.
+- Terms of Service
+- Privacy Policy
+- Help
+
+
+/support - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Need help? Contact our support team
+- Email
+- Email us anytime at
+- support@testifi.ai
+- Email Us
+- Contact Support
+- Fill out the form below and we'll get back to you as soon as possible.
+- Name
+- Subject
+- Message
+- Submit Request
+- Frequently Asked Questions
+- How long does it take to get a response?
+- We typically respond to all inquiries within 24-48 business hours.
+- What information should I include in my request?
+- Please include your account email, a detailed description of the issue, and any relevant screenshots or error messages.
+
+
+/admin - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Admin Dashboard
+- Manage users, purchases, and support requests
+- Purchase Dashboard
+- Purchase History
+- User Sign-ups
+- Download History
+- Support Requests
+- Loading sign‑ups…
+
+
+/admin/finetune - copy
+- Dashboard
+- AI Generated Summary
+- Purchase Tokens
+- Summary tokens: 0
+- User
+- Help center
+- Support
+- Logout
+- Training Assets & Fine-Tuning
+- Human-Written Summary
+- Upload a manually created deposition summary for training alignment.
+- Drop your files here
+- Drag & drop your deposition files, or
+- browse
+- to upload
+- PDF, DOC, DOCX, TXT
+- Secure Upload
+- Upload to /human
+- Training Pair JSONL
+- Upload pre-aligned training data to fine-tune the model.
+- Upload to /pairs
+- Generate Training Pairs
+- Automatically align transcripts and summaries into training JSONL format.
+- Generate Pairs from Human Summaries
+- Training History
+- Past model training sessions and their results
+- No history found.

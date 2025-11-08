@@ -1,13 +1,18 @@
-// src/worker.ts
+// ─── src/worker/summarizeWorker.ts ────────────────────────────────────────
+import dotenv from "dotenv";
+dotenv.config();
 
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import axios from "axios";
 import fs from "fs";
-import path from "path";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
+import { sendEmail } from "../lib/sendEmail";
+import { loadPromptConfig } from "../lib/promptConfig";
+import pLimit from "p-limit";
+import os from "os";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -15,51 +20,50 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
-// Debug: log database URL and environment at startup
-console.log("=== Worker starting ===");
-console.log("Using DB:", process.env.DATABASE_URL);
-console.log("NODE_ENV:", process.env.NODE_ENV);
-console.log("AZURE_OPENAI_ENDPOINT:", process.env.AZURE_OPENAI_ENDPOINT);
 console.log(
-  "AZURE_OPENAI_DEPLOYMENT_NAME:",
-  process.env.AZURE_OPENAI_DEPLOYMENT_NAME
+  "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
 );
-console.log("AZURE_API_VERSION:", process.env.AZURE_API_VERSION);
+console.log("=== Worker starting ===");
 
-/* ────────── TEXT EXTRACTION ────────── */
+// Tuning knobs (env‑overridable)
+const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
+const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 5 : 6);
+const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
+const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1); // Reduced from 3 to 1 to avoid rate limits
+const WORKER_ID = process.env.WORKER_ID || os.hostname();
+
 async function extractFullText(
   buffer: Buffer,
   filename: string,
-  gcsUri: string
+  gcsUri: string,
+  jobId: string
 ): Promise<string> {
   const isPDF = filename.toLowerCase().endsWith(".pdf");
-  const isDocx = /\.(doc|docx)$/i.test(filename);
+  const isDocx = /\.(docx?|DOCX?)$/.test(filename);
 
   if (isPDF) {
-    console.log(`[extractFullText] Detected PDF: ${filename}`);
     const parsed = await pdf(buffer);
-    if (parsed.text.trim().length > 100) {
-      console.log("[extractFullText] PDF has digital text. Skipping OCR.");
+    const trimmed = parsed.text.trim();
+    // Check for meaningful text (not just whitespace/newlines)
+    const nonWhitespace = trimmed.replace(/\s/g, '').length;
+    if (nonWhitespace > 100) {
+      console.log(`[${jobId}] PDF text extraction successful: ${trimmed.length} chars (${nonWhitespace} non-whitespace)`);
       return parsed.text;
     }
-    // scanned → OCR fallback
-    console.log(
-      "[extractFullText] PDF appears scanned, using Vision OCR fallback."
-    );
-    return await extractTextWithVision(gcsUri);
+    console.log(`[${jobId}] PDF appears to be scanned/image-based (only ${nonWhitespace} chars), using Vision API...`);
+    return extractTextWithVision(gcsUri, jobId);
   }
+
   if (isDocx) {
-    console.log(`[extractFullText] Detected Word doc: ${filename}`);
     const { value } = await mammoth.extractRawText({ buffer });
     return value;
   }
-  console.log(`[extractFullText] Treating ${filename} as plain text.`);
+
   return buffer.toString("utf-8");
 }
 
-async function extractTextWithVision(gcsUri: string): Promise<string> {
-  console.log(`[extractTextWithVision] Starting OCR for: ${gcsUri}`);
-  const destinationUri = `gs://${summaryBucket.name}/vision-output/`;
+async function extractTextWithVision(gcsUri: string, jobId: string): Promise<string> {
+  const destinationUri = `gs://${summaryBucket.name}/vision-output/${jobId}/`;
   const [operation] = await visionClient.asyncBatchAnnotateFiles({
     requests: [
       {
@@ -73,293 +77,545 @@ async function extractTextWithVision(gcsUri: string): Promise<string> {
     ],
   });
   await operation.promise();
-  console.log(
-    "[extractTextWithVision] Vision OCR job complete. Downloading result..."
-  );
   const [files] = await summaryBucket.getFiles({
-    prefix: "vision-output/output-1-to-1.json",
+    prefix: `vision-output/${jobId}/`,
   });
-  const [outputBuffer] = await files[0].download();
-  const parsed = JSON.parse(outputBuffer.toString());
-  return parsed.responses
-    .map((res: any) => res.fullTextAnnotation?.text || "")
-    .join("\n");
+  const jsonFiles = files.filter((f) => f.name.toLowerCase().endsWith(".json"));
+  let combined = "";
+  for (const f of jsonFiles) {
+    const [raw] = await f.download();
+    const parsed = JSON.parse(raw.toString());
+    combined +=
+      parsed.responses
+        .map((r: any) => r.fullTextAnnotation?.text || "")
+        .join("\n") + "\n";
+  }
+  // best-effort cleanup of temporary Vision output
+  await Promise.all(
+    files.map((f) => f.delete().catch(() => {}))
+  );
+  return combined.trim();
 }
 
-/* ────────── PAGE HELPERS ────────── */
-function splitPages(transcript: string): { page: number; text: string }[] {
-  console.log(`[splitPages] Splitting transcript into pages...`);
-  const lines = transcript.split("\n");
-  let currentPage = 1;
+function splitPages(txt: string) {
+  // Detect explicit page markers - handles multi-page scans (4 transcript pages per PDF page)
+  // Look for: "Page 147", "147", standalone numbers, or "147:1" format
+  // Be aggressive in finding page numbers since they may appear in corners/margins
+  
+  let currentPage: number | null = null;
   let buf: string[] = [];
   const out: { page: number; text: string }[] = [];
 
-  for (const line of lines) {
-    if (/^(?:\s*Page\s*)?\d+\s*$/.test(line.trim())) {
-      if (buf.length) out.push({ page: currentPage++, text: buf.join("\n") });
-      buf = [];
+  const push = () => {
+    if (buf.length && currentPage != null) {
+      out.push({ page: currentPage, text: buf.join("\n") });
     }
-    buf.push(line);
+    buf = [];
+  };
+
+  for (const raw of txt.split(/\r?\n/)) {
+    const line = raw.trim();
+    
+    // Pattern 1: Standalone page number (most common)
+    // Matches: "147", "Page 147", "PAGE 147"
+    const standaloneMatch = line.match(/^(?:Page\s*)?(\d{1,5})$/i);
+    if (standaloneMatch) {
+      push();
+      currentPage = parseInt(standaloneMatch[1], 10);
+      continue;
+    }
+    
+    // Pattern 2: Page:Line format (e.g., "147:1-15")
+    // Common in transcripts - extract just the page number
+    const pageLineMatch = line.match(/^(\d{1,5}):\d/);
+    if (pageLineMatch) {
+      push();
+      currentPage = parseInt(pageLineMatch[1], 10);
+      continue;
+    }
+    
+    // Pattern 3: Line starts or ends with just a number (corner numbers)
+    // E.g., "147 " or " 147"
+    if (line.length <= 6 && /^\d{1,5}$/.test(line)) {
+      const num = parseInt(line, 10);
+      // Only treat as page marker if it's reasonably sequential or first page
+      if (currentPage === null || num === currentPage + 1 || num > currentPage) {
+        push();
+        currentPage = num;
+        continue;
+      }
+    }
+    
+    buf.push(raw); // Keep original line with whitespace
   }
-  if (buf.length) out.push({ page: currentPage++, text: buf.join("\n") });
-  console.log(`[splitPages] Done. Total pages: ${out.length}`);
-  return out;
+
+  // Flush last buffer
+  push();
+  
+  // Deduplicate by page number, keeping the longest text segment per page
+  const byPage = new Map<number, string>();
+  for (const { page, text } of out) {
+    const prev = byPage.get(page) || "";
+    if (text.length > prev.length) byPage.set(page, text);
+  }
+  
+  return Array.from(byPage.entries())
+    .map(([page, text]) => ({ page, text }))
+    .sort((a, b) => a.page - b.page);
 }
 
 function groupPagesToChunks(
   pages: { page: number; text: string }[],
-  pagesPerChunk = 12
-): { start: number; end: number; text: string }[] {
-  console.log(
-    `[groupPagesToChunks] Grouping ${pages.length} pages into chunks of ${pagesPerChunk}...`
-  );
+  perChunk = PAGES_PER_CHUNK // smaller chunks to avoid token limits
+) {
   const out: { start: number; end: number; text: string }[] = [];
-  for (let i = 0; i < pages.length; i += pagesPerChunk) {
-    const chunkPages = pages.slice(i, i + pagesPerChunk);
+  for (let i = 0; i < pages.length; i += perChunk) {
+    const slice = pages.slice(i, i + perChunk);
     out.push({
-      start: chunkPages[0].page,
-      end: chunkPages[chunkPages.length - 1].page,
-      text: chunkPages.map((p) => p.text).join("\n"),
+      start: slice[0].page,
+      end: slice[slice.length - 1].page,
+      text: slice.map((p) => p.text).join("\n"),
     });
   }
-  console.log(`[groupPagesToChunks] Done. Total chunks: ${out.length}`);
   return out;
 }
 
-/* ────────── PROMPT BUILDERS ────────── */
+function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?: string }, jobId?: string) {
+  const lines = tr.split(/\r?\n/);
+  const header = lines.slice(0, 40).join("\n");
+
+  const civMatch = header.match(
+    /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
+  );
+  const civil = civMatch?.[2] || "[Unknown]";
+
+  const captionLine =
+    lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
+  const caption = captionLine.trim() || `Civil Action No. ${civil}`;
+
+  // Enhanced deponent extraction patterns with debugging
+  let extractedDeponent = null;
+  
+  // Debug: Log first 500 chars of header for debugging
+  console.log(`[${jobId || 'debug'}] Header text (first 500 chars):`, header.substring(0, 500));
+  
+  // Pattern 1: "DEPONENT: RICHARD SACKLER, M.D." (various OCR variations)
+  const deponentPatterns = [
+    /DEPONENT:\s*([^\n\r]+)/i,
+    /DEPONENT\s+([^\n\r]+)/i,
+    /DEPONENT\s*:\s*([^\n\r]+)/i,
+    /DEPONENT\s*:\s*([A-Z\s,\.]+)/i,
+    // Specific pattern for "Richard Sackler, M.D." format - more flexible
+    /([A-Z][a-z]+\s+[A-Z][a-z]+,\s*[A-Z]\.\s*[A-Z]\.?)/,
+    // Pattern for "Richard Sackler, M.D." without comma
+    /([A-Z][a-z]+\s+[A-Z][a-z]+\s+[A-Z]\.\s*[A-Z]\.?)/,
+    // Pattern for names without periods
+    /([A-Z][a-z]+\s+[A-Z][a-z]+,\s*[A-Z]\s*[A-Z])/,
+    // Very specific pattern for "Richard Sackler, M.D." from OCR
+    /(Richard\s+Sackler,\s*M\.D\.)/i,
+  ];
+  
+  for (const pattern of deponentPatterns) {
+    const match = header.match(pattern);
+    if (match && match[1] && match[1].trim().length > 2) {
+      extractedDeponent = match[1].trim();
+      console.log(`[${jobId || 'debug'}] Found deponent with pattern:`, match[0]);
+      break;
+    }
+  }
+  
+  // Pattern 2: "continued deposition of" or "deposition of"
+  if (!extractedDeponent) {
+    const contDep = header.match(/continued\s+deposition\s+of\s+([^\n,]+)/i)?.[1];
+    const depOf = header.match(/deposition\s+of\s+([^\n,]+)/i)?.[1];
+    extractedDeponent = (contDep || depOf)?.trim();
+    if (extractedDeponent) {
+      console.log(`[${jobId || 'debug'}] Found deponent with 'deposition of' pattern:`, extractedDeponent);
+    }
+  }
+  
+  const deponent = extractedDeponent || fileData?.deponent || "[Unknown]";
+  console.log(`[${jobId || 'debug'}] Final deponent:`, deponent);
+
+  // Enhanced date extraction patterns with debugging
+  let extractedDate = null;
+  
+  // Pattern 1: "DATE: AUGUST 28, 2015" (various OCR variations)
+  const datePatterns = [
+    /DATE:\s*([^\n\r]+)/i,
+    /DATE\s+([^\n\r]+)/i,
+    /DATE\s*:\s*([A-Z\s,]+)/i,
+    /DATE\s*:\s*([A-Z]+\s+\d{1,2},\s+\d{4})/i,
+    // Pattern for OCR format: "8/28/2015" on its own line
+    /^(\d{1,2}\/\d{1,2}\/\d{4})$/m,
+    // Pattern for date anywhere in header
+    /(\d{1,2}\/\d{1,2}\/\d{4})/,
+    // Pattern for "August 28, 2015" format
+    /([A-Z]+\s+\d{1,2},\s+\d{4})/,
+    // Very specific pattern for "8/28/2015" from OCR
+    /(8\/28\/2015)/i,
+  ];
+  
+  for (const pattern of datePatterns) {
+    const match = header.match(pattern);
+    if (match && match[1] && match[1].trim().length > 2) {
+      extractedDate = match[1].trim();
+      console.log(`[${jobId || 'debug'}] Found date with pattern:`, match[0]);
+      break;
+    }
+  }
+  
+  // Pattern 2: Standard date format in header
+  if (!extractedDate) {
+    const dateRegex =
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i;
+    const top3 = lines.slice(0, 3).join("\n");
+    extractedDate = top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0];
+    if (extractedDate) {
+      console.log(`[${jobId || 'debug'}] Found date with regex:`, extractedDate);
+    }
+  }
+  
+  const date = extractedDate || "[Unknown]";
+  console.log(`[${jobId || 'debug'}] Final date:`, date);
+
+  return `
+Case Caption: ${caption}
+Title of Document: Transcript Summary of ${deponent}
+Date of Deposition: ${date}
+`.trim();
+}
+
 function makePrompt(
   chunk: { start: number; end: number; text: string },
   isFirst: boolean,
-  metaSection: string
+  metaSection: string,
+  systemInstruction: string
 ) {
   return [
     {
       role: "system",
-      content: `
-You are a highly skilled legal paralegal AI that summarizes deposition transcripts. Output must be in Markdown with a case metadata section (only for the first chunk) and a highly detailed, page-by-page testimony table. Your summaries should match or exceed the specificity and structure of expert human-written legal summaries.
-      `.trim(),
+      content: systemInstruction,
     },
     {
       role: "user",
       content: isFirst
         ? `
-Summarize the following deposition transcript chunk (pages ${chunk.start}–${chunk.end}) with **great detail and accuracy**. Follow this structure:
+Produce a comprehensive PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end}.
 
-**1. Case Metadata (at the top):**
 ${metaSection}
 
-**2. Detailed Testimony Table (Markdown):**
-- Create a table with **two columns**: (1) Page Number(s), (2) Summary of Testimony.
-- Each row should summarize a specific page or small range of pages (e.g., 9–11, 12, 13–14, etc.).
-- The summary for each row must be **rich with specific details** from the text:
-  - Names and roles of individuals (attorneys, deponent, others mentioned).
-  - References to **exhibits**, **emails**, or important documents (identify by number or description).
-  - **Key questions and answers**, legal arguments, objections, and important points or admissions.
-  - Dates, critical figures, or short direct quotes (as needed for clarity or emphasis).
-- **Do not generalize.** Instead, create a factual, thorough, and clear summary for each segment, including every key topic, action, or exchange.
-- Structure the table using standard Markdown syntax.
+Output ONLY Markdown table rows with EXACTLY two columns: Page Number | Testimony.
+- No header row, rows only
+- Use page ranges (e.g., "12", "12-13", "15-16") in the first column
+- For each page/section, write 3-6 complete sentences capturing:
+  * The main topic or subject matter
+  * All specific names, titles, entities, dates, and figures mentioned
+  * Document references (exhibits, emails, declarations) with context
+  * Key facts, admissions, or statements by the witness
+  * Any objections or legal procedural matters
+- Be thorough and specific - the attorney should understand the testimony without reading the transcript
+- Break into multiple rows when topics change within a page range
 
-Below is the transcript text:
+Transcript:
 ${chunk.text}
-      `.trim()
+        `.trim()
         : `
-Continue summarizing the deposition transcript from where the previous chunk ended (pages ${chunk.start}–${chunk.end}). **Do not repeat the metadata.**
-- Use the same Markdown table structure, adding new rows for the next page numbers in this chunk.
-- Continue in the same detailed, page-by-page style.
+Continue the PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end}.
 
-Below is the next chunk of transcript:
+Do NOT repeat metadata. Output ONLY additional Markdown table rows with two columns (Page Number | Testimony).
+- No header row, rows only
+- Use page ranges in the first column
+- Maintain the same comprehensive, detailed style:
+  * 3-6 complete sentences per entry for substantive testimony
+  * All specific names, dates, figures, entities
+  * Document references with context
+  * Key facts and admissions
+  * Objections and procedural matters
+- Be thorough and specific
+- Break into multiple rows when topics change
+
+Transcript:
 ${chunk.text}
-      `.trim(),
+        `.trim(),
     },
   ];
 }
 
-function extractLegalMetadata(transcript: string): string {
-  return `
-- CIVIL ACTION NUMBER: ${
-    transcript.match(/CIVIL ACTION NO[.,]?\s*([A-Za-z0-9\-]+)/i)?.[1] ||
-    "[Unknown]"
-  }
-- COURT: ${
-    transcript.match(
-      /(CIRCUIT COURT.*|DISTRICT COURT.*|SUPERIOR COURT.*)/i
-    )?.[1] || "[Unknown]"
-  }
-- PLAINTIFFS: ${
-    transcript
-      .match(/PLAINTIFFS[\s\S]{0,100}/i)?.[0]
-      ?.replace(/[\r\n]+/g, " ") || "[Unknown]"
-  }
-- DEFENDANTS: ${
-    transcript
-      .match(/DEFENDANTS[\s\S]{0,100}/i)?.[0]
-      ?.replace(/[\r\n]+/g, " ") || "[Unknown]"
-  }
-- DEPOSITION TITLE: ${
-    transcript.match(/DEPOSITION SUMMARY OF ([A-Z\s\.\-]+),/i)?.[1]?.trim() ||
-    "[Unknown]"
-  }
-- DATE: ${
-    transcript.match(
-      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/
-    )?.[0] || "[Unknown]"
-  }
-  `.trim();
-}
-
-/* ────────── LLM CALL ────────── */
-async function azureChatCompletion(messages: any[], maxTokens = 2800) {
-  console.log(`[azureChatCompletion] Sending prompt to Azure OpenAI...`);
-  const url = `${process.env.AZURE_OPENAI_ENDPOINT?.replace(
+async function azureChatCompletion(
+  messages: any[],
+  maxTokens: number = AZURE_MAX_TOKENS,
+  temperature: number = 0.0
+) {
+  const url = `${process.env.AZURE_OPENAI_ENDPOINT!.replace(
     /\/+$/,
     ""
   )}/openai/deployments/${
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME
   }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
-  const headers = {
-    "Content-Type": "application/json",
-    "api-key": process.env.AZURE_OPENAI_API_KEY!,
-  };
   const { data } = await axios.post(
     url,
-    { messages, max_tokens: maxTokens, temperature: 0.1 },
-    { headers, timeout: 120_000 }
+    { messages, max_tokens: maxTokens, temperature },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": process.env.AZURE_OPENAI_API_KEY!,
+      },
+      timeout: 120000,
+    }
   );
-  console.log(`[azureChatCompletion] Response received.`);
   return data;
 }
 
-/* ────────── WORKER LOOP ────────── */
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function mainWorkerLoop() {
+// Generic retry helper (exponential backoff + jitter) for 429/5xx
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { retries?: number; minDelayMs?: number; maxDelayMs?: number } = {}
+): Promise<T> {
+  const retries = Math.max(0, opts.retries ?? 3);
+  const min = opts.minDelayMs ?? 500;
+  const max = opts.maxDelayMs ?? 4000;
+  let attempt = 0;
+  let lastErr: any;
+  while (attempt <= retries) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const status = err?.response?.status;
+      const retryable =
+        status === 429 || (typeof status === "number" && status >= 500 && status < 600) || !status;
+      if (!retryable || attempt === retries) break;
+      const backoff = Math.min(
+        max,
+        Math.floor(min * Math.pow(2, attempt)) + Math.floor(Math.random() * 250)
+      );
+      await sleep(backoff);
+      attempt++;
+    }
+  }
+  throw lastErr;
+}
+
+async function getRenderedEmailTemplate(
+  templateId: number,
+  variables: Record<string, string>
+) {
+  const emailTemplate = await prisma.email.findUnique({
+    where: { id: templateId },
+  });
+  if (!emailTemplate) throw new Error(`Email template ${templateId} not found`);
+
+  let { subject, body } = emailTemplate;
+  for (const [key, value] of Object.entries(variables)) {
+    const regex = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+    body = body.replace(regex, value);
+    subject = subject.replace(regex, value);
+  }
+  return { subject, body };
+}
+
+async function work() {
   while (true) {
-    console.log(
-      `[${new Date().toISOString()}] Worker loop running, checking for jobs...`
-    );
-    const job = await prisma.summaryJob.findFirst({
-      where: { status: "processing" },
+    // 1) Find and atomically claim the next queued job
+    const candidate = await prisma.summaryJob.findFirst({
+      where: { status: "queued" },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+
+    if (!candidate) {
+      await sleep(10000);
+      continue;
+    }
+
+    const claimed = await prisma.summaryJob.updateMany({
+      where: { id: candidate.id, status: "queued" },
+      data: { status: "processing" },
+    });
+    if (claimed.count === 0) {
+      // Raced with another worker; try again.
+      continue;
+    }
+
+    const job = await prisma.summaryJob.findUnique({
+      where: { id: candidate.id },
+      select: {
+        id: true,
+        userId: true,
+        fileName: true,
+        notifyOnComplete: true,
+        file: { select: { title: true, deponent: true } },
+      },
     });
 
     if (!job) {
-      // Always show a heartbeat even when idle
-      await sleep(10_000);
+      console.warn(`[${candidate.id}] Claimed job missing; skipping`);
       continue;
     }
 
-    // Debug: found a job!
-    console.log(
-      `[${job.id}] Found job. Status: ${job.status}, File: ${job.fileName}`
-    );
+    const displayTitle = job.file?.title || "Untitled Deposition";
 
-    const user = await prisma.user.findUnique({ where: { id: job.userId } });
-    if (!user) {
-      console.error(`[${job.id}] ERROR: User not found`);
-      await prisma.summaryJob.update({
-        where: { id: job.id },
-        data: { status: "error", error: "User not found" },
-      });
-      continue;
+    let user;
+    try {
+      user = await prisma.user.findUnique({ where: { id: job.userId } });
+    } catch {
+      console.warn(`[${job.id}] Warning: User not found`);
     }
-    if (user.credits <= 0) {
-      console.error(`[${job.id}] ERROR: Insufficient credits`);
-      await prisma.summaryJob.update({
-        where: { id: job.id },
-        data: { status: "error", error: "Insufficient credits" },
-      });
-      continue;
-    }
-    // *** credit was already decremented in /api/upload – nothing to do here ***
 
     try {
-      console.log(`[${job.id}] Starting job. Downloading file from GCS...`);
-      const [fileBuffer] = await depositionBucket.file(job.fileName).download();
-      console.log(
-        `[${job.id}] File downloaded (${fileBuffer.length} bytes). Extracting text...`
-      );
-
+      const [buf] = await depositionBucket.file(job.fileName).download();
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
-      const transcript = await extractFullText(
-        fileBuffer,
-        job.fileName,
-        gcsUri
-      );
-      console.log(
-        `[${job.id}] Text extraction complete. Length: ${transcript.length}`
-      );
-
+      const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
-      const chunks = groupPagesToChunks(pages, 12);
-      const metaSection = extractLegalMetadata(transcript);
+      const chunks = groupPagesToChunks(pages);
+      const meta = extractLegalMetadata(transcript, { 
+        title: job.file?.title, 
+        deponent: job.file?.deponent || undefined 
+      }, job.id);
 
-      const summaryParts: string[] = [];
-      for (let i = 0; i < chunks.length; i++) {
-        console.log(
-          `[${job.id}] Summarizing chunk ${i + 1}/${chunks.length} (pages ${
-            chunks[i].start
-          }-${chunks[i].end})`
-        );
-        const prompt = makePrompt(chunks[i], i === 0, metaSection);
-        const resp = await azureChatCompletion(prompt, 2800);
-        const summaryTable = resp.choices[0].message.content.trim();
-        summaryParts.push(summaryTable);
+      // Persist totalPages early for better UI progress feedback
+      try {
+        const pageCount = pages.length;
+        if (pageCount > 0) {
+          await prisma.summaryJob.update({
+            where: { id: job.id },
+            data: { totalPages: pageCount },
+          });
+          // Also update File.pages for consistent display throughout UI
+          await prisma.file.updateMany({
+            where: { fileName: job.fileName, userId: job.userId },
+            data: { pages: pageCount },
+          });
+        }
+      } catch {}
 
-        fs.writeFileSync(
-          path.join("/tmp", `${job.id}-chunk-${i + 1}.md`),
-          summaryTable
-        );
-        await prisma.summaryJob.update({
-          where: { id: job.id },
-          data: { lastPageProcessed: chunks[i].end },
-        });
-        console.log(`[${job.id}] Chunk ${i + 1} complete.`);
-      }
+      // 2) Summarize chunks with bounded parallelism and retries
+      const limit = pLimit(WORKER_CONCURRENCY);
+      const parts: string[] = new Array(chunks.length).fill("");
 
-      const merged = summaryParts
-        .map((part, idx) => {
-          if (idx === 0) return part;
-          return part.replace(/^.*?\| Page.*?\n\|[-\|]+\n/i, "");
-        })
-        .join("\n");
-
-      const outFile = path.join("/tmp", `${job.id}.md`);
-      fs.writeFileSync(outFile, merged);
-      console.log(
-        `[${job.id}] Full summary written to disk. Uploading to GCS...`
+      await Promise.all(
+        chunks.map((chunk, i) =>
+          limit(async () => {
+            const resp = await withRetry(
+              () => {
+                const cfg = loadPromptConfig();
+                return azureChatCompletion(
+                  makePrompt(chunk, i === 0, meta, cfg.system),
+                  typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
+                  typeof cfg.temperature === "number" ? cfg.temperature : 0.0
+                );
+              },
+              { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 } // Increased retries and delays for rate limits
+            );
+            parts[i] = resp.choices[0].message.content.trim();
+            // Best-effort progress update - cap at total pages
+            const cappedPage = Math.min(chunk.end, pages.length); // Cap at total pages to avoid showing huge numbers
+            await prisma.summaryJob.update({
+              where: { id: job.id },
+              data: { lastPageProcessed: cappedPage },
+            });
+          })
+        )
       );
 
-      const destFile = `summary-${job.id}.md`;
-      await summaryBucket.upload(outFile, {
-        destination: destFile,
+      const mergedRaw = parts.join("\n");
+      const rowsOnly = sanitizeGeneratedMarkdown(mergedRaw)
+        .replace(/```[\s\S]*?```/g, "")
+        .trim();
+      const merged = [meta, "", rowsOnly].join("\n\n");
+      const tmpPath = `/tmp/${job.id}.md`;
+      fs.writeFileSync(tmpPath, merged);
+
+      const dest = `summary-${job.id}.md`;
+      await summaryBucket.upload(tmpPath, {
+        destination: dest,
         contentType: "text/markdown",
       });
-      const [mdUrl] = await summaryBucket.file(destFile).getSignedUrl({
+
+      const [signedUrl] = await summaryBucket.file(dest).getSignedUrl({
         version: "v4",
         action: "read",
-        expires: Date.now() + 3 * 24 * 60 * 60 * 1000, // 3 days
+        expires: Date.now() + 3 * 86400000,
       });
 
       await prisma.summaryJob.update({
         where: { id: job.id },
         data: {
           status: "complete",
-          summaryCsvUrl: mdUrl,
-          lastPageProcessed: chunks[chunks.length - 1].end,
+          summaryCsvUrl: signedUrl,
+          lastPageProcessed: pages.length ? Math.min(pages[pages.length - 1].page, pages.length) : 0,
+          totalPages: pages.length,
+          finishedAt: new Date(),
         },
       });
-      fs.unlinkSync(outFile);
-      console.log(`[${job.id}] Completed and uploaded full chunked summary`);
+
+      // Re-fetch notifyOnComplete at completion time to honor late opt-ins
+      const fresh = await prisma.summaryJob.findUnique({
+        where: { id: job.id },
+        select: { notifyOnComplete: true },
+      });
+      if (fresh?.notifyOnComplete && user?.email) {
+        console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
+        try {
+          const dashboardUrl = `${process.env.BASE_URL}/summaries`;
+          try {
+            const { subject, body } = await getRenderedEmailTemplate(4, {
+              name: user.name || user.email,
+              deposition_title: displayTitle,
+              dashboard_link: dashboardUrl,
+            });
+            await sendEmail(user.email, subject, undefined, body);
+          } catch (tplErr) {
+            // Fallback minimal email if the template is missing or invalid
+            console.warn(`[${job.id}] Email template fallback:`, tplErr);
+            const subject = `Your deposition summary is ready`;
+            const html = `
+              <p>Hello ${user.name || user.email},</p>
+              <p>Your deposition summary <strong>${displayTitle}</strong> is ready.</p>
+              <p><a href="${dashboardUrl}">Open Testifi AI Dashboard</a></p>
+            `;
+            await sendEmail(user.email, subject, undefined, html);
+          }
+          console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
+        } catch (emailErr) {
+          console.warn(`[${job.id}] Email failed:`, emailErr);
+        }
+      } else {
+        console.log(
+          `[${job.id}] ℹ️ Skipping email notification (notifyOnComplete: ${fresh?.notifyOnComplete}, email: ${user?.email})`
+        );
+      }
+
+      fs.unlinkSync(tmpPath);
+      console.log(`[${job.id}] ✅ Summary completed by ${WORKER_ID}.`);
     } catch (e: any) {
+      console.error(`[${job.id}] ❌ Error:`, e);
       await prisma.summaryJob.update({
         where: { id: job.id },
-        data: { status: "error", error: e.message || "Failed" },
+        data: { status: "error", error: e.message || "Unknown error" },
       });
-      console.error(`[${job.id}] Worker error:`, e, e?.stack);
     }
   }
 }
 
-mainWorkerLoop().catch((e) => {
-  console.error("Fatal error in worker:", e, e?.stack);
+// Remove model filler like "To be continued..." or "Let me know if you'd like me to continue"
+function sanitizeGeneratedMarkdown(md: string): string {
+  const lines = md.split(/\r?\n/);
+  const banned = [
+    /\bto be continued\b/i,
+    /\blet me know if you'd like me to continue\b/i,
+    /\blet me know if you(?:'|\s)\w* like me to continue\b/i,
+    /\bprovide further clarification\b/i,
+    /\bcan continue summarizing\b/i,
+  ];
+  const keep = lines.filter((l) => !banned.some((re) => re.test(l)));
+  return keep.join("\n");
+}
+
+work().catch((err) => {
+  console.error("Fatal error:", err);
   process.exit(1);
 });
