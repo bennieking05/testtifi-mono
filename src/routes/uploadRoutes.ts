@@ -8,6 +8,7 @@ import { authenticateToken } from "../middlewares/authMiddleware";
 import { randomUUID } from "crypto";
 import { debitCreditsForSummary } from "./billingRoutes";
 import { InsufficientCreditsError } from "../billing/fifoAllocator";
+import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -84,31 +85,19 @@ router.post(
 
     // Check credits BEFORE accepting the file upload
     try {
-      const balanceAggregate = await prisma.ledgerEntry.aggregate({
-        _sum: { credits: true },
-        where: { userId },
-      });
-      const balance = Number(balanceAggregate._sum.credits ?? 0);
-      
-      // If ledger is empty or balance is 0, check fallback User.credits
-      const effectiveBalance = balance > 0 ? balance : (user.credits ?? 0);
-      
+      const effectiveBalance = await getEffectiveCreditBalance(prisma, userId);
       if (effectiveBalance < 1) {
-        res.status(402).json({ error: "Insufficient credits. Please purchase more credits to create a summary." });
+        res
+          .status(402)
+          .json({
+            error:
+              "Insufficient credits. Please purchase more credits to create a summary.",
+          });
         return;
       }
     } catch (ledgerError: any) {
-      // Fallback to User.credits if LedgerEntry table doesn't exist (P2021)
-      const code: string | undefined = ledgerError?.code || ledgerError?.meta?.code || ledgerError?.name;
-      if (code === "P2021") {
-        if ((user.credits ?? 0) < 1) {
-          res.status(402).json({ error: "Insufficient credits. Please purchase more credits to create a summary." });
-          return;
-        }
-      } else {
-        console.error("Error checking credits:", ledgerError);
-        // Continue with upload if credit check fails unexpectedly
-      }
+      console.error("Error checking credits:", ledgerError);
+      // Continue with upload if credit check fails unexpectedly
     }
 
     const bb = Busboy({

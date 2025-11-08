@@ -2,11 +2,8 @@
 
 import express, { Response, NextFunction } from "express";
 import { PrismaClient } from "@prisma/client";
-import {
-  authenticateToken,
-  requireAdmin,
-  AuthRequest,
-} from "../middlewares/authMiddleware";
+import { authenticateToken, requireAdmin, AuthRequest } from "../middlewares/authMiddleware";
+import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 
 const prisma = new PrismaClient();
 const router = express.Router();
@@ -34,7 +31,7 @@ router.get(
 
       const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { credits: true, name: true, email: true, role: true },
+        select: { name: true, email: true, role: true },
       });
 
       if (!user) {
@@ -42,7 +39,9 @@ router.get(
         return;
       }
 
-      res.json(user);
+      const credits = await getEffectiveCreditBalance(prisma, userId);
+
+      res.json({ ...user, credits });
     } catch (err) {
       next(err as Error);
     }
@@ -72,7 +71,7 @@ router.get(
 
       const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { credits: true },
+        select: { id: true },
       });
 
       if (!user) {
@@ -80,7 +79,8 @@ router.get(
         return;
       }
 
-      res.json({ credits: user.credits });
+      const credits = await getEffectiveCreditBalance(prisma, userId);
+      res.json({ credits });
     } catch (err) {
       next(err as Error);
     }

@@ -2,6 +2,7 @@ import express, { Response } from "express";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, type AuthRequest } from "../middlewares/authMiddleware";
 import { allocateCreditsFIFO, InsufficientCreditsError } from "../billing/fifoAllocator";
+import { expireUnusedCredits, getEffectiveCreditBalance } from "../billing/creditExpiration";
 import { stringify } from "csv-stringify/sync";
 
 let prisma: PrismaClient = new PrismaClient();
@@ -27,6 +28,8 @@ export async function debitCreditsForSummary(
   if (!Number.isFinite(creditsToDebit) || creditsToDebit <= 0) {
     throw new Error("Invalid creditsNeeded");
   }
+
+  await expireUnusedCredits(prisma, { userId });
 
   try {
     // Try the new ledger system first
@@ -155,41 +158,8 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     const userId = req.user!.userId;
 
-    try {
-      const balanceAgg = await prisma.ledgerEntry.aggregate({
-        _sum: { credits: true },
-        where: { userId },
-      });
-
-      const ledgerBalance = toNumber(balanceAgg._sum.credits);
-      
-      // If ledger is empty, fall back to User.credits for backward compatibility
-      if (ledgerBalance === 0) {
-        const user = await prisma.user.findUnique({
-          where: { id: userId },
-          select: { credits: true },
-        });
-        const balance = user?.credits ?? 0;
-        res.json({ balance });
-        return;
-      }
-
-      res.json({ balance: ledgerBalance });
-    } catch (err: any) {
-      // If the billing tables are not yet present in production, fall back to User.credits
-      // Prisma P2021: table does not exist
-      const code: string | undefined = err?.code || err?.meta?.code || err?.name;
-      if (code === "P2021") {
-        const user = await prisma.user.findUnique({
-          where: { id: userId },
-          select: { credits: true },
-        });
-        const balance = user?.credits ?? 0;
-        res.json({ balance });
-        return;
-      }
-      throw err;
-    }
+    const balance = await getEffectiveCreditBalance(prisma, userId);
+    res.json({ balance });
   }
 );
 

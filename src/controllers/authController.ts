@@ -5,6 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 import { fillTemplate } from "../utils/emailTemplate";
+import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 
 dotenv.config();
 
@@ -260,11 +261,13 @@ export const refreshAccessToken = async (
       return;
     }
 
+    const credits = await getEffectiveCreditBalance(prisma, decoded.userId);
+
     const newAccessToken = jwt.sign(
       {
         userId: decoded.userId,
         email: decoded.email,
-        credits: decoded.credits,
+        credits,
       },
       JWT_SECRET,
       { expiresIn: "115m" }
@@ -292,11 +295,13 @@ export const login = async (
       return;
     }
 
+    const credits = await getEffectiveCreditBalance(prisma, user.id);
+
     const accessToken = jwt.sign(
       {
         userId: user.id,
         email: user.email,
-        credits: user.credits,
+        credits,
         role: user.role || "user",
       },
       JWT_SECRET,
@@ -307,7 +312,7 @@ export const login = async (
       {
         userId: user.id,
         email: user.email,
-        credits: user.credits,
+        credits,
         role: user.role,
       },
       JWT_SECRET,
@@ -341,7 +346,7 @@ export const login = async (
       refreshToken,
       name: user.name || user.email,
       email: user.email,
-      credits: user.credits,
+      credits,
       role: user.role || "user",
     });
   } catch (error) {
