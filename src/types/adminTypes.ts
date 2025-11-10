@@ -97,4 +97,26 @@ export interface SystemHealthMetrics {
   errorRate24h: number;
 }
 
+export interface ExpiredCreditsSummary {
+  totalExpired: number;
+  topUsers: Array<{
+    userId: string;
+    name: string | null;
+    email: string;
+    creditsExpired: number;
+    lastExpiredAt: string;
+  }>;
+  recent: Array<{
+    id: string;
+    userId: string;
+    name: string | null;
+    email: string;
+    creditsExpired: number;
+    expiredAt: string;
+    purchaseId: string | null;
+    purchaseDate: string | null;
+    stripePaymentIntentId: string | null;
+  }>;
+}
+
 

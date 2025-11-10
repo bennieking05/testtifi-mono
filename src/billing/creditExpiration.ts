@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient, PurchaseStatus } from "@prisma/client";
 
-const LEDGER_EXPIRATION_PREFIX = "expire:";
+export const LEDGER_EXPIRATION_PREFIX = "expire:";
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_EXPIRATION_DAYS = Number(process.env.CREDIT_EXPIRATION_DAYS ?? 3);
 

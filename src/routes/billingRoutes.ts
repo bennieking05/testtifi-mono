@@ -2,7 +2,7 @@ import express, { Response } from "express";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, type AuthRequest } from "../middlewares/authMiddleware";
 import { allocateCreditsFIFO, InsufficientCreditsError } from "../billing/fifoAllocator";
-import { expireUnusedCredits, getEffectiveCreditBalance } from "../billing/creditExpiration";
+import { expireUnusedCredits, getEffectiveCreditBalance, LEDGER_EXPIRATION_PREFIX } from "../billing/creditExpiration";
 import { stringify } from "csv-stringify/sync";
 
 let prisma: PrismaClient = new PrismaClient();
@@ -288,6 +288,60 @@ router.get(
         return;
       }
       throw err;
+    }
+  }
+);
+
+router.get(
+  "/expired",
+  authenticateToken,
+  async (req: AuthRequest, res: Response) => {
+    const userId = req.user!.userId;
+
+    try {
+      await expireUnusedCredits(prisma, { userId });
+
+      const entries = await prisma.ledgerEntry.findMany({
+        where: {
+          userId,
+          type: "credit",
+          credits: { lt: 0 },
+          idempotencyKey: { startsWith: LEDGER_EXPIRATION_PREFIX },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        include: {
+          purchase: {
+            select: {
+              id: true,
+              createdAt: true,
+              stripePaymentIntentId: true,
+            },
+          },
+        },
+      });
+
+      const payload = entries.map((entry) => ({
+        id: entry.id,
+        creditsExpired: Math.abs(entry.credits),
+        expiredAt: entry.createdAt,
+        purchaseId: entry.purchaseId,
+        purchaseDate: entry.purchase?.createdAt ?? null,
+        stripePaymentIntentId: entry.purchase?.stripePaymentIntentId ?? null,
+      }));
+
+      const totalExpired = payload.reduce(
+        (sum, item) => sum + item.creditsExpired,
+        0
+      );
+
+      res.json({
+        totalExpired,
+        entries: payload,
+      });
+    } catch (error) {
+      console.error("[GET /api/billing/expired] error:", error);
+      res.status(500).json({ error: "Failed to load expired credits" });
     }
   }
 );

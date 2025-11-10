@@ -9,7 +9,9 @@ import type {
   DownloadMetrics,
   SupportMetrics,
   SystemHealthMetrics,
+  ExpiredCreditsSummary,
 } from "../types/adminTypes";
+import { LEDGER_EXPIRATION_PREFIX } from "../billing/creditExpiration";
 
 const prisma = new PrismaClient();
 
@@ -751,6 +753,94 @@ export class MetricsService {
       failedToday,
       avgJobTime24h: Math.round(avgJobTime24h * 10) / 10,
       errorRate24h: Math.round(errorRate24h * 10) / 10,
+    };
+  }
+
+  async getExpiredCreditSummary(): Promise<ExpiredCreditsSummary> {
+    const entries = await prisma.ledgerEntry.findMany({
+      where: {
+        type: "credit",
+        credits: { lt: 0 },
+        idempotencyKey: { startsWith: LEDGER_EXPIRATION_PREFIX },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        purchase: {
+          select: {
+            id: true,
+            createdAt: true,
+            stripePaymentIntentId: true,
+          },
+        },
+      },
+    });
+
+    const totalExpired = entries.reduce(
+      (sum, entry) => sum + Math.abs(entry.credits),
+      0
+    );
+
+    const byUserMap = new Map<
+      string,
+      {
+        userId: string;
+        name: string | null;
+        email: string;
+        creditsExpired: number;
+        lastExpiredAt: string;
+      }
+    >();
+
+    for (const entry of entries) {
+      const userId = entry.userId;
+      const amount = Math.abs(entry.credits);
+      const lastExpiredAt = entry.createdAt.toISOString();
+      const existing = byUserMap.get(userId);
+
+      if (existing) {
+        existing.creditsExpired += amount;
+        if (lastExpiredAt > existing.lastExpiredAt) {
+          existing.lastExpiredAt = lastExpiredAt;
+        }
+      } else {
+        byUserMap.set(userId, {
+          userId,
+          name: entry.user?.name ?? null,
+          email: entry.user?.email ?? "",
+          creditsExpired: amount,
+          lastExpiredAt,
+        });
+      }
+    }
+
+    const topUsers = Array.from(byUserMap.values())
+      .sort((a, b) => b.creditsExpired - a.creditsExpired)
+      .slice(0, 25);
+
+    const recent = entries.slice(0, 50).map((entry) => ({
+      id: entry.id,
+      userId: entry.userId,
+      name: entry.user?.name ?? null,
+      email: entry.user?.email ?? "",
+      creditsExpired: Math.abs(entry.credits),
+      expiredAt: entry.createdAt.toISOString(),
+      purchaseId: entry.purchaseId ?? null,
+      purchaseDate: entry.purchase?.createdAt?.toISOString() ?? null,
+      stripePaymentIntentId: entry.purchase?.stripePaymentIntentId ?? null,
+    }));
+
+    return {
+      totalExpired,
+      topUsers,
+      recent,
     };
   }
 }

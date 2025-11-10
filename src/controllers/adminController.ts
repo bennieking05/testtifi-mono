@@ -134,6 +134,19 @@ export class AdminController {
       next(error);
     }
   }
+
+  async getExpiredCredits(
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const summary = await metricsService.getExpiredCreditSummary();
+      res.json(summary);
+    } catch (error) {
+      console.error("[AdminController.getExpiredCredits] Error:", error);
+      next(error);
+    }
+  }
 }
 
 export default new AdminController();

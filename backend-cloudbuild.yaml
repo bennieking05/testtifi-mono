@@ -64,7 +64,7 @@ images:
 substitutions:
   _CLUSTER: testifi
   _CLUSTER_LOCATION: us-central1-c
-  _NAMESPACE: default
+  _NAMESPACE: staging
 
 options:
   logging: CLOUD_LOGGING_ONLY

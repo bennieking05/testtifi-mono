@@ -56,6 +56,12 @@ router.get("/metrics/support", (_req, res, next) => adminController.getSupportMe
 router.get("/metrics/system-health", (_req, res, next) => adminController.getSystemHealth(res, next));
 
 /**
+ * GET /api/admin/billing/expired
+ * Returns aggregate expired credit information
+ */
+router.get("/billing/expired", (_req, res, next) => adminController.getExpiredCredits(res, next));
+
+/**
  * POST /api/admin/reset-stuck-jobs
  * Resets stuck processing jobs to queued status
  */

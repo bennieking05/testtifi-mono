@@ -2,6 +2,8 @@ import express, { Request, Response } from "express";
 import Stripe from "stripe";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
+import { getEffectiveCreditBalance } from "../billing/creditExpiration";
+import { sendEmail } from "../lib/sendEmail";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -72,7 +74,7 @@ async function recordPurchaseCredit(
     currency: string;
     receiptUrl?: string | null;
   }
-): Promise<void> {
+): Promise<boolean> {
   const purchase = await tx.purchase.upsert({
     where: { stripePaymentIntentId: paymentIntentId },
     update: {
@@ -97,7 +99,7 @@ async function recordPurchaseCredit(
   const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
 
   const existing = await tx.ledgerEntry.findUnique({ where: { idempotencyKey } });
-  if (existing) return;
+  if (existing) return false;
 
   await tx.ledgerEntry.create({
     data: {
@@ -109,6 +111,80 @@ async function recordPurchaseCredit(
       purchaseId: purchase.id,
     },
   });
+
+  return true;
+}
+
+async function sendPurchaseReceiptEmail({
+  userId,
+  credits,
+  amountCents,
+  currency,
+  paymentIntentId,
+  receiptUrl,
+}: {
+  userId: string;
+  credits: number;
+  amountCents: number;
+  currency: string;
+  paymentIntentId: string;
+  receiptUrl?: string | null;
+}): Promise<void> {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, name: true },
+    });
+
+    if (!user?.email) {
+      console.warn("Purchase receipt email skipped: user email missing", {
+        userId,
+      });
+      return;
+    }
+
+    const amountFormatted = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+    }).format(amountCents / 100);
+
+    const subject = `Receipt: ${credits} summary credit${credits === 1 ? "" : "s"} added to your Testifi AI account`;
+    const greetingName = user.name?.split(" ")[0] ?? "there";
+
+    const htmlLines = [
+      `<p>Hi ${greetingName},</p>`,
+      `<p>Thank you for your purchase. We've added <strong>${credits.toLocaleString()} summary credit${credits === 1 ? "" : "s"}</strong> to your Testifi AI account.</p>`,
+      `<ul>`,
+      `<li><strong>Payment amount:</strong> ${amountFormatted}</li>`,
+      `<li><strong>Payment ID:</strong> ${paymentIntentId}</li>`,
+      `</ul>`,
+      receiptUrl
+        ? `<p>You can download the Stripe receipt <a href="${receiptUrl}">here</a>.</p>`
+        : "",
+      `<p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>`,
+      `<p>— The Testifi AI Team</p>`,
+    ].filter(Boolean);
+
+    const html = htmlLines.join("\n");
+    const text = [
+      `Hi ${greetingName},`,
+      "",
+      `Thank you for your purchase. We've added ${credits} summary credit${credits === 1 ? "" : "s"} to your Testifi AI account.`,
+      `Payment amount: ${amountFormatted}`,
+      `Payment ID: ${paymentIntentId}`,
+      receiptUrl ? `Stripe receipt: ${receiptUrl}` : "",
+      "",
+      "The credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.",
+      "",
+      "— The Testifi AI Team",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    await sendEmail(user.email, subject, text, html);
+  } catch (error) {
+    console.error("Failed to send purchase receipt email:", error);
+  }
 }
 
 function determineRefundCredits(
@@ -199,16 +275,27 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
   const paymentIntentId = intent.id;
       const receiptUrl = (intent as any).charges?.data?.[0]?.receipt_url ?? null;
 
-  await prisma.$transaction(async (tx) => {
-    await recordPurchaseCredit(tx, {
+  const created = await prisma.$transaction(async (tx) =>
+    recordPurchaseCredit(tx, {
       paymentIntentId,
       userId,
       credits,
       amountCents,
       currency,
       receiptUrl,
+    })
+  );
+
+  if (created) {
+    await sendPurchaseReceiptEmail({
+      userId,
+      credits,
+      amountCents,
+      currency,
+      paymentIntentId,
+      receiptUrl: receiptUrl ?? undefined,
     });
-  });
+  }
 }
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session): Promise<void> {
@@ -233,16 +320,27 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
         ? (session as any).latest_charge.receipt_url
         : undefined;
 
-  await prisma.$transaction(async (tx) => {
-    await recordPurchaseCredit(tx, {
+  const created = await prisma.$transaction(async (tx) =>
+    recordPurchaseCredit(tx, {
       paymentIntentId,
       userId,
       credits,
       amountCents,
       currency,
       receiptUrl,
+    })
+  );
+
+  if (created) {
+    await sendPurchaseReceiptEmail({
+      userId,
+      credits,
+      amountCents,
+      currency,
+      paymentIntentId,
+      receiptUrl,
     });
-  });
+  }
 }
 
 async function handleRefund(refund: Stripe.Refund): Promise<void> {
@@ -385,6 +483,159 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
 
   res.json({ clientSecret: paymentIntent.client_secret });
 });
+
+router.post(
+  "/confirm",
+  authenticateToken,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).user.userId as string;
+    const { paymentIntentId } = req.body as { paymentIntentId?: string };
+
+    if (!paymentIntentId) {
+      res.status(400).json({ error: "Missing paymentIntentId" });
+      return;
+    }
+
+    try {
+      // Check if credits were already added (check ledger entry, not just purchase)
+      const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
+      const existingLedgerEntry = await prisma.ledgerEntry.findUnique({
+        where: { idempotencyKey },
+      });
+
+      if (existingLedgerEntry) {
+        // Credits already added, just return current balance
+        const balance = await getEffectiveCreditBalance(prisma, userId);
+        const existingPurchase = await prisma.purchase.findUnique({
+          where: { stripePaymentIntentId: paymentIntentId },
+        });
+        res.json({
+          balance,
+          creditsAdded: existingPurchase?.creditsAdded ?? 0,
+          alreadyProcessed: true,
+        });
+        return;
+      }
+
+      let intent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+        expand: ["charges.data", "latest_charge"],
+      });
+
+      if (!intent) {
+        res.status(404).json({ error: "PaymentIntent not found" });
+        return;
+      }
+
+      console.log(`[confirm] PaymentIntent ${paymentIntentId} status: ${intent.status}`);
+
+      const intentUserId = intent.metadata?.userId ?? null;
+      if (!intentUserId || intentUserId !== userId) {
+        res.status(403).json({ error: "PaymentIntent does not belong to this user" });
+        return;
+      }
+
+      // Allow processing if succeeded or processing (might be in transition)
+      if (intent.status !== "succeeded" && intent.status !== "processing") {
+        console.log(`[confirm] PaymentIntent ${paymentIntentId} rejected - status: ${intent.status}`);
+        res.status(400).json({ 
+          error: `PaymentIntent not succeeded (status: ${intent.status})`,
+          status: intent.status 
+        });
+        return;
+      }
+
+      // If processing, wait a moment and check again (up to 3 times)
+      if (intent.status === "processing") {
+        console.log(`[confirm] PaymentIntent ${paymentIntentId} is processing, waiting...`);
+        for (let i = 0; i < 3; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const refreshedIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+          console.log(`[confirm] Retry ${i + 1}: PaymentIntent ${paymentIntentId} status: ${refreshedIntent.status}`);
+          if (refreshedIntent.status === "succeeded") {
+            intent = refreshedIntent as Stripe.PaymentIntent;
+            break;
+          }
+          if (i === 2) {
+            res.status(400).json({ 
+              error: `PaymentIntent still processing after retries (status: ${refreshedIntent.status})`,
+              status: refreshedIntent.status 
+            });
+            return;
+          }
+        }
+      }
+
+      const credits = parsePositiveInt(intent.metadata?.credits ?? "");
+      if (!credits) {
+        res.status(400).json({ error: "Unable to determine purchased credits" });
+        return;
+      }
+
+      const amountCents = intent.amount_received ?? intent.amount ?? 0;
+      const currency = intent.currency ?? "usd";
+      const receiptUrl =
+        (intent as any).charges?.data?.[0]?.receipt_url ??
+        ((intent as any).latest_charge &&
+        typeof (intent as any).latest_charge !== "string"
+          ? (intent as any).latest_charge.receipt_url
+          : undefined);
+
+      const created = await prisma.$transaction((tx) =>
+        recordPurchaseCredit(tx, {
+          paymentIntentId,
+          userId,
+          credits,
+          amountCents,
+          currency,
+          receiptUrl,
+        })
+      );
+
+      if (created) {
+        await sendPurchaseReceiptEmail({
+          userId,
+          credits,
+          amountCents,
+          currency,
+          paymentIntentId,
+          receiptUrl,
+        });
+      }
+
+      const balance = await getEffectiveCreditBalance(prisma, userId);
+
+      res.json({
+        balance,
+        creditsAdded: credits,
+      });
+    } catch (error: any) {
+      console.error("Error confirming purchase:", error);
+      // If it's a Stripe error about unexpected state, check if credits were already added
+      if (error?.code === "payment_intent_unexpected_state" || error?.type === "StripeInvalidRequestError") {
+        const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
+        const existingLedgerEntry = await prisma.ledgerEntry.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existingLedgerEntry) {
+          const balance = await getEffectiveCreditBalance(prisma, userId);
+          const existingPurchase = await prisma.purchase.findUnique({
+            where: { stripePaymentIntentId: paymentIntentId },
+          });
+          res.json({
+            balance,
+            creditsAdded: existingPurchase?.creditsAdded ?? 0,
+            alreadyProcessed: true,
+          });
+          return;
+        }
+      }
+      const status = error?.statusCode ?? 500;
+      res.status(status).json({
+        error: error?.message ?? "Failed to confirm purchase",
+      });
+    }
+  }
+);
 
 router.get(
   "/history",
