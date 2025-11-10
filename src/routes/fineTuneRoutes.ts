@@ -3,11 +3,13 @@ import multer from "multer";
 import { Storage } from "@google-cloud/storage";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middlewares/authMiddleware";
+import pdf from "pdf-parse";
+import mammoth from "mammoth";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const upload = multer({
-  dest: "/tmp/uploads",                  // write to the pod’s disk
+  storage: multer.memoryStorage(),
   limits: { fileSize: 512 * 1024 * 1024 } // 512 MiB cap
 });
 
@@ -15,6 +17,24 @@ const storage = new Storage();
 const humanSummaryBucket = storage.bucket("deposition-summaries"); // /human/
 const pairBucket = storage.bucket("deposition-summaries"); // /pairs/
 // const trainingUploadBucket = storage.bucket("deposition-training-data");
+
+// Utility function to extract text from various file formats
+async function extractTextFromFile(buffer: Buffer, filename: string): Promise<string> {
+  const isPDF = filename.toLowerCase().endsWith(".pdf");
+  const isDocx = /\.(docx?|DOCX?)$/.test(filename);
+
+  if (isPDF) {
+    const parsed = await pdf(buffer);
+    return parsed.text;
+  }
+
+  if (isDocx) {
+    const { value } = await mammoth.extractRawText({ buffer });
+    return value;
+  }
+
+  return buffer.toString("utf-8");
+}
 
 // Upload human-written summaries
 router.post(
@@ -32,6 +52,17 @@ router.post(
 
       const filename = `human/${Date.now()}-${file.originalname}`;
       await humanSummaryBucket.file(filename).save(file.buffer);
+
+      // Create database record
+      await prisma.trainingAsset.create({
+        data: {
+          userId,
+          type: "human_summary",
+          filename,
+          fileSize: file.size,
+          description: `Human-written summary: ${file.originalname}`,
+        },
+      });
 
       res.json({ message: "Human summary uploaded", filename });
     } catch (err) {
@@ -57,6 +88,17 @@ router.post(
 
       const filename = `pairs/${Date.now()}-${file.originalname}`;
       await pairBucket.file(filename).save(file.buffer);
+
+      // Create database record
+      await prisma.trainingAsset.create({
+        data: {
+          userId,
+          type: "training_pair",
+          filename,
+          fileSize: file.size,
+          description: `Training pair: ${file.originalname}`,
+        },
+      });
 
       res.json({ message: "Training pair uploaded", filename });
     } catch (err) {
@@ -86,9 +128,15 @@ router.post(
         return;
       }
 
-      // Extract file content (as string)
-      const transcriptContent = transcriptFile.buffer.toString("utf-8");
-      const summaryContent = summaryFile.buffer.toString("utf-8");
+      // Extract file content (as string) - handle PDF/DOC files
+      const transcriptContent = await extractTextFromFile(
+        transcriptFile.buffer,
+        transcriptFile.originalname
+      );
+      const summaryContent = await extractTextFromFile(
+        summaryFile.buffer,
+        summaryFile.originalname
+      );
 
       // Generate JSONL pair
       const pairJsonl =
