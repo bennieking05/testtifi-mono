@@ -102,6 +102,14 @@ export function parseMarkdown(md: string) {
       seenRow = true;
       rest = rest.replace(/^[−–:,|\s]+/, "").trim();
       // Remove page references from the testimony text (more aggressive - catch all patterns)
+      // CRITICAL: Remove page references that appear at the START of testimony text
+      // Pattern matches: "p.7:1-25", "p.7:1-25 ", "p.7:1-25 The witness...", etc.
+      // This handles cases where AI includes page numbers in testimony like "p.7:1-25 The witness..."
+      // Match page reference at start (with optional "p." or "page" prefix) and remove it
+      // The lookahead ensures we match even when followed by text, pipe, comma, or end
+      rest = rest.replace(/^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
+      // Also catch page references that appear after leading whitespace/comma/delimiter
+      rest = rest.replace(/^(?:\s|,|[-–:|])+\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
       // First pass: remove the comprehensive pattern
       rest = rest.replace(pageRefInTextRegex, "").trim();
       // Second pass: catch any remaining standalone page references (p.123:1-25, p.124:1-10, etc.)

@@ -13,7 +13,6 @@ import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { loadPromptConfig } from "../lib/promptConfig";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 import { parseMarkdown } from "../routes/downloadRoutes";
-import { getLightLogoDataUri } from "../utils/logo";
 import pLimit from "p-limit";
 import os from "os";
 
@@ -22,6 +21,9 @@ const storage = new Storage();
 const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
+
+// Track summary completion emails sent to prevent duplicates (in-memory cache, cleared on restart)
+const summaryEmailSentCache = new Set<string>();
 
 console.log(
   "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
@@ -551,58 +553,63 @@ async function work() {
         include: { file: true },
       });
       if (fresh && fresh.notifyOnComplete && user?.email) {
-        console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
-        try {
-          const dashboardUrl = `${frontendUrl}/summaries`;
-          
-          // Generate document attachments
-          const attachments: EmailAttachment[] = [];
+        // Check if we've already sent an email for this summary job
+        if (summaryEmailSentCache.has(job.id)) {
+          console.log(`[${job.id}] 📧 Email already sent for summary job ${job.id}, skipping`);
+        } else {
+          console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
           try {
-            console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
-            const { meta, rows } = parseMarkdown(merged);
+            const dashboardUrl = `${frontendUrl}/summaries`;
             
-            // Convert job to match JobData interface (pages needs to be string)
-            const jobData = {
-              id: job.id,
-              fileName: job.fileName,
-              createdAt: job.createdAt,
-              file: job.file ? {
-                title: job.file.title,
-                deponent: job.file.deponent,
-                pages: job.file.pages !== null ? String(job.file.pages) : null,
-              } : null,
-            };
+            // Generate document attachments
+            const attachments: EmailAttachment[] = [];
+            try {
+              console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
+              const { meta, rows } = parseMarkdown(merged);
+              
+              // Convert job to match JobData interface (pages needs to be string)
+              const jobData = {
+                id: job.id,
+                fileName: job.fileName,
+                createdAt: job.createdAt,
+                file: job.file ? {
+                  title: job.file.title,
+                  deponent: job.file.deponent,
+                  pages: job.file.pages !== null ? String(job.file.pages) : null,
+                } : null,
+              };
+              
+              // Generate DOCX
+              const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, merged);
+              const docxFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.docx`;
+              attachments.push({
+                content: docxBuffer.toString("base64"),
+                filename: docxFilename,
+                type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              });
+              
+              // Generate PDF
+              const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, merged);
+              const pdfFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.pdf`;
+              attachments.push({
+                content: pdfBuffer.toString("base64"),
+                filename: pdfFilename,
+                type: "application/pdf",
+              });
+              
+              console.log(`[${job.id}] ✅ Generated ${attachments.length} document attachments`);
+            } catch (docErr) {
+              console.warn(`[${job.id}] ⚠️ Failed to generate document attachments:`, docErr);
+              // Continue sending email without attachments if document generation fails
+            }
             
-            // Generate DOCX
-            const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, merged);
-            const docxFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.docx`;
-            attachments.push({
-              content: docxBuffer.toString("base64"),
-              filename: docxFilename,
-              type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            });
+            // Use the new email format with logo and updated text
+            const subject = `Your Deposition Summary Is Ready`;
+            const userName = user.name || user.email;
+            // Use hosted logo URL - same as purchase receipt emails
+            const logoSrc = "https://app.testifi.ai/testifi_dark_logo.png";
             
-            // Generate PDF
-            const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, merged);
-            const pdfFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.pdf`;
-            attachments.push({
-              content: pdfBuffer.toString("base64"),
-              filename: pdfFilename,
-              type: "application/pdf",
-            });
-            
-            console.log(`[${job.id}] ✅ Generated ${attachments.length} document attachments`);
-          } catch (docErr) {
-            console.warn(`[${job.id}] ⚠️ Failed to generate document attachments:`, docErr);
-            // Continue sending email without attachments if document generation fails
-          }
-          
-          // Use the new email format with logo and updated text
-          const subject = `Your Deposition Summary Is Ready`;
-          const userName = user.name || user.email;
-          const logoDataUri = getLightLogoDataUri();
-          
-          const html = `
+            const html = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -704,14 +711,14 @@ async function work() {
 <body>
   <div class="wrapper">
     <div class="header">
-      <img src="${logoDataUri}" alt="Testifi-AI" style="display: block; margin: 0 auto;" />
+      <img src="${logoSrc}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
     </div>
     <div class="content">
       <h2>Your Deposition Summary Is Ready</h2>
       <p>Hello ${userName},</p>
       <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
       <div class="cta-wrap">
-        <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
+        <a href="${dashboardUrl}" class="btn" style="display: inline-block; padding: 12px 24px; background-color: #5674BC; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: 600;">View on Dashboard</a>
       </div>
       ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
       <div class="retention-notice">
@@ -730,10 +737,19 @@ async function work() {
 
           const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.\n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi-AI. All rights reserved.\nYou're receiving this because you have an account on Testifi-AI.`;
 
-          await sendEmail(user.email, subject, text, html, attachments);
-          console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
-        } catch (emailErr) {
-          console.warn(`[${job.id}] Email failed:`, emailErr);
+            await sendEmail(user.email, subject, text, html, attachments);
+            console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
+            
+            // Mark email as sent to prevent duplicates
+            summaryEmailSentCache.add(job.id);
+            
+            // Clean up cache after 24 hours to prevent memory leaks
+            setTimeout(() => {
+              summaryEmailSentCache.delete(job.id);
+            }, 24 * 60 * 60 * 1000);
+          } catch (emailErr) {
+            console.warn(`[${job.id}] Email failed:`, emailErr);
+          }
         }
       } else {
         console.log(

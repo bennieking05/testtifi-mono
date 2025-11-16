@@ -4,8 +4,6 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 import { sendEmail } from "../lib/sendEmail";
-import fs from "fs";
-import path from "path";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -14,12 +12,6 @@ const stripe = new Stripe(process.env.STRIPE_API_KEY!, {
 });
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-// Frontend URL for hosting logo (same pattern as emailNotificationRoutes)
-const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
-  /\/+$/,
-  ""
-);
 
 const PAYMENT_LEDGER_PREFIX = "pi:";
 const REFUND_LEDGER_PREFIX = "refund:";
@@ -219,47 +211,8 @@ async function sendPurchaseReceiptEmail({
 
     const subject = `Receipt: ${actualCredits} summary credit${actualCredits === 1 ? "" : "s"} added to your Testifi AI account`;
     const greetingName = user.name?.split(" ")[0] ?? "there";
-    // Embed logo as base64 for email compatibility (localhost URLs don't work in emails)
-    // Use the smaller light logo (11KB) for embedding to keep email size reasonable
-    let logoSrc = `${frontendUrl}/testifi_dark_logo.png`; // Default fallback
-    try {
-      // Try multiple paths to find the logo (accounting for different run contexts)
-      const cwd = process.cwd();
-      const logoPaths = [
-        // When running from backend directory
-        path.resolve(cwd, "backend/public/testifi_light_logo.png"),
-        path.resolve(cwd, "public/testifi_light_logo.png"),
-        // When running from root directory
-        path.resolve(cwd, "backend/public/testifi_light_logo.png"),
-        // When running from compiled dist directory
-        path.resolve(__dirname, "../../public/testifi_light_logo.png"),
-        path.resolve(__dirname, "../../../backend/public/testifi_light_logo.png"),
-        path.resolve(__dirname, "../../../public/testifi_light_logo.png"),
-        // Fallback to dark logo if light not found
-        path.resolve(cwd, "backend/public/testifi_dark_logo.png"),
-        path.resolve(cwd, "public/testifi_dark_logo.png"),
-        path.resolve(__dirname, "../../public/testifi_dark_logo.png"),
-      ];
-      
-      let logoFound = false;
-      for (const logoPath of logoPaths) {
-        if (fs.existsSync(logoPath)) {
-          const logoBuf = fs.readFileSync(logoPath);
-          const logoBase64 = logoBuf.toString("base64");
-          logoSrc = `data:image/png;base64,${logoBase64}`;
-          console.log(`[purchase-receipt] Logo embedded from: ${logoPath} (${logoBuf.length} bytes, base64: ${logoBase64.length} chars)`);
-          logoFound = true;
-          break;
-        }
-      }
-      
-      if (!logoFound) {
-        console.warn(`[purchase-receipt] Logo not found in any of ${logoPaths.length} paths. Using URL fallback: ${logoSrc}`);
-      }
-    } catch (err) {
-      console.error("[purchase-receipt] Failed to load logo for embedding:", err);
-      // logoSrc already has fallback value
-    }
+    // Use hosted logo URL - this works in emails and is more reliable than embedding
+    const logoSrc = "https://app.testifi.ai/testifi_dark_logo.png";
 
     const html = `
 <!DOCTYPE html>
@@ -356,6 +309,21 @@ async function sendPurchaseReceiptEmail({
       background-color: #4563a3;
       color: #ffffff !important;
     }
+    .retention-notice {
+      margin-top: 24px;
+      padding: 16px;
+      background-color: #fff3cd;
+      border-left: 4px solid #ffc107;
+      border-radius: 4px;
+    }
+    .retention-notice p {
+      margin: 0;
+      color: #856404;
+    }
+    .retention-notice p:first-child {
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
     .footer {
       background-color: #f7f7f7;
       color: #888;
@@ -419,6 +387,11 @@ async function sendPurchaseReceiptEmail({
       </div>
       ` : ""}
 
+      <div class="retention-notice">
+        <p><strong>Important:</strong> Credits Expiration Policy</p>
+        <p>Credits must be used within 72 hours (3 days) from now. Any unused credits will expire and cannot be recovered. Please use your credits before they expire.</p>
+      </div>
+
       <p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>
     </div>
     <div class="footer">
@@ -445,7 +418,7 @@ ${hasTax ? `- Texas Sales Tax (8.25%): ${taxFormatted}` : `- Tax: $0.00`}
 - Total: ${totalFormatted}
 - Payment ID: ${paymentIntentId}
 
-${receiptUrl ? `Download your Stripe receipt: ${receiptUrl}\n\n` : ""}The credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.
+${receiptUrl ? `Download your Stripe receipt: ${receiptUrl}\n\n` : ""}Important: Credits Expiration Policy\nCredits must be used within 72 hours (3 days) from now. Any unused credits will expire and cannot be recovered. Please use your credits before they expire.\n\nThe credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.
 
 Testifi AI
 P.O. Box 600876

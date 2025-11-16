@@ -7,11 +7,13 @@ import { authenticateToken } from "../middlewares/authMiddleware";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { parseMarkdown } from "./downloadRoutes";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
-import { getLightLogoDataUri } from "../utils/logo";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 const bucket = new Storage().bucket("deposition-summaries");
+
+// Track summary completion emails sent to prevent duplicates (in-memory cache, cleared on restart)
+const summaryEmailSentCache = new Set<string>();
 
 // Frontend URL with fallback (same pattern as authController)
 const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
@@ -80,8 +82,16 @@ router.post(
           });
 
           if (user?.email) {
+            // Check if we've already sent an email for this summary job
+            if (summaryEmailSentCache.has(job.id)) {
+              console.log(`[email-notification] Email already sent for summary job ${job.id}, skipping`);
+              res.json({ ok: true });
+              return;
+            }
+
             const dashboardUrl = `${frontendUrl}/summaries`;
-            const logoDataUri = getLightLogoDataUri();
+            // Use hosted logo URL - same as purchase receipt emails
+            const logoSrc = "https://app.testifi.ai/testifi_dark_logo.png";
             
             // Get display title for email
             const displayTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || `Summary ${job.id}`;
@@ -241,19 +251,20 @@ router.post(
 <body>
   <div class="wrapper">
     <div class="header">
-      <img src="${logoDataUri}" alt="Testifi-AI" style="display: block; margin: 0 auto;" />
+      <img src="${logoSrc}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
     </div>
     <div class="content">
       <h2>Your Deposition Summary Is Ready</h2>
       <p>Hello ${userName},</p>
       <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
       <div class="cta-wrap">
-        <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
+        <a href="${dashboardUrl}" class="btn" style="display: inline-block; padding: 12px 24px; background-color: #5674BC; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: 600;">View on Dashboard</a>
       </div>
       ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
       <div class="retention-notice">
         <p><strong>Important:</strong> Summary Retention Policy</p>
-        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable.\
+        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
+      </div>
       <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
     </div>
     <div class="footer">
@@ -269,6 +280,14 @@ router.post(
             try {
               await sendEmail(user.email, subject, text, html, attachments);
               console.log(`Immediate notification sent for job ${job.id}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
+              
+              // Mark email as sent to prevent duplicates
+              summaryEmailSentCache.add(job.id);
+              
+              // Clean up cache after 24 hours to prevent memory leaks
+              setTimeout(() => {
+                summaryEmailSentCache.delete(job.id);
+              }, 24 * 60 * 60 * 1000);
             } catch (emailErr) {
               console.error(
                 `Failed to send immediate email for job ${job.id}:`,

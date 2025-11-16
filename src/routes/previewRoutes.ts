@@ -281,6 +281,10 @@ function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
       const label = rowMatch[0].replace(/\s+/g, " ").trim();
       let remainder = trimmed.slice(rowMatch[0].length).trim();
       remainder = remainder.replace(/^[-–:|]\s*/, "").trim();
+      // CRITICAL: Remove page references that appear at the START of testimony text
+      // This handles cases where AI includes page numbers in testimony like "p.7:1-25 The witness..."
+      remainder = remainder.replace(/^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
+      remainder = remainder.replace(/^(?:\s|,|[-–:|])+\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
       // Remove page references from the testimony text
       remainder = remainder.replace(pageRefInTextRegex, "").trim();
       // Clean up any double spaces or leading/trailing punctuation
