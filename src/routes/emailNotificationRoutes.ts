@@ -100,8 +100,20 @@ router.post(
               const summaryContent = buf.toString("utf-8");
               const { meta, rows } = parseMarkdown(summaryContent);
               
+              // Convert job to match JobData interface (pages needs to be string)
+              const jobData = {
+                id: job.id,
+                fileName: job.fileName,
+                createdAt: job.createdAt,
+                file: job.file ? {
+                  title: job.file.title,
+                  deponent: job.file.deponent,
+                  pages: job.file.pages !== null ? String(job.file.pages) : null,
+                } : null,
+              };
+              
               // Generate DOCX
-              const docxBuffer = await generateDocxBuffer(job, { meta, rows }, summaryContent);
+              const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, summaryContent);
               const docxFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.docx`;
               attachments.push({
                 content: docxBuffer.toString("base64"),
@@ -110,7 +122,7 @@ router.post(
               });
               
               // Generate PDF
-              const pdfBuffer = await generatePdfBuffer(job, { meta, rows }, summaryContent);
+              const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, summaryContent);
               const pdfFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.pdf`;
               attachments.push({
                 content: pdfBuffer.toString("base64"),
