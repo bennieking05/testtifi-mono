@@ -13,6 +13,7 @@ import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { loadPromptConfig } from "../lib/promptConfig";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 import { parseMarkdown } from "../routes/downloadRoutes";
+import { getLightLogoDataUri } from "../utils/logo";
 import pLimit from "p-limit";
 import os from "os";
 
@@ -407,23 +408,6 @@ async function withRetry<T>(
   throw lastErr;
 }
 
-async function getRenderedEmailTemplate(
-  templateId: number,
-  variables: Record<string, string>
-) {
-  const emailTemplate = await prisma.email.findUnique({
-    where: { id: templateId },
-  });
-  if (!emailTemplate) throw new Error(`Email template ${templateId} not found`);
-
-  let { subject, body } = emailTemplate;
-  for (const [key, value] of Object.entries(variables)) {
-    const regex = new RegExp(`{{\\s*${key}\\s*}}`, "g");
-    body = body.replace(regex, value);
-    subject = subject.replace(regex, value);
-  }
-  return { subject, body };
-}
 
 async function work() {
   while (true) {
@@ -577,8 +561,20 @@ async function work() {
             console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
             const { meta, rows } = parseMarkdown(merged);
             
+            // Convert job to match JobData interface (pages needs to be string)
+            const jobData = {
+              id: job.id,
+              fileName: job.fileName,
+              createdAt: job.createdAt,
+              file: job.file ? {
+                title: job.file.title,
+                deponent: job.file.deponent,
+                pages: job.file.pages !== null ? String(job.file.pages) : null,
+              } : null,
+            };
+            
             // Generate DOCX
-            const docxBuffer = await generateDocxBuffer(job, { meta, rows }, merged);
+            const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, merged);
             const docxFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.docx`;
             attachments.push({
               content: docxBuffer.toString("base64"),
@@ -587,7 +583,7 @@ async function work() {
             });
             
             // Generate PDF
-            const pdfBuffer = await generatePdfBuffer(job, { meta, rows }, merged);
+            const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, merged);
             const pdfFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.pdf`;
             attachments.push({
               content: pdfBuffer.toString("base64"),
@@ -601,36 +597,140 @@ async function work() {
             // Continue sending email without attachments if document generation fails
           }
           
-          try {
-            const { subject, body } = await getRenderedEmailTemplate(4, {
-              name: user.name || user.email,
-              deposition_title: displayTitle,
-              dashboard_link: dashboardUrl,
-            });
-            // Append retention policy notice to email body
-            const retentionNotice = `
-              <div style="margin-top: 24px; padding: 16px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
-                <p style="margin: 0; font-weight: bold; color: #856404;"><strong>Important:</strong> Summary Retention Policy</p>
-                <p style="margin: 8px 0 0 0; color: #856404;">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
-              </div>
-            `;
-            await sendEmail(user.email, subject, undefined, body + retentionNotice, attachments);
-          } catch (tplErr) {
-            // Fallback minimal email if the template is missing or invalid
-            console.warn(`[${job.id}] Email template fallback:`, tplErr);
-            const subject = `Your Deposition Summary Is Ready`;
-            const html = `
-              <p>Hello ${user.name || user.email},</p>
-              <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it at this time.</p>
-              <p><a href="${dashboardUrl}" style="display: inline-block; padding: 12px 24px; background-color: #5674BC; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">View on Dashboard</a></p>
-              ${attachments.length > 0 ? `<p><strong>Note:</strong> Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
-              <div style="margin-top: 24px; padding: 16px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
-                <p style="margin: 0; font-weight: bold; color: #856404;"><strong>Important:</strong> Summary Retention Policy</p>
-                <p style="margin: 8px 0 0 0; color: #856404;">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
-              </div>
-            `;
-            await sendEmail(user.email, subject, undefined, html, attachments);
-          }
+          // Use the new email format with logo and updated text
+          const subject = `Your Deposition Summary Is Ready`;
+          const userName = user.name || user.email;
+          const logoDataUri = getLightLogoDataUri();
+          
+          const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deposition Summary Ready</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      margin: 0;
+      padding: 0;
+      background-color: #f5f5f5;
+    }
+    .wrapper {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .header {
+      background-color: #5674BC;
+      padding: 24px 16px;
+      text-align: center;
+    }
+    .header img {
+      max-width: 200px;
+      height: auto;
+    }
+    .content {
+      padding: 32px 24px;
+    }
+    .content h2 {
+      color: #333;
+      margin-top: 0;
+      margin-bottom: 20px;
+      font-size: 24px;
+    }
+    .content p {
+      margin: 16px 0;
+      color: #555;
+    }
+    .cta-wrap {
+      text-align: center;
+      margin: 28px 0;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      background-color: #5674BC;
+      color: #ffffff !important;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .btn:hover {
+      background-color: #4563a3;
+      color: #ffffff !important;
+    }
+    .retention-notice {
+      margin-top: 24px;
+      padding: 16px;
+      background-color: #fff3cd;
+      border-left: 4px solid #ffc107;
+      border-radius: 4px;
+    }
+    .retention-notice p {
+      margin: 0;
+      color: #856404;
+    }
+    .retention-notice p:first-child {
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    .footer {
+      background-color: #f7f7f7;
+      color: #888;
+      font-size: 13px;
+      text-align: center;
+      padding: 24px 16px;
+      border-top: 1px solid #e0e0e0;
+    }
+    .footer p {
+      margin: 4px 0;
+    }
+    @media (max-width: 600px) {
+      .wrapper {
+        border-radius: 0;
+      }
+      .content {
+        padding: 24px 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <img src="${logoDataUri}" alt="Testifi-AI" style="display: block; margin: 0 auto;" />
+    </div>
+    <div class="content">
+      <h2>Your Deposition Summary Is Ready</h2>
+      <p>Hello ${userName},</p>
+      <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
+      <div class="cta-wrap">
+        <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
+      </div>
+      ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
+      <div class="retention-notice">
+        <p><strong>Important:</strong> Summary Retention Policy</p>
+        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
+      </div>
+      <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
+    </div>
+    <div class="footer">
+      <p><strong>© 2025 Testifi-AI. All rights reserved.</strong></p>
+      <p>You're receiving this because you have an account on Testifi-AI.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+          const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.\n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi-AI. All rights reserved.\nYou're receiving this because you have an account on Testifi-AI.`;
+
+          await sendEmail(user.email, subject, text, html, attachments);
           console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
         } catch (emailErr) {
           console.warn(`[${job.id}] Email failed:`, emailErr);

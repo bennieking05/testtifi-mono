@@ -7,7 +7,7 @@ import { authenticateToken } from "../middlewares/authMiddleware";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { parseMarkdown } from "./downloadRoutes";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
-import { getLogoDataUri } from "../utils/logo";
+import { getLightLogoDataUri } from "../utils/logo";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -81,7 +81,7 @@ router.post(
 
           if (user?.email) {
             const dashboardUrl = `${frontendUrl}/summaries`;
-            const logoDataUri = getLogoDataUri();
+            const logoDataUri = getLightLogoDataUri();
             
             // Get display title for email
             const displayTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || `Summary ${job.id}`;
@@ -193,13 +193,14 @@ router.post(
       display: inline-block;
       padding: 12px 24px;
       background-color: #5674BC;
-      color: #ffffff;
+      color: #ffffff !important;
       text-decoration: none;
       border-radius: 6px;
       font-weight: 600;
     }
     .btn:hover {
       background-color: #4563a3;
+      color: #ffffff !important;
     }
     .retention-notice {
       margin-top: 24px;
@@ -240,7 +241,7 @@ router.post(
 <body>
   <div class="wrapper">
     <div class="header">
-      <img src="${logoDataUri}" alt="Testifi-AI Logo" />
+      <img src="${logoDataUri}" alt="Testifi-AI" style="display: block; margin: 0 auto;" />
     </div>
     <div class="content">
       <h2>Your Deposition Summary Is Ready</h2>
@@ -252,8 +253,7 @@ router.post(
       ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
       <div class="retention-notice">
         <p><strong>Important:</strong> Summary Retention Policy</p>
-        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
-      </div>
+        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable.\
       <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
     </div>
     <div class="footer">

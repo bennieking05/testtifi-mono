@@ -78,7 +78,7 @@ router.get(
         )
         .join("\n");
       const tableHtml = `
-        <table>
+        <table style="border: 2px solid #9da9bb; background: #fff;">
           <thead>
             <tr>
               <th style="width: 22%">Page(s)</th>
@@ -124,6 +124,8 @@ router.get(
           border-collapse: collapse;
           margin: 10pt 0 16pt;
           table-layout: fixed;
+          border: 2px solid #9da9bb;
+          background: #fff;
         }
         table, th, td { border: 1px solid #c8d0da; }
         th, td { border-left: 1px solid #c8d0da; border-right: 1px solid #c8d0da; }

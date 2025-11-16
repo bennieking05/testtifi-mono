@@ -14,7 +14,6 @@ import {
   BorderStyle,
 } from "docx";
 import PDFDocument from "pdfkit";
-import stream from "stream";
 import { loadLogo } from "./logo";
 
 interface JobData {
@@ -39,7 +38,7 @@ interface DocumentData {
 export async function generateDocxBuffer(
   job: JobData,
   documentData: DocumentData,
-  summaryContent: string
+  _summaryContent: string
 ): Promise<Buffer> {
   const { meta, rows } = documentData;
   const uploadedTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "summary";
@@ -251,7 +250,7 @@ export async function generateDocxBuffer(
 export async function generatePdfBuffer(
   job: JobData,
   documentData: DocumentData,
-  summaryContent: string
+  _summaryContent: string
 ): Promise<Buffer> {
   const { meta, rows } = documentData;
   const uploadedTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "summary";

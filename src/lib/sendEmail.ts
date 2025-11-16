@@ -1,4 +1,4 @@
-import sgMail, { MailDataRequired, AttachmentData } from "@sendgrid/mail";
+import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -32,8 +32,9 @@ export async function sendEmail(
     to,
     from: senderEmail,
     subject,
-    text: fallbackText,
-    ...(html ? { html: html.trim() } : {}),
+    // Always include HTML if provided, and include text as fallback
+    // SendGrid will use HTML for clients that support it, text for others
+    ...(html ? { html: html.trim(), text: fallbackText } : { text: fallbackText }),
     ...(attachments && attachments.length > 0
       ? {
           attachments: attachments.map((att) => ({
@@ -41,7 +42,7 @@ export async function sendEmail(
             filename: att.filename,
             type: att.type || "application/octet-stream",
             disposition: att.disposition || "attachment",
-          })) as AttachmentData[],
+          })),
         }
       : {}),
   };
@@ -51,12 +52,16 @@ export async function sendEmail(
       to: msg.to,
       from: msg.from,
       subject: msg.subject,
-      text: msg.text?.slice(0, 100) + "...",
+      hasHtml: !!msg.html,
+      htmlLength: msg.html?.length || 0,
+      hasText: !!msg.text,
+      textLength: msg.text?.length || 0,
+      textPreview: msg.text?.slice(0, 100) + "...",
       attachments: attachments?.length || 0,
     });
 
     await sgMail.send(msg);
-    console.log(`✉️  Email sent to ${to}: "${subject}"${attachments?.length ? ` with ${attachments.length} attachment(s)` : ""}`);
+    console.log(`✉️  Email sent to ${to}: "${subject}"${msg.html ? " (HTML)" : " (text only)"}${attachments?.length ? ` with ${attachments.length} attachment(s)` : ""}`);
   } catch (error: any) {
     if (error?.response?.body?.errors) {
       console.error(

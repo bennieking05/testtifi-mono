@@ -225,3 +225,49 @@ export function getLogoDataUri(): string {
   const logo = loadLogo();
   return `data:${logo.mime};base64,${logo.base64}`;
 }
+
+/**
+ * Load light logo specifically for dark backgrounds (like email headers)
+ * Prioritizes testifi_light_logo.png over other logos
+ */
+export function loadLightLogo(): LogoAsset {
+  const cwd = process.cwd();
+  const lightLogoPaths = [
+    process.env.LIGHT_LOGO_PATH,
+    path.resolve(cwd, "testifi_dark_logo.png"), // User's specified path
+    path.resolve(cwd, "backend/testifi_dark_logo.png"),
+    path.resolve(cwd, "public/testifi_light_logo.png"),
+    path.resolve(cwd, "public/testifi_dark_logo.png"),
+    path.resolve(cwd, "loveable/public/testifi_light_logo.png"),
+    path.resolve(cwd, "loveable/public/testifi_dark_logo.png"),
+    path.resolve(__dirname, "../public/testifi_light_logo.png"),
+    path.resolve(__dirname, "../public/testifi_dark_logo.png"),
+    path.resolve(__dirname, "../../public/testifi_light_logo.png"),
+    path.resolve(__dirname, "../../testifi_dark_logo.png"),
+    path.resolve(__dirname, "../../../loveable/public/testifi_light_logo.png"),
+    path.resolve(__dirname, "../../../loveable/public/testifi_dark_logo.png"),
+  ].filter(Boolean) as string[];
+
+  for (const candidate of lightLogoPaths) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const buf = fs.readFileSync(candidate);
+      const { width, height, mime } = computeDimensions(buf);
+      const base64 = buf.toString("base64");
+      const asset: LogoAsset = { buf, base64, mime, width, height, source: candidate };
+      console.log(`✓ Light logo loaded successfully from: ${candidate}`);
+      return asset;
+    } catch (err) {
+      console.warn(`✗ Failed to load light logo from: ${candidate}`, err);
+    }
+  }
+
+  // Fallback to regular logo if light logo not found
+  console.warn("⚠ Light logo not found, using default logo");
+  return loadLogo();
+}
+
+export function getLightLogoDataUri(): string {
+  const logo = loadLightLogo();
+  return `data:${logo.mime};base64,${logo.base64}`;
+}
