@@ -69,6 +69,10 @@ export function parseMarkdown(md: string) {
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
   // A single page token that may appear repeatedly at the start, separated by commas
   const pageToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
+  
+  // Regex to match page references within testimony text (e.g., ", p.7:1-20 |", "p.7:1-20 |", etc.)
+  // Matches page refs that appear after comma/start and before pipe/end (these are separators, not content)
+  const pageRefInTextRegex = /(?:^|,\s*)\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?:\||$)/gi;
 
   const meta: string[] = [];
   const rows: string[][] = [];
@@ -96,6 +100,10 @@ export function parseMarkdown(md: string) {
     if (pages.length) {
       seenRow = true;
       rest = rest.replace(/^[−–:,|\s]+/, "").trim();
+      // Remove page references from the testimony text
+      rest = rest.replace(pageRefInTextRegex, "").trim();
+      // Clean up any double spaces or leading/trailing punctuation
+      rest = rest.replace(/\s+/g, " ").replace(/^[,|]\s*/, "").trim();
       rows.push([pages.join(", "), rest || ""]);
       return;
     }
@@ -131,6 +139,23 @@ router.get(
     if (!job) {
       res.status(404).json({ error: "Summary job not found." });
       return;
+    }
+
+    // Check if summary is older than 3 days
+    const RETENTION_DAYS = 3;
+    const DAY_IN_MS = 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(Date.now() - RETENTION_DAYS * DAY_IN_MS);
+    
+    if (job.finishedAt && job.finishedAt < cutoffDate) {
+      // Summary is older than 3 days - check if it still exists
+      if (!job.summaryCsvUrl && !job.file?.summaryFileName) {
+        res.status(410).json({ 
+          error: "This summary has been deleted per our 3-day retention policy. Summary content older than 3 days is automatically removed. Access may be available in extenuating circumstances - please contact support.",
+          deleted: true,
+          finishedAt: job.finishedAt.toISOString(),
+        });
+        return;
+      }
     }
 
     const key = job.summaryCsvUrl

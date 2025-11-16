@@ -24,6 +24,6 @@ router.post("/login", asyncHandler(login));
 router.post("/forgot-password", asyncHandler(forgotPassword));
 router.post("/reset-password", asyncHandler(resetPassword));
 router.get("/get-reset-email", asyncHandler(getResetEmail));
-router.post("/refresh-token", refreshAccessToken);
+router.post("/refresh-token", asyncHandler(refreshAccessToken));
 
 export default router;

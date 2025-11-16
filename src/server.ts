@@ -20,6 +20,7 @@ import webCopyRoutes from "./routes/webCopyRoutes";
 import validationRoutes from "./routes/validationRoutes";
 import adminRoutes from "./routes/adminRoutes";
 import debugRoutes from "./routes/debugRoutes";
+import cleanupRoutes from "./routes/cleanupRoutes";
 
 dotenv.config();
 
@@ -128,6 +129,7 @@ app.use("/api/webcopy", webCopyRoutes);
 app.use("/api/validation", validationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/debug", debugRoutes);
+app.use("/api/cleanup", cleanupRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>

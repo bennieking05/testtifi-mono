@@ -262,12 +262,19 @@ export const refreshAccessToken = async (
     }
 
     const credits = await getEffectiveCreditBalance(prisma, decoded.userId);
+    
+    // Get user role from database to ensure it's up to date
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { role: true },
+    });
 
     const newAccessToken = jwt.sign(
       {
         userId: decoded.userId,
         email: decoded.email,
         credits,
+        role: user?.role || (decoded as any).role || "user",
       },
       JWT_SECRET,
       { expiresIn: "115m" }

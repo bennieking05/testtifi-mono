@@ -4,6 +4,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 import { sendEmail } from "../lib/sendEmail";
+import { getLogoDataUri } from "../utils/logo";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -115,6 +116,14 @@ async function recordPurchaseCredit(
   return true;
 }
 
+// Tiered pricing helper (matches frontend logic)
+function getTierPricing(quantity: number): number {
+  if (quantity >= 50) return 100.0;
+  if (quantity >= 25) return 110.0;
+  if (quantity >= 10) return 120.0;
+  return 125.0; // 1–9 credits
+}
+
 async function sendPurchaseReceiptEmail({
   userId,
   credits,
@@ -143,40 +152,210 @@ async function sendPurchaseReceiptEmail({
       return;
     }
 
-    const amountFormatted = new Intl.NumberFormat("en-US", {
+    // Calculate subtotal and tax
+    const unitPrice = getTierPricing(credits);
+    const subtotal = unitPrice * credits;
+    const totalAmount = amountCents / 100;
+    const taxAmount = totalAmount - subtotal;
+    const hasTax = taxAmount > 0.01; // Account for rounding differences
+
+    const currencyFormatter = new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: currency.toUpperCase(),
-    }).format(amountCents / 100);
+    });
+
+    const subtotalFormatted = currencyFormatter.format(subtotal);
+    const taxFormatted = hasTax ? currencyFormatter.format(taxAmount) : "$0.00";
+    const totalFormatted = currencyFormatter.format(totalAmount);
 
     const subject = `Receipt: ${credits} summary credit${credits === 1 ? "" : "s"} added to your Testifi AI account`;
     const greetingName = user.name?.split(" ")[0] ?? "there";
+    const logoDataUri = getLogoDataUri();
 
-    const htmlLines = [
-      `<p>Hi ${greetingName},</p>`,
-      `<p>Thank you for your purchase. We've added <strong>${credits.toLocaleString()} summary credit${credits === 1 ? "" : "s"}</strong> to your Testifi AI account.</p>`,
-      `<ul>`,
-      `<li><strong>Payment amount:</strong> ${amountFormatted}</li>`,
-      `<li><strong>Payment ID:</strong> ${paymentIntentId}</li>`,
-      `</ul>`,
-      receiptUrl
-        ? `<p>You can download the Stripe receipt <a href="${receiptUrl}">here</a>.</p>`
-        : "",
-      `<p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>`,
-      `<p>— The Testifi AI Team</p>`,
-    ].filter(Boolean);
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Purchase Receipt</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      margin: 0;
+      padding: 0;
+      background-color: #f5f5f5;
+    }
+    .wrapper {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .header {
+      background-color: #5674BC;
+      padding: 24px 16px;
+      text-align: center;
+    }
+    .header img {
+      max-width: 200px;
+      height: auto;
+    }
+    .content {
+      padding: 32px 24px;
+    }
+    .content h2 {
+      color: #333;
+      margin-top: 0;
+      margin-bottom: 20px;
+      font-size: 24px;
+    }
+    .content p {
+      margin: 16px 0;
+      color: #555;
+    }
+    .receipt-details {
+      background-color: #f9f9f9;
+      border-radius: 6px;
+      padding: 20px;
+      margin: 24px 0;
+    }
+    .receipt-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .receipt-row:last-child {
+      border-bottom: none;
+      font-weight: bold;
+      font-size: 18px;
+      padding-top: 12px;
+      margin-top: 8px;
+      border-top: 2px solid #5674BC;
+    }
+    .receipt-label {
+      color: #666;
+    }
+    .receipt-value {
+      color: #333;
+      font-weight: 500;
+    }
+    .payment-id {
+      font-size: 12px;
+      color: #888;
+      margin-top: 12px;
+    }
+    .cta-wrap {
+      text-align: center;
+      margin: 28px 0;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      background-color: #5674BC;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .btn:hover {
+      background-color: #4563a3;
+    }
+    .footer {
+      background-color: #f7f7f7;
+      color: #888;
+      font-size: 13px;
+      text-align: center;
+      padding: 24px 16px;
+      border-top: 1px solid #e0e0e0;
+    }
+    .footer p {
+      margin: 4px 0;
+    }
+    @media (max-width: 600px) {
+      .wrapper {
+        border-radius: 0;
+      }
+      .content {
+        padding: 24px 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <img src="${logoDataUri}" alt="Testifi AI Logo" />
+    </div>
+    <div class="content">
+      <h2>Thank You for Your Purchase</h2>
+      <p>Hi ${greetingName},</p>
+      <p>Thank you for your purchase. We've added <strong>${credits.toLocaleString()} summary credit${credits === 1 ? "" : "s"}</strong> to your Testifi AI account.</p>
+      
+      <div class="receipt-details">
+        <div class="receipt-row">
+          <span class="receipt-label">Subtotal (${credits} credit${credits === 1 ? "" : "s"}):</span>
+          <span class="receipt-value">${subtotalFormatted}</span>
+        </div>
+        ${hasTax ? `
+        <div class="receipt-row">
+          <span class="receipt-label">Texas Sales Tax (8.25%):</span>
+          <span class="receipt-value">${taxFormatted}</span>
+        </div>
+        ` : ""}
+        <div class="receipt-row">
+          <span class="receipt-label">Total:</span>
+          <span class="receipt-value">${totalFormatted}</span>
+        </div>
+        <div class="payment-id">
+          Payment ID: ${paymentIntentId}
+        </div>
+      </div>
 
-    const html = htmlLines.join("\n");
+      ${receiptUrl ? `
+      <div class="cta-wrap">
+        <a href="${receiptUrl}" class="btn">Download Stripe Receipt</a>
+      </div>
+      ` : ""}
+
+      <p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>
+    </div>
+    <div class="footer">
+      <p><strong>Testifi AI</strong></p>
+      <p>123 Main Street, Suite 100</p>
+      <p>Austin, TX 78701</p>
+      <p style="margin-top: 16px;">&copy; ${new Date().getFullYear()} Testifi AI. All rights reserved.</p>
+      <p style="margin-top: 8px;">You're receiving this because you made a purchase on Testifi AI.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
     const text = [
       `Hi ${greetingName},`,
       "",
       `Thank you for your purchase. We've added ${credits} summary credit${credits === 1 ? "" : "s"} to your Testifi AI account.`,
-      `Payment amount: ${amountFormatted}`,
+      "",
+      "Receipt Details:",
+      `Subtotal (${credits} credit${credits === 1 ? "" : "s"}): ${subtotalFormatted}`,
+      ...(hasTax ? [`Texas Sales Tax (8.25%): ${taxFormatted}`] : []),
+      `Total: ${totalFormatted}`,
       `Payment ID: ${paymentIntentId}`,
-      receiptUrl ? `Stripe receipt: ${receiptUrl}` : "",
+      "",
+      receiptUrl ? `Download Stripe receipt: ${receiptUrl}` : "",
       "",
       "The credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.",
       "",
-      "— The Testifi AI Team",
+      "Testifi AI",
+      "123 Main Street, Suite 100",
+      "Austin, TX 78701",
+      "",
+      `© ${new Date().getFullYear()} Testifi AI. All rights reserved.`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -456,6 +635,8 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
   const paymentIntent = await stripe.paymentIntents.create({
     amount: amountCents,
     currency: "usd",
+    description: `Deposition summary token(s) - ${credits} credit${credits === 1 ? "" : "s"}`,
+    statement_descriptor_suffix: "TESTIFI AI",
     metadata: {
       userId,
       credits: String(credits),
@@ -481,7 +662,72 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
     },
   });
 
-  res.json({ clientSecret: paymentIntent.client_secret });
+  res.json({ 
+    clientSecret: paymentIntent.client_secret,
+    paymentIntentId: paymentIntent.id,
+  });
+});
+
+router.post("/update-payment-intent", authenticateToken, async (req: Request, res: Response) => {
+  const userId = (req as any).user.userId as string;
+  const { paymentIntentId, amountCents } = req.body as { 
+    paymentIntentId?: string; 
+    amountCents?: number;
+  };
+
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  if (!paymentIntentId || !amountCents) {
+    res.status(400).json({ error: "Missing paymentIntentId or amountCents" });
+    return;
+  }
+
+  try {
+    // Verify the payment intent belongs to this user
+    const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const intentUserId = intent.metadata?.userId;
+    
+    if (!intentUserId || intentUserId !== userId) {
+      res.status(403).json({ error: "PaymentIntent does not belong to this user" });
+      return;
+    }
+
+    // Only allow updates if payment intent is in a mutable state
+    if (intent.status !== "requires_payment_method" && intent.status !== "requires_confirmation") {
+      res.status(400).json({ 
+        error: `Cannot update PaymentIntent in status: ${intent.status}`,
+        status: intent.status 
+      });
+      return;
+    }
+
+    // Update the payment intent amount
+    const updatedIntent = await stripe.paymentIntents.update(paymentIntentId, {
+      amount: amountCents,
+    });
+
+    // Update the purchase record
+    await prisma.purchase.update({
+      where: { stripePaymentIntentId: paymentIntentId },
+      data: {
+        amountCents,
+      },
+    });
+
+    res.json({ 
+      clientSecret: updatedIntent.client_secret,
+      paymentIntentId: updatedIntent.id,
+    });
+  } catch (error: any) {
+    console.error("[update-payment-intent] Error:", error);
+    res.status(500).json({ 
+      error: "Failed to update payment intent",
+      details: error.message 
+    });
+  }
 });
 
 router.post(
@@ -517,7 +763,7 @@ router.post(
         return;
       }
 
-      let intent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+      let intent: Stripe.PaymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
         expand: ["charges.data", "latest_charge"],
       });
 
@@ -552,7 +798,7 @@ router.post(
           const refreshedIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
           console.log(`[confirm] Retry ${i + 1}: PaymentIntent ${paymentIntentId} status: ${refreshedIntent.status}`);
           if (refreshedIntent.status === "succeeded") {
-            intent = refreshedIntent as Stripe.PaymentIntent;
+            intent = refreshedIntent;
             break;
           }
           if (i === 2) {
@@ -675,10 +921,11 @@ router.get(
     }
 
     // Only show actual Stripe purchases (not manual credits)
+    // Filter out legacy/manual credits that start with "legacy-"
     const purchases = await prisma.purchase.findMany({
       where: { 
         userId,
-        stripePaymentIntentId: { not: null as any },
+        stripePaymentIntentId: { not: { startsWith: "legacy-" } },
         status: { in: ["succeeded", "partially_refunded", "refunded"] }
       },
       orderBy: { createdAt: "desc" },

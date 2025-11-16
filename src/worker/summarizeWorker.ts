@@ -9,8 +9,10 @@ import fs from "fs";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
-import { sendEmail } from "../lib/sendEmail";
+import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { loadPromptConfig } from "../lib/promptConfig";
+import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
+import { parseMarkdown } from "../routes/downloadRoutes";
 import pLimit from "p-limit";
 import os from "os";
 
@@ -24,6 +26,12 @@ console.log(
   "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
 );
 console.log("=== Worker starting ===");
+
+// Frontend URL with fallback (same pattern as authController)
+const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
+  /\/+$/,
+  ""
+);
 
 // Tuning knobs (env‑overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
@@ -446,8 +454,9 @@ async function work() {
         id: true,
         userId: true,
         fileName: true,
+        createdAt: true,
         notifyOnComplete: true,
-        file: { select: { title: true, deponent: true } },
+        file: { select: { title: true, deponent: true, pages: true } },
       },
     });
 
@@ -555,31 +564,74 @@ async function work() {
       // Re-fetch notifyOnComplete at completion time to honor late opt-ins
       const fresh = await prisma.summaryJob.findUnique({
         where: { id: job.id },
-        select: { notifyOnComplete: true },
+        include: { file: true },
       });
-      if (fresh?.notifyOnComplete && user?.email) {
+      if (fresh && fresh.notifyOnComplete && user?.email) {
         console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
         try {
-          const dashboardUrl = `${process.env.BASE_URL}/summaries`;
+          const dashboardUrl = `${frontendUrl}/summaries`;
+          
+          // Generate document attachments
+          const attachments: EmailAttachment[] = [];
+          try {
+            console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
+            const { meta, rows } = parseMarkdown(merged);
+            
+            // Generate DOCX
+            const docxBuffer = await generateDocxBuffer(job, { meta, rows }, merged);
+            const docxFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.docx`;
+            attachments.push({
+              content: docxBuffer.toString("base64"),
+              filename: docxFilename,
+              type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            });
+            
+            // Generate PDF
+            const pdfBuffer = await generatePdfBuffer(job, { meta, rows }, merged);
+            const pdfFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.pdf`;
+            attachments.push({
+              content: pdfBuffer.toString("base64"),
+              filename: pdfFilename,
+              type: "application/pdf",
+            });
+            
+            console.log(`[${job.id}] ✅ Generated ${attachments.length} document attachments`);
+          } catch (docErr) {
+            console.warn(`[${job.id}] ⚠️ Failed to generate document attachments:`, docErr);
+            // Continue sending email without attachments if document generation fails
+          }
+          
           try {
             const { subject, body } = await getRenderedEmailTemplate(4, {
               name: user.name || user.email,
               deposition_title: displayTitle,
               dashboard_link: dashboardUrl,
             });
-            await sendEmail(user.email, subject, undefined, body);
+            // Append retention policy notice to email body
+            const retentionNotice = `
+              <div style="margin-top: 24px; padding: 16px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+                <p style="margin: 0; font-weight: bold; color: #856404;"><strong>Important:</strong> Summary Retention Policy</p>
+                <p style="margin: 8px 0 0 0; color: #856404;">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
+              </div>
+            `;
+            await sendEmail(user.email, subject, undefined, body + retentionNotice, attachments);
           } catch (tplErr) {
             // Fallback minimal email if the template is missing or invalid
             console.warn(`[${job.id}] Email template fallback:`, tplErr);
-            const subject = `Your deposition summary is ready`;
+            const subject = `Your Deposition Summary Is Ready`;
             const html = `
               <p>Hello ${user.name || user.email},</p>
-              <p>Your deposition summary <strong>${displayTitle}</strong> is ready.</p>
-              <p><a href="${dashboardUrl}">Open Testifi AI Dashboard</a></p>
+              <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it at this time.</p>
+              <p><a href="${dashboardUrl}" style="display: inline-block; padding: 12px 24px; background-color: #5674BC; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">View on Dashboard</a></p>
+              ${attachments.length > 0 ? `<p><strong>Note:</strong> Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
+              <div style="margin-top: 24px; padding: 16px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+                <p style="margin: 0; font-weight: bold; color: #856404;"><strong>Important:</strong> Summary Retention Policy</p>
+                <p style="margin: 8px 0 0 0; color: #856404;">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
+              </div>
             `;
-            await sendEmail(user.email, subject, undefined, html);
+            await sendEmail(user.email, subject, undefined, html, attachments);
           }
-          console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
+          console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
         } catch (emailErr) {
           console.warn(`[${job.id}] Email failed:`, emailErr);
         }

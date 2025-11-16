@@ -6,6 +6,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "start:worker": "node dist/worker/summarizeWorker.js",
+    "start:cleanup": "node dist/worker/summaryCleanupWorker.js",
     "postinstall": "prisma generate",
     "test:ui": "playwright test -c playwright.config.ts",
     "test:uat:mock": "node scripts/uat-mock-tests.mjs",

@@ -1,4 +1,4 @@
-import sgMail, { MailDataRequired } from "@sendgrid/mail";
+import sgMail, { MailDataRequired, AttachmentData } from "@sendgrid/mail";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -12,11 +12,19 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+export interface EmailAttachment {
+  content: string; // base64 encoded
+  filename: string;
+  type?: string;
+  disposition?: string;
+}
+
 export async function sendEmail(
   to: string,
   subject: string,
   text?: string,
-  html?: string
+  html?: string,
+  attachments?: EmailAttachment[]
 ) {
   const fallbackText = text?.trim() || (html ? stripHtml(html) : "No content");
 
@@ -26,6 +34,16 @@ export async function sendEmail(
     subject,
     text: fallbackText,
     ...(html ? { html: html.trim() } : {}),
+    ...(attachments && attachments.length > 0
+      ? {
+          attachments: attachments.map((att) => ({
+            content: att.content,
+            filename: att.filename,
+            type: att.type || "application/octet-stream",
+            disposition: att.disposition || "attachment",
+          })) as AttachmentData[],
+        }
+      : {}),
   };
 
   try {
@@ -34,10 +52,11 @@ export async function sendEmail(
       from: msg.from,
       subject: msg.subject,
       text: msg.text?.slice(0, 100) + "...",
+      attachments: attachments?.length || 0,
     });
 
     await sgMail.send(msg);
-    console.log(`✉️  Email sent to ${to}: "${subject}"`);
+    console.log(`✉️  Email sent to ${to}: "${subject}"${attachments?.length ? ` with ${attachments.length} attachment(s)` : ""}`);
   } catch (error: any) {
     if (error?.response?.body?.errors) {
       console.error(
