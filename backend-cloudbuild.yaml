@@ -72,4 +72,5 @@ options:
 # Explicitly set logs bucket to satisfy service account requirement
 logsBucket: 'gs://golden-cosmos-450417-i8_cloudbuild'
 
-# serviceAccount removed so the build runs under Cloud Build's default SA (or the Trigger's SA)
+# Force Cloud Build default service account (not Compute Engine SA)
+serviceAccount: projects/golden-cosmos-450417-i8/serviceAccounts/748916208557@cloudbuild.gserviceaccount.com
