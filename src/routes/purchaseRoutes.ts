@@ -910,7 +910,7 @@ router.post(
         return;
       }
 
-      let intent: Stripe.PaymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+      let intent = await stripe.paymentIntents.retrieve(paymentIntentId, {
         expand: ["charges.data", "latest_charge"],
       });
 
