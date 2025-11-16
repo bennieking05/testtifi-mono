@@ -223,23 +223,38 @@ async function sendPurchaseReceiptEmail({
     // Use the smaller light logo (11KB) for embedding to keep email size reasonable
     let logoSrc = `${frontendUrl}/testifi_dark_logo.png`; // Default fallback
     try {
-      // Try multiple paths to find the logo
+      // Try multiple paths to find the logo (accounting for different run contexts)
+      const cwd = process.cwd();
       const logoPaths = [
-        path.resolve(process.cwd(), "backend/public/testifi_light_logo.png"),
-        path.resolve(process.cwd(), "public/testifi_light_logo.png"),
-        path.resolve(__dirname, "../public/testifi_light_logo.png"),
-        path.resolve(process.cwd(), "backend/public/testifi_dark_logo.png"),
-        path.resolve(process.cwd(), "public/testifi_dark_logo.png"),
+        // When running from backend directory
+        path.resolve(cwd, "backend/public/testifi_light_logo.png"),
+        path.resolve(cwd, "public/testifi_light_logo.png"),
+        // When running from root directory
+        path.resolve(cwd, "backend/public/testifi_light_logo.png"),
+        // When running from compiled dist directory
+        path.resolve(__dirname, "../../public/testifi_light_logo.png"),
+        path.resolve(__dirname, "../../../backend/public/testifi_light_logo.png"),
+        path.resolve(__dirname, "../../../public/testifi_light_logo.png"),
+        // Fallback to dark logo if light not found
+        path.resolve(cwd, "backend/public/testifi_dark_logo.png"),
+        path.resolve(cwd, "public/testifi_dark_logo.png"),
+        path.resolve(__dirname, "../../public/testifi_dark_logo.png"),
       ];
       
+      let logoFound = false;
       for (const logoPath of logoPaths) {
         if (fs.existsSync(logoPath)) {
           const logoBuf = fs.readFileSync(logoPath);
           const logoBase64 = logoBuf.toString("base64");
           logoSrc = `data:image/png;base64,${logoBase64}`;
-          console.log(`[purchase-receipt] Logo embedded from: ${logoPath} (${logoBuf.length} bytes)`);
+          console.log(`[purchase-receipt] Logo embedded from: ${logoPath} (${logoBuf.length} bytes, base64: ${logoBase64.length} chars)`);
+          logoFound = true;
           break;
         }
+      }
+      
+      if (!logoFound) {
+        console.warn(`[purchase-receipt] Logo not found in any of ${logoPaths.length} paths. Using URL fallback: ${logoSrc}`);
       }
     } catch (err) {
       console.error("[purchase-receipt] Failed to load logo for embedding:", err);
@@ -408,8 +423,8 @@ async function sendPurchaseReceiptEmail({
     </div>
     <div class="footer">
       <p><strong>Testifi AI</strong></p>
-      <p>123 Main Street, Suite 100</p>
-      <p>Austin, TX 78701</p>
+      <p>P.O. Box 600876</p>
+      <p>Dallas, TX 75360-0876</p>
       <p style="margin-top: 16px;"><strong>© ${new Date().getFullYear()} Testifi AI. All rights reserved.</strong></p>
       <p style="margin-top: 8px;">You're receiving this because you made a purchase on Testifi AI.</p>
     </div>
@@ -433,8 +448,8 @@ ${hasTax ? `- Texas Sales Tax (8.25%): ${taxFormatted}` : `- Tax: $0.00`}
 ${receiptUrl ? `Download your Stripe receipt: ${receiptUrl}\n\n` : ""}The credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.
 
 Testifi AI
-123 Main Street, Suite 100
-Austin, TX 78701
+P.O. Box 600876
+Dallas, TX 75360-0876
 
 © ${new Date().getFullYear()} Testifi AI. All rights reserved.
 You're receiving this because you made a purchase on Testifi AI.`;
