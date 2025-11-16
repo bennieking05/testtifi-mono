@@ -68,6 +68,8 @@ substitutions:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET
+
+# Explicitly set logs bucket to satisfy service account requirement
+logsBucket: 'gs://golden-cosmos-450417-i8_cloudbuild'
 
 # serviceAccount removed so the build runs under Cloud Build's default SA (or the Trigger's SA)
