@@ -22,8 +22,7 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
-// Track summary completion emails sent to prevent duplicates (in-memory cache, cleared on restart)
-const summaryEmailSentCache = new Set<string>();
+// Note: Duplicate prevention now uses database field completionEmailSentAt instead of in-memory cache
 
 console.log(
   "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
@@ -553,8 +552,17 @@ async function work() {
         include: { file: true },
       });
       if (fresh && fresh.notifyOnComplete && user?.email) {
-        // Check if we've already sent an email for this summary job
-        if (summaryEmailSentCache.has(job.id)) {
+        // Atomically check and mark email as sent to prevent duplicates across processes
+        // Only update if completionEmailSentAt is null (hasn't been sent yet)
+        const emailUpdateResult = await prisma.summaryJob.updateMany({
+          where: { 
+            id: job.id,
+            completionEmailSentAt: null, // Only update if email hasn't been sent
+          },
+          data: { completionEmailSentAt: new Date() },
+        });
+        
+        if (emailUpdateResult.count === 0) {
           console.log(`[${job.id}] 📧 Email already sent for summary job ${job.id}, skipping`);
         } else {
           console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
@@ -739,16 +747,13 @@ async function work() {
 
             await sendEmail(user.email, subject, text, html, attachments);
             console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
-            
-            // Mark email as sent to prevent duplicates
-            summaryEmailSentCache.add(job.id);
-            
-            // Clean up cache after 24 hours to prevent memory leaks
-            setTimeout(() => {
-              summaryEmailSentCache.delete(job.id);
-            }, 24 * 60 * 60 * 1000);
           } catch (emailErr) {
             console.warn(`[${job.id}] Email failed:`, emailErr);
+            // If email fails, reset the completionEmailSentAt so it can be retried
+            await prisma.summaryJob.updateMany({
+              where: { id: job.id },
+              data: { completionEmailSentAt: null },
+            });
           }
         }
       } else {

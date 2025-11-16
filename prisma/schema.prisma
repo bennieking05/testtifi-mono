@@ -73,6 +73,7 @@ model SummaryJob {
   /* ───── timing  ───── */
   startedAt         DateTime @default(now())  // when the row is inserted
   finishedAt        DateTime?                 // filled by the worker on success
+  completionEmailSentAt DateTime?            // tracks when completion email was sent to prevent duplicates
 
   /* ───── bookkeeping ─── */
   createdAt         DateTime @default(now())
