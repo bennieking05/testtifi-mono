@@ -69,6 +69,5 @@ substitutions:
 options:
   logging: CLOUD_LOGGING_ONLY
 
-# Explicitly set logs bucket to satisfy service account requirement
-logsBucket: 'gs://golden-cosmos-450417-i8_cloudbuild'
+# Logs go to Cloud Logging only (no GCS bucket)
 
