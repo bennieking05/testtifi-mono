@@ -648,131 +648,27 @@ async function work() {
             };
             const logoSrc = `cid:${logoCid}`;
             
-            const html = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Deposition Summary Ready</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      margin: 0;
-      padding: 0;
-      background-color: #f5f5f5;
-    }
-    .wrapper {
-      max-width: 600px;
-      margin: 0 auto;
-      background-color: #ffffff;
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .header {
-      background-color: #5674BC;
-      padding: 24px 16px;
-      text-align: center;
-    }
-    .header img {
-      max-width: 200px;
-      height: auto;
-    }
-    .content {
-      padding: 32px 24px;
-    }
-    .content h2 {
-      color: #333;
-      margin-top: 0;
-      margin-bottom: 20px;
-      font-size: 24px;
-    }
-    .content p {
-      margin: 16px 0;
-      color: #555;
-    }
-    .cta-wrap {
-      text-align: center;
-      margin: 28px 0;
-    }
-    .btn {
-      display: inline-block;
-      padding: 12px 24px;
-      background-color: #5674BC;
-      color: #ffffff !important;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: 600;
-    }
-    .btn:hover {
-      background-color: #4563a3;
-      color: #ffffff !important;
-    }
-    .retention-notice {
-      margin-top: 24px;
-      padding: 16px;
-      background-color: #fff3cd;
-      border-left: 4px solid #ffc107;
-      border-radius: 4px;
-    }
-    .retention-notice p {
-      margin: 0;
-      color: #856404;
-    }
-    .retention-notice p:first-child {
-      font-weight: bold;
-      margin-bottom: 8px;
-    }
-    .footer {
-      background-color: #f7f7f7;
-      color: #888;
-      font-size: 13px;
-      text-align: center;
-      padding: 24px 16px;
-      border-top: 1px solid #e0e0e0;
-    }
-    .footer p {
-      margin: 4px 0;
-    }
-    @media (max-width: 600px) {
-      .wrapper {
-        border-radius: 0;
-      }
-      .content {
-        padding: 24px 16px;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="header">
-      <img src="${logoSrc}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
-    </div>
-    <div class="content">
-      <h2>Your Deposition Summary Is Ready</h2>
-      <p>Hello ${userName},</p>
-      <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
-      <div class="cta-wrap">
-        <a href="${dashboardUrl}" class="btn" style="display: inline-block; padding: 12px 24px; background-color: #5674BC; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: 600;">View on Dashboard</a>
-      </div>
-      ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
-      <div class="retention-notice">
-        <p><strong>Important:</strong> Summary Retention Policy</p>
-        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. </p>
-      </div>
-      <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
-    </div>
-    <div class="footer">
-      <p><strong>© 2025 Testifi AI. All rights reserved.</strong></p>
-      <p>You're receiving this because you have an account on Testifi AI.</p>
-    </div>
-  </div>
-</body>
-</html>`;
+            const bodyHtml = `
+              <h2>Your Deposition Summary Is Ready</h2>
+              <p>Hello ${userName},</p>
+              <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
+              <div class="cta-wrap">
+                <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
+              </div>
+              ${attachments.length > 0 ? `<p style="text-align: center;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
+              <div class="notice">
+                <p><strong>Important:</strong> Summary Retention Policy</p>
+                <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. </p>
+              </div>
+              <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
+            `;
+            const { renderEmailShell } = await import("../utils/emailTheme");
+            const html = renderEmailShell({
+              title: "Deposition Summary Ready",
+              bodyHtml,
+              theme: (process.env.EMAIL_THEME as any) || "auto",
+              logoCid,
+            });
 
           const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
 

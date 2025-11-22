@@ -5,6 +5,7 @@ import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { loadLightLogo } from "../utils/logo";
+import { renderEmailShell } from "../utils/emailTheme";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -224,148 +225,10 @@ async function sendPurchaseReceiptEmail({
     };
     const logoSrc = `cid:${logoCid}`;
 
-    const html = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Purchase Receipt</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      margin: 0;
-      padding: 0;
-      background-color: #f5f5f5;
-    }
-    .wrapper {
-      max-width: 600px;
-      margin: 0 auto;
-      background-color: #ffffff;
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .header {
-      background-color: #5674BC;
-      padding: 24px 16px;
-      text-align: center;
-    }
-    .header img {
-      max-width: 200px;
-      height: auto;
-    }
-    .content {
-      padding: 32px 24px;
-    }
-    .content h2 {
-      color: #333;
-      margin-top: 0;
-      margin-bottom: 20px;
-      font-size: 24px;
-    }
-    .content p {
-      margin: 16px 0;
-      color: #555;
-    }
-    .receipt-details {
-      background-color: #f9f9f9;
-      border-radius: 6px;
-      padding: 20px;
-      margin: 24px 0;
-    }
-    .receipt-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 8px 0;
-      border-bottom: 1px solid #e0e0e0;
-    }
-    .receipt-row:last-child {
-      border-bottom: none;
-      font-weight: bold;
-      font-size: 18px;
-      padding-top: 12px;
-      margin-top: 8px;
-      border-top: 2px solid #5674BC;
-    }
-    .receipt-label {
-      color: #666;
-    }
-    .receipt-value {
-      color: #333;
-      font-weight: 500;
-    }
-    .payment-id {
-      font-size: 12px;
-      color: #888;
-      margin-top: 12px;
-    }
-    .cta-wrap {
-      text-align: center;
-      margin: 28px 0;
-    }
-    .btn {
-      display: inline-block;
-      padding: 12px 24px;
-      background-color: #5674BC;
-      color: #ffffff !important;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: 600;
-    }
-    .btn:hover {
-      background-color: #4563a3;
-      color: #ffffff !important;
-    }
-    .retention-notice {
-      margin-top: 24px;
-      padding: 16px;
-      background-color: #fff3cd;
-      border-left: 4px solid #ffc107;
-      border-radius: 4px;
-    }
-    .retention-notice p {
-      margin: 0;
-      color: #856404;
-    }
-    .retention-notice p:first-child {
-      font-weight: bold;
-      margin-bottom: 8px;
-    }
-    .footer {
-      background-color: #f7f7f7;
-      color: #888;
-      font-size: 13px;
-      text-align: center;
-      padding: 24px 16px;
-      border-top: 1px solid #e0e0e0;
-    }
-    .footer p {
-      margin: 4px 0;
-      line-height: 1.5;
-    }
-    @media (max-width: 600px) {
-      .wrapper {
-        border-radius: 0;
-      }
-      .content {
-        padding: 24px 16px;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="header">
-      <img src="${logoSrc}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
-    </div>
-    <div class="content">
+    const bodyHtml = `
       <h2>Thank You for Your Purchase</h2>
       <p>Hi ${greetingName},</p>
       <p>Thank you for your purchase. We've added <strong>${actualCredits.toLocaleString()} summary credit${actualCredits === 1 ? "" : "s"}</strong> to your Testifi AI account.</p>
-      
       <div class="receipt-details">
         <div class="receipt-row">
           <span class="receipt-label">Subtotal (${actualCredits} credit${actualCredits === 1 ? "" : "s"}):</span>
@@ -386,34 +249,22 @@ async function sendPurchaseReceiptEmail({
           <span class="receipt-label">Total:</span>
           <span class="receipt-value">${totalFormatted}</span>
         </div>
-        <div class="payment-id">
-          Payment ID: ${paymentIntentId}
-        </div>
+        <div class="payment-id">Payment ID: ${paymentIntentId}</div>
       </div>
-
-      ${receiptUrl ? `
-      <div class="cta-wrap">
-        <a href="${receiptUrl}" class="btn">Download Stripe Receipt</a>
-      </div>
-      ` : ""}
-
-      <div class="retention-notice">
+      ${receiptUrl ? `<div class="cta-wrap"><a href="${receiptUrl}" class="btn">Download Stripe Receipt</a></div>` : ""}
+      <div class="notice">
         <p><strong>Important:</strong> Credits Expiration Policy</p>
         <p>Credits must be used within 72 hours (3 days) from now. Any unused credits will expire and cannot be recovered. Please use your credits before they expire.</p>
       </div>
-
       <p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>
-    </div>
-    <div class="footer">
-      <p><strong>Testifi AI</strong></p>
-      <p>P.O. Box 600876</p>
-      <p>Dallas, TX 75360-0876</p>
-      <p style="margin-top: 16px;"><strong>© ${new Date().getFullYear()} Testifi AI. All rights reserved.</strong></p>
-      <p style="margin-top: 8px;">You're receiving this because you made a purchase on Testifi AI.</p>
-    </div>
-  </div>
-</body>
-</html>`;
+    `;
+
+    const html = renderEmailShell({
+      title: "Purchase Receipt",
+      bodyHtml,
+      theme: (process.env.EMAIL_THEME as any) || "auto",
+      logoCid,
+    });
 
     // Generate text version of email
     const text = `Thank You for Your Purchase
