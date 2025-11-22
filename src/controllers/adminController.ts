@@ -120,10 +120,7 @@ export class AdminController {
       const prisma = new PrismaClient();
       
       const result = await prisma.summaryJob.updateMany({
-        where: { 
-          status: 'processing',
-          id: { in: ['a98dffa1-d1dc-4cd3-ad03-fc63e887f3f0', 'e0c176c8-69c9-47fa-a898-76a56974062b'] }
-        },
+        where: { status: 'processing' },
         data: { status: 'queued' }
       });
       

@@ -32,6 +32,20 @@ interface DocumentData {
   rows: Array<[string, string]>;
 }
 
+function deriveMaxPageFromRows(rows: Array<[string, string]>): number {
+  let maxPage = 0;
+  for (const [label] of rows) {
+    const m = label.match(/(\d+)(?::\d+)?(?:\s*[-–]\s*(\d+)(?::\d+)?)?/);
+    if (m) {
+      const a = parseInt(m[1], 10);
+      const b = m[2] ? parseInt(m[2], 10) : a;
+      if (!Number.isNaN(a)) maxPage = Math.max(maxPage, a);
+      if (!Number.isNaN(b)) maxPage = Math.max(maxPage, b);
+    }
+  }
+  return maxPage;
+}
+
 /**
  * Generate DOCX buffer from summary data
  */
@@ -145,16 +159,26 @@ export async function generateDocxBuffer(
             ],
             alignment: "left",
           }),
-          ...(job.file?.pages
+          ...((() => {
+            const numericPages =
+              typeof job.file?.pages === "string" ? parseInt(job.file.pages, 10) : undefined;
+            const derived = deriveMaxPageFromRows(rows);
+            const displayPages =
+              numericPages && numericPages > 0 ? numericPages : derived > 0 ? derived : undefined;
+            if (!displayPages) return [];
+            return [
+              new Paragraph({ children: [], spacing: { before: 80 } }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Pages:", bold: true }),
+                  new TextRun(` ${displayPages}`),
+                ],
+                alignment: "left",
+              }),
+            ];
+          })()
             ? [
-                new Paragraph({ children: [], spacing: { before: 80 } }),
-                new Paragraph({
-                  children: [
-                    new TextRun({ text: "Pages:", bold: true }),
-                    new TextRun(` ${job.file.pages}`),
-                  ],
-                  alignment: "left",
-                }),
+                // placeholder - never used (kept for block structure)
               ]
             : []),
           new Paragraph({ children: [], spacing: { before: 80 } }),
@@ -331,11 +355,13 @@ export async function generatePdfBuffer(
       const fileLine = `Source File: ${sourceFileName}`;
       contentH += pdf.heightOfString(fileLine, lineOpts) + 10;
 
-      let hasPages = false;
-      if (job.file?.pages) {
-        hasPages = true;
-        contentH += pdf.heightOfString(`Pages: ${job.file.pages}`, lineOpts) + 10;
-      }
+      const numericPages =
+        typeof job.file?.pages === "string" ? parseInt(job.file.pages, 10) : undefined;
+      const derived = deriveMaxPageFromRows(rows);
+      const displayPages =
+        numericPages && numericPages > 0 ? numericPages : derived > 0 ? derived : undefined;
+      const hasPages = !!displayPages;
+      if (hasPages) contentH += pdf.heightOfString(`Pages: ${displayPages}`, lineOpts) + 10;
 
       pdf.font("Times-Roman").fontSize(12);
       const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
@@ -362,7 +388,7 @@ export async function generatePdfBuffer(
       pdf.moveDown(0.5);
 
       if (hasPages) {
-        pdf.font("Times-Roman").fontSize(14).text(`Pages: ${job.file!.pages}`, { align: "left" });
+        pdf.font("Times-Roman").fontSize(14).text(`Pages: ${displayPages}`, { align: "left" });
         pdf.moveDown(0.5);
       }
 

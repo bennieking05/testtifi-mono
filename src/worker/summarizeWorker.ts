@@ -10,6 +10,7 @@ import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
+import { loadLightLogo } from "../utils/logo";
 import { loadPromptConfig } from "../lib/promptConfig";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 import { parseMarkdown } from "../routes/downloadRoutes";
@@ -29,11 +30,18 @@ console.log(
 );
 console.log("=== Worker starting ===");
 
-// Frontend URL with fallback (same pattern as authController)
-const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
-  /\/+$/,
-  ""
-);
+// Frontend URL with robust fallbacks for staging/production
+const frontendUrl = (() => {
+  const explicit =
+    process.env.BASE_URL ||
+    process.env.FRONTEND_URL ||
+    process.env.APP_URL;
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const isStaging = process.env.STAGING === "1" || process.env.ENVIRONMENT === "staging";
+  if (isStaging) return "https://staging.app.testifi.ai";
+  if (process.env.NODE_ENV === "production") return "https://app.testifi.ai";
+  return "http://localhost:3000";
+})();
 
 // Tuning knobs (env‑overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
@@ -194,14 +202,22 @@ function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?
   const lines = tr.split(/\r?\n/);
   const header = lines.slice(0, 40).join("\n");
 
-  const civMatch = header.match(
-    /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
-  );
+  // Capture common case-number patterns (robust to punctuation/spacing)
+  const civMatch =
+    header.match(
+      /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?|CAUSE\s+NO\.?)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9:\-\/_.]*)/i
+    ) || header.match(/No\.\s*([A-Za-z0-9][A-Za-z0-9:\-\/_.]*)/i);
   const civil = civMatch?.[2] || "[Unknown]";
 
   const captionLine =
     lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
-  const caption = captionLine.trim() || `Civil Action No. ${civil}`;
+  // Include civil action number if we have it and it's not already present
+  let caption = captionLine.trim();
+  if (!caption) {
+    caption = `Civil Action No. ${civil}`;
+  } else if (civil && civil !== "[Unknown]" && !new RegExp(civil.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(caption)) {
+    caption = `${caption} — Civil Action No. ${civil}`;
+  }
 
   // Enhanced deponent extraction patterns with debugging
   let extractedDeponent = null;
@@ -546,14 +562,9 @@ async function work() {
         },
       });
 
-      // Re-fetch notifyOnComplete at completion time to honor late opt-ins
-      const fresh = await prisma.summaryJob.findUnique({
-        where: { id: job.id },
-        include: { file: true },
-      });
-      if (fresh && fresh.notifyOnComplete && user?.email) {
-        // Atomically check and mark email as sent to prevent duplicates across processes
-        // Only update if completionEmailSentAt is null (hasn't been sent yet)
+      // Always send completion email once (regardless of notifyOnComplete)
+      // Atomically mark sent to prevent duplicates across processes
+      if (user?.email) {
         const emailUpdateResult = await prisma.summaryJob.updateMany({
           where: { 
             id: job.id,
@@ -561,7 +572,6 @@ async function work() {
           },
           data: { completionEmailSentAt: new Date() },
         });
-        
         if (emailUpdateResult.count === 0) {
           console.log(`[${job.id}] 📧 Email already sent for summary job ${job.id}, skipping`);
         } else {
@@ -604,8 +614,20 @@ async function work() {
                 filename: pdfFilename,
                 type: "application/pdf",
               });
-              
-              console.log(`[${job.id}] ✅ Generated ${attachments.length} document attachments`);
+
+              // If combined attachments are too large for email, drop them (still send email)
+              const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // keep under Gmail 25MB
+              const totalBytes = docxBuffer.length + pdfBuffer.length;
+              if (totalBytes > MAX_EMAIL_BYTES) {
+                console.warn(
+                  `[${job.id}] ⚠️ Attachments too large (${totalBytes} bytes). Sending email without attachments.`
+                );
+                attachments.length = 0; // drop attachments
+              }
+
+              console.log(
+                `[${job.id}] ✅ Generated ${attachments.length} document attachments (size=${totalBytes} bytes)`
+              );
             } catch (docErr) {
               console.warn(`[${job.id}] ⚠️ Failed to generate document attachments:`, docErr);
               // Continue sending email without attachments if document generation fails
@@ -614,8 +636,17 @@ async function work() {
             // Use the new email format with logo and updated text
             const subject = `Your Deposition Summary Is Ready`;
             const userName = user.name || user.email;
-            // Use hosted logo URL - same as purchase receipt emails
-            const logoSrc = "https://app.testifi.ai/testifi_dark_logo.png";
+            // Inline CID logo for reliable email rendering
+            const logoAsset = loadLightLogo();
+            const logoCid = "logo@testifi.ai";
+            const inlineLogo: EmailAttachment = {
+              content: logoAsset.base64,
+              filename: "logo.png",
+              type: logoAsset.mime,
+              disposition: "inline",
+              contentId: logoCid,
+            };
+            const logoSrc = `cid:${logoCid}`;
             
             const html = `
 <!DOCTYPE html>
@@ -731,21 +762,22 @@ async function work() {
       ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
       <div class="retention-notice">
         <p><strong>Important:</strong> Summary Retention Policy</p>
-        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
+        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. </p>
       </div>
       <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
     </div>
     <div class="footer">
-      <p><strong>© 2025 Testifi-AI. All rights reserved.</strong></p>
-      <p>You're receiving this because you have an account on Testifi-AI.</p>
+      <p><strong>© 2025 Testifi AI. All rights reserved.</strong></p>
+      <p>You're receiving this because you have an account on Testifi AI.</p>
     </div>
   </div>
 </body>
 </html>`;
 
-          const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.\n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi-AI. All rights reserved.\nYou're receiving this because you have an account on Testifi-AI.`;
+          const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
 
-            await sendEmail(user.email, subject, text, html, attachments);
+            const allAttachments = [inlineLogo, ...attachments];
+            await sendEmail(user.email, subject, text, html, allAttachments);
             console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
           } catch (emailErr) {
             console.warn(`[${job.id}] Email failed:`, emailErr);
@@ -756,10 +788,6 @@ async function work() {
             });
           }
         }
-      } else {
-        console.log(
-          `[${job.id}] ℹ️ Skipping email notification (notifyOnComplete: ${fresh?.notifyOnComplete}, email: ${user?.email})`
-        );
       }
 
       fs.unlinkSync(tmpPath);

@@ -5,6 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
+import { loadLightLogo } from "../utils/logo";
 import { parseMarkdown } from "./downloadRoutes";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 
@@ -14,11 +15,18 @@ const bucket = new Storage().bucket("deposition-summaries");
 
 // Note: Duplicate prevention now uses database field completionEmailSentAt instead of in-memory cache
 
-// Frontend URL with fallback (same pattern as authController)
-const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
-  /\/+$/,
-  ""
-);
+// Frontend URL with robust fallbacks for staging/production
+const frontendUrl = (() => {
+  const explicit =
+    process.env.BASE_URL ||
+    process.env.FRONTEND_URL ||
+    process.env.APP_URL;
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const isStaging = process.env.STAGING === "1" || process.env.ENVIRONMENT === "staging";
+  if (isStaging) return "https://staging.app.testifi.ai";
+  if (process.env.NODE_ENV === "production") return "https://app.testifi.ai";
+  return "http://localhost:3000";
+})();
 
 // Helper to extract object name from GCS URL
 function objectKey(url: string): string {
@@ -98,8 +106,17 @@ router.post(
             }
 
             const dashboardUrl = `${frontendUrl}/summaries`;
-            // Use hosted logo URL - same as purchase receipt emails
-            const logoSrc = "https://app.testifi.ai/testifi_dark_logo.png";
+            // Use inline CID logo for reliable rendering across email clients
+            const logoAsset = loadLightLogo();
+            const logoCid = "logo@testifi.ai";
+            const inlineLogo: EmailAttachment = {
+              content: logoAsset.base64,
+              filename: "logo.png",
+              type: logoAsset.mime,
+              disposition: "inline",
+              contentId: logoCid,
+            };
+            const logoSrc = `cid:${logoCid}`;
             
             // Get display title for email
             const displayTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || `Summary ${job.id}`;
@@ -147,8 +164,16 @@ router.post(
                 filename: pdfFilename,
                 type: "application/pdf",
               });
-              
-              console.log(`[${job.id}] ✅ Generated ${attachments.length} document attachments`);
+
+              // If combined attachments are too large for email, drop them to ensure delivery
+              const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // < 25MB
+              const totalBytes = docxBuffer.length + pdfBuffer.length;
+              if (totalBytes > MAX_EMAIL_BYTES) {
+                console.warn(`[${job.id}] ⚠️ Attachments too large (${totalBytes} bytes). Email will be sent without attachments.`);
+                attachments.length = 0;
+              }
+
+              console.log(`[${job.id}] ✅ Generated ${attachments.length} document attachments (size=${totalBytes} bytes)`);
             } catch (docErr) {
               console.warn(`[${job.id}] ⚠️ Failed to generate document attachments:`, docErr);
               // Continue sending email without attachments if document generation fails
@@ -271,22 +296,23 @@ router.post(
       ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
       <div class="retention-notice">
         <p><strong>Important:</strong> Summary Retention Policy</p>
-        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.</p>
+        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. </p>
       </div>
       <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
     </div>
     <div class="footer">
-      <p><strong>© 2025 Testifi-AI. All rights reserved.</strong></p>
-      <p>You're receiving this because you have an account on Testifi-AI.</p>
+      <p><strong>© 2025 Testifi AI. All rights reserved.</strong></p>
+      <p>You're receiving this because you have an account on Testifi AI.</p>
     </div>
   </div>
 </body>
 </html>`;
 
-            const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. After 3 days, summaries may only be accessed in cases of extenuating circumstances. Please download and save your summary files for your records. The original deposition file will be retained, but the summary content will be permanently removed.\n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi-AI. All rights reserved.\nYou're receiving this because you have an account on Testifi-AI.`;
+            const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
 
             try {
-              await sendEmail(user.email, subject, text, html, attachments);
+              const allAttachments = [inlineLogo, ...attachments];
+              await sendEmail(user.email, subject, text, html, allAttachments);
               console.log(`Immediate notification sent for job ${job.id}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
             } catch (emailErr) {
               console.error(

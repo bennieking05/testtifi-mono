@@ -25,6 +25,7 @@ router.get(
   authenticateToken,
   async (req: Request, res: Response): Promise<void> => {
     const { id } = req.query as { id?: string };
+    const theme = (req.query as any)?.theme as string | undefined; // optional: "dark" | "light"
     if (!id) {
       res.status(400).json({ error: "Missing id" });
       return;
@@ -69,16 +70,45 @@ router.get(
       const titleRow = summaryName || job.file?.title || "Deposition Summary";
       const headerMeta = buildHeaderMeta(job, titleRow, typeof deponent === "string" ? deponent : undefined);
       const { meta, rows } = parseToRows(cleaned);
+      const deriveMaxPageFromRows = (r: string[][]): number => {
+        let maxPage = 0;
+        for (const [label] of r) {
+          const m = label.match(/(\d+)(?::\d+)?(?:\s*[-–]\s*(\d+)(?::\d+)?)?/);
+          if (m) {
+            const a = parseInt(m[1], 10);
+            const b = m[2] ? parseInt(m[2], 10) : a;
+            if (!Number.isNaN(a)) maxPage = Math.max(maxPage, a);
+            if (!Number.isNaN(b)) maxPage = Math.max(maxPage, b);
+          }
+        }
+        return maxPage;
+      };
       const combinedMeta = [...new Set([...headerMeta, ...meta])];
       const metaHtml = combinedMeta.map((m) => `<p>${escapeHtml(m)}</p>`).join("\n");
       const tableRowsHtml = rows
-        .map(
-          ([p, s]) =>
-            `<tr><td>${escapeHtml(p)}</td><td>${escapeHtml(s).replace(/\n/g, '<br/>')}</td></tr>`
-        )
+        .map(([p, s]) => {
+          // Split very long testimony into bite-sized chunks (1–2 sentences each)
+          const sentences = s
+            .split(/(?<=[.!?])\s+(?=[A-Z(])/)
+            .map((t) => t.trim())
+            .filter(Boolean);
+          if (sentences.length <= 2) {
+            return `<tr><td>${escapeHtml(p)}</td><td>${escapeHtml(s).replace(/\n/g, '<br/>')}</td></tr>`;
+          }
+          const chunks: string[] = [];
+          for (let i = 0; i < sentences.length; i += 2) {
+            chunks.push(sentences.slice(i, i + 2).join(" "));
+          }
+          return chunks
+            .map(
+              (chunk, idx) =>
+                `<tr><td>${escapeHtml(idx === 0 ? p : `${p}`)}</td><td>${escapeHtml(chunk).replace(/\n/g, '<br/>')}</td></tr>`
+            )
+            .join("\n");
+        })
         .join("\n");
       const tableHtml = `
-        <table style="border: 2px solid #9da9bb; background: #fff;">
+        <table>
           <thead>
             <tr>
               <th style="width: 22%">Page(s)</th>
@@ -92,8 +122,46 @@ router.get(
       const htmlBody = `${metaHtml}\n${tableHtml}`;
 
       const css = `
-        /* Professional legal-style document */
-        html, body { margin: 0; padding: 0; background: #fff; }
+        /* Professional legal-style document with light/dark themes */
+        :root {
+          --bg: #ffffff;
+          --text: #111111;
+          --muted: #475569;
+          --panel: #ffffff;
+          --border: #c8d0da;
+          --table-header: #eef2f7;
+          --accent: #5674BC;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --bg: #0b1220;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --panel: #0f172a;
+            --border: #334155;
+            --table-header: #1f2937;
+            --accent: #8ab4ff;
+          }
+        }
+        .dark {
+          --bg: #0b1220;
+          --text: #e2e8f0;
+          --muted: #94a3b8;
+          --panel: #0f172a;
+          --border: #334155;
+          --table-header: #1f2937;
+          --accent: #8ab4ff;
+        }
+        .light {
+          --bg: #ffffff;
+          --text: #111111;
+          --muted: #475569;
+          --panel: #ffffff;
+          --border: #c8d0da;
+          --table-header: #eef2f7;
+          --accent: #5674BC;
+        }
+        html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
         .cover {
           display: flex;
           flex-direction: column;
@@ -103,8 +171,8 @@ router.get(
           page-break-after: always;
           font-family: "Times New Roman", Georgia, serif;
         }
-        .cover h1 { font-size: 30pt; margin: 0 0 8pt 0; font-weight: 700; }
-        .cover p  { font-size: 12pt; margin: 2pt 0; }
+        .cover h1 { font-size: 30pt; margin: 0 0 8pt 0; font-weight: 700; color: var(--text); }
+        .cover p  { font-size: 12pt; margin: 2pt 0; color: var(--text); }
         .cover img { max-width: 280px; height: auto; margin-bottom: 16pt; }
         .page {
           max-width: 7in;
@@ -112,43 +180,53 @@ router.get(
           font-family: "Times New Roman", Georgia, serif;
           font-size: 12pt;
           line-height: 1.6;
-          color: #111;
+          color: var(--text);
         }
         h1 { font-size: 18pt; margin: 16pt 0 10pt; font-weight: 700; }
         h2 { font-size: 14pt; margin: 14pt 0 8pt; font-weight: 700; }
         h3 { font-size: 12pt; margin: 12pt 0 6pt; font-weight: 700; }
-        p  { margin: 8pt 0; }
-        hr { border: none; border-top: 1px solid #c8c8c8; margin: 14pt 0; }
+        p  { margin: 8pt 0; color: var(--text); }
+        hr { border: none; border-top: 1px solid var(--border); margin: 14pt 0; }
         table {
           width: 100%;
           border-collapse: collapse;
           margin: 10pt 0 16pt;
           table-layout: fixed;
-          border: 2px solid #9da9bb;
-          background: #fff;
+          border: 2px solid var(--border);
+          background: var(--panel);
         }
-        table, th, td { border: 1px solid #c8d0da; }
-        th, td { border-left: 1px solid #c8d0da; border-right: 1px solid #c8d0da; }
+        table, th, td { border: 1px solid var(--border); }
+        th, td { border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
         thead th {
-          background: #eef2f7;
-          border: 1px solid #c8d0da;
+          background: var(--table-header);
+          border: 1px solid var(--border);
           padding: 6pt 8pt;
           text-align: left;
           font-weight: 700;
+          color: var(--text);
         }
         tbody td {
-          border: 1px solid #d8d8d8;
+          border: 1px solid var(--border);
           padding: 6pt 8pt;
           vertical-align: top;
+          color: var(--text);
         }
-        tbody tr:nth-child(even) td { background: #fafbfc; }
+        tbody tr:nth-child(even) td { background: var(--panel); }
         code, pre { font-family: "Courier New", Courier, monospace; }
       `;
 
       // Prefer File.title, else fall back to the uploaded filename without extension
       const coverTitle = job.file?.title || (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
       // ← use job.file.pages instead of pageCount
-      const coverPages = job.file?.pages ?? "";
+      const numericPages =
+        typeof job.file?.pages === "number"
+          ? job.file.pages
+          : job.file?.pages
+          ? parseInt(String(job.file.pages), 10)
+          : undefined;
+      const derivedPages = deriveMaxPageFromRows(rows);
+      const coverPages =
+        (numericPages && numericPages > 0 ? numericPages : derivedPages > 0 ? derivedPages : null);
       const logoDataUri = getLogoDataUri();
       const logoHtml = logoDataUri ? `<img src="${logoDataUri}" alt="Testifi AI Logo" />` : "";
 
@@ -181,7 +259,7 @@ router.get(
       res.end(`<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"/><title>Preview</title><style>${css}</style></head>
-<body>
+<body ${theme === "dark" ? 'class="dark"' : theme === "light" ? 'class="light"' : ""}>
   <div class="cover">
     ${logoHtml}
     <h1>${titleOfDocument}</h1>
@@ -257,7 +335,9 @@ function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
       .trim();
 
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
-  const pageRegex = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
+  // Robust page label matcher: supports "p.7:1-20", "12-13", "4:1-25 - 6:10"
+  const pageRegex =
+    /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
   
   // Regex to match page references within testimony text (e.g., ", p.7:1-20 |", "p.7:1-20 |", etc.)
   // Matches page refs that appear after comma/start and before pipe/end (these are separators, not content)
@@ -289,7 +369,8 @@ function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
       remainder = remainder.replace(pageRefInTextRegex, "").trim();
       // Clean up any double spaces or leading/trailing punctuation
       remainder = remainder.replace(/\s+/g, " ").replace(/^[,|]\s*/, "").trim();
-      rows.push([label || "", remainder || ""]);
+      if (!remainder) remainder = "[No testimony extracted]";
+      rows.push([label || "", remainder]);
       return;
     }
 

@@ -3,7 +3,8 @@ import Stripe from "stripe";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 import { getEffectiveCreditBalance } from "../billing/creditExpiration";
-import { sendEmail } from "../lib/sendEmail";
+import { sendEmail, EmailAttachment } from "../lib/sendEmail";
+import { loadLightLogo } from "../utils/logo";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -211,8 +212,17 @@ async function sendPurchaseReceiptEmail({
 
     const subject = `Receipt: ${actualCredits} summary credit${actualCredits === 1 ? "" : "s"} added to your Testifi AI account`;
     const greetingName = user.name?.split(" ")[0] ?? "there";
-    // Use hosted logo URL - this works in emails and is more reliable than embedding
-    const logoSrc = "https://app.testifi.ai/testifi_dark_logo.png";
+    // Prefer inline CID image so logos render reliably across email clients
+    const logoAsset = loadLightLogo();
+    const logoCid = "logo@testifi.ai";
+    const inlineLogo: EmailAttachment = {
+      content: logoAsset.base64,
+      filename: "logo.png",
+      type: logoAsset.mime,
+      disposition: "inline",
+      contentId: logoCid,
+    };
+    const logoSrc = `cid:${logoCid}`;
 
     const html = `
 <!DOCTYPE html>
@@ -438,7 +448,7 @@ You're receiving this because you made a purchase on Testifi AI.`;
     });
 
     // Send styled HTML email with text fallback
-    await sendEmail(user.email, subject, text, html);
+    await sendEmail(user.email, subject, text, html, [inlineLogo]);
     
     // Mark email as sent to prevent duplicates
     emailSentCache.add(paymentIntentId);

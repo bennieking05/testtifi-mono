@@ -234,17 +234,20 @@ export function loadLightLogo(): LogoAsset {
   const cwd = process.cwd();
   const lightLogoPaths = [
     process.env.LIGHT_LOGO_PATH,
-    path.resolve(cwd, "testifi_dark_logo.png"), // User's specified path
+    // Prefer LIGHT variant first for dark backgrounds (email headers)
+    path.resolve(cwd, "public/testifi_light_logo.png"),
+    path.resolve(cwd, "loveable/public/testifi_light_logo.png"),
+    path.resolve(__dirname, "../public/testifi_light_logo.png"),
+    path.resolve(__dirname, "../../public/testifi_light_logo.png"),
+    path.resolve(__dirname, "../../../loveable/public/testifi_light_logo.png"),
+    // Fallbacks: accept DARK variant names if LIGHT not found
+    path.resolve(cwd, "testifi_dark_logo.png"),
     path.resolve(cwd, "backend/testifi_dark_logo.png"),
     path.resolve(cwd, "public/testifi_light_logo.png"),
     path.resolve(cwd, "public/testifi_dark_logo.png"),
-    path.resolve(cwd, "loveable/public/testifi_light_logo.png"),
     path.resolve(cwd, "loveable/public/testifi_dark_logo.png"),
-    path.resolve(__dirname, "../public/testifi_light_logo.png"),
     path.resolve(__dirname, "../public/testifi_dark_logo.png"),
-    path.resolve(__dirname, "../../public/testifi_light_logo.png"),
     path.resolve(__dirname, "../../testifi_dark_logo.png"),
-    path.resolve(__dirname, "../../../loveable/public/testifi_light_logo.png"),
     path.resolve(__dirname, "../../../loveable/public/testifi_dark_logo.png"),
   ].filter(Boolean) as string[];
 
