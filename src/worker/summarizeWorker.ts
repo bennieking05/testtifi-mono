@@ -646,7 +646,6 @@ async function work() {
               disposition: "inline",
               contentId: logoCid,
             };
-            const logoSrc = `cid:${logoCid}`;
             
             const bodyHtml = `
               <h2>Your Deposition Summary Is Ready</h2>

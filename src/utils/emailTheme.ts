@@ -53,7 +53,7 @@ export function renderEmailShell(params: {
   logoCid: string;
 }): string {
   const theme: EmailTheme = params.theme || "auto";
-  const { light, dark, selected } = getThemeTokens(theme);
+  const { dark, selected } = getThemeTokens(theme);
   const colorSchemeMeta =
     theme === "auto"
       ? `<meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark">`
