@@ -274,3 +274,45 @@ export function getLightLogoDataUri(): string {
   const logo = loadLightLogo();
   return `data:${logo.mime};base64,${logo.base64}`;
 }
+
+/**
+ * Load dark logo specifically for light backgrounds
+ * Prioritizes testifi_dark_logo.png
+ */
+export function loadDarkLogo(): LogoAsset {
+  const cwd = process.cwd();
+  const darkLogoPaths = [
+    process.env.DARK_LOGO_PATH,
+    path.resolve(cwd, "public/testifi_dark_logo.png"),
+    path.resolve(cwd, "loveable/public/testifi_dark_logo.png"),
+    path.resolve(__dirname, "../public/testifi_dark_logo.png"),
+    path.resolve(__dirname, "../../public/testifi_dark_logo.png"),
+    path.resolve(__dirname, "../../../loveable/public/testifi_dark_logo.png"),
+    // Fallbacks
+    path.resolve(cwd, "public/testifi_light_logo.png"),
+    path.resolve(cwd, "loveable/public/testifi_light_logo.png"),
+    path.resolve(__dirname, "../public/testifi_light_logo.png"),
+  ].filter(Boolean) as string[];
+
+  for (const candidate of darkLogoPaths) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const buf = fs.readFileSync(candidate);
+      const { width, height, mime } = computeDimensions(buf);
+      const base64 = buf.toString("base64");
+      const asset: LogoAsset = { buf, base64, mime, width, height, source: candidate };
+      console.log(`✓ Dark logo loaded successfully from: ${candidate}`);
+      return asset;
+    } catch (err) {
+      console.warn(`✗ Failed to load dark logo from: ${candidate}`, err);
+    }
+  }
+
+  console.warn("⚠ Dark logo not found, using default logo");
+  return loadLogo();
+}
+
+export function getDarkLogoDataUri(): string {
+  const logo = loadDarkLogo();
+  return `data:${logo.mime};base64,${logo.base64}`;
+}

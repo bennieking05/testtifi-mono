@@ -641,15 +641,24 @@ async function work() {
             // Use the new email format with logo and updated text
             const subject = `Your Deposition Summary Is Ready`;
             const userName = user.name || user.email;
-            // Inline CID logo for reliable email rendering
-            const logoAsset = loadLightLogo();
-            const logoCid = "logo@testifi.ai";
-            const inlineLogo: EmailAttachment = {
-              content: logoAsset.base64,
-              filename: "logo.png",
-              type: logoAsset.mime,
+            // Inline CID logos for reliable rendering (light + dark)
+            const logoLight = loadLightLogo();
+            const logoDark = (await import("../utils/logo")).loadDarkLogo();
+            const logoCid = "logo_light@testifi.ai";
+            const logoCidDark = "logo_dark@testifi.ai";
+            const inlineLogoLight: EmailAttachment = {
+              content: logoLight.base64,
+              filename: "logo-light.png",
+              type: logoLight.mime,
               disposition: "inline",
               contentId: logoCid,
+            };
+            const inlineLogoDark: EmailAttachment = {
+              content: logoDark.base64,
+              filename: "logo-dark.png",
+              type: logoDark.mime,
+              disposition: "inline",
+              contentId: logoCidDark,
             };
             
             const bodyHtml = `
@@ -672,11 +681,12 @@ async function work() {
               bodyHtml,
               theme: (process.env.EMAIL_THEME as any) || "auto",
               logoCid,
+              logoCidDark,
             });
 
           const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
 
-            const allAttachments = [inlineLogo, ...attachments];
+            const allAttachments = [inlineLogoLight, inlineLogoDark, ...attachments];
             await sendEmail(user.email, subject, text, html, allAttachments);
             console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
           } catch (emailErr) {

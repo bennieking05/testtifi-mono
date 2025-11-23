@@ -51,6 +51,7 @@ export function renderEmailShell(params: {
   bodyHtml: string;
   theme?: EmailTheme;
   logoCid: string;
+  logoCidDark?: string;
 }): string {
   const theme: EmailTheme = params.theme || "auto";
   const { dark, selected } = getThemeTokens(theme);
@@ -86,6 +87,13 @@ export function renderEmailShell(params: {
   <title>${escapeHtml(params.title)}</title>
   ${colorSchemeMeta}
   <style>
+    /* Email-safe dark-mode logo switch (works in many modern clients) */
+    .logo-dark { display: none; }
+    .logo-light { display: block; }
+    @media (prefers-color-scheme: dark) {
+      .logo-dark { display: block !important; }
+      .logo-light { display: none !important; }
+    }
     :root {
       --bg: ${selected.bg};
       --text: ${selected.text};
@@ -171,7 +179,16 @@ export function renderEmailShell(params: {
 <body>
   <div class="wrapper">
     <div class="header">
-      <img src="cid:${escapeHtml(params.logoCid)}" alt="Testifi AI" />
+      ${
+        params.logoCidDark
+          ? `<img class="logo-light" src="cid:${escapeHtml(
+              params.logoCid
+            )}" alt="Testifi AI" />
+             <img class="logo-dark" src="cid:${escapeHtml(
+               params.logoCidDark
+             )}" alt="Testifi AI" />`
+          : `<img src="cid:${escapeHtml(params.logoCid)}" alt="Testifi AI" />`
+      }
     </div>
     <div class="content">
       ${params.bodyHtml}
