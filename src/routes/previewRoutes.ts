@@ -174,9 +174,19 @@ router.get(
         .cover h1 { font-size: 30pt; margin: 0 0 8pt 0; font-weight: 700; color: var(--text); }
         .cover p  { font-size: 12pt; margin: 2pt 0; color: var(--text); }
         .cover img { max-width: 280px; height: auto; margin-bottom: 16pt; }
-        /* Force consistent logo sizing regardless of theme */
-        .tm-logo-wrap{width:281px;height:60px;margin:18px auto 24px auto;position:relative;display:block}
-        .tm-logo-wrap img{display:block;width:100%;height:100%;object-fit:cover;object-position:center}
+        .tm-logo-wrap {
+          width: 281px;
+          height: 60px;
+          margin: 18px auto 24px auto;
+          display: block;
+        }
+        .tm-logo-wrap img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          object-position: center;
+          display: block;
+        }
         .page {
           max-width: 7in;
           margin: 1in auto;
@@ -232,7 +242,7 @@ router.get(
         (numericPages && numericPages > 0 ? numericPages : derivedPages > 0 ? derivedPages : null);
       const logoDataUri = getLogoDataUri();
       const logoHtml = logoDataUri
-        ? `<div class="tm-logo-wrap"><img src="${logoDataUri}" alt="Testifi AI Logo" /></div>`
+        ? `<div class="tm-logo-wrap" data-logo-variant="embedded"><img data-preview-logo="true" src="${logoDataUri}" alt="Testifi AI Logo" /></div>`
         : "";
 
       // Extract deposition date from metadata
