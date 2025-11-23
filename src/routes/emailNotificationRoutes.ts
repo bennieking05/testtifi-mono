@@ -130,8 +130,6 @@ router.post(
               disposition: "inline",
               contentId: logoCidDark,
             };
-            const logoSrc = `cid:${logoCid}`; // kept for backward compat if needed
-            
             // Get display title for email
             const displayTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || `Summary ${job.id}`;
 
