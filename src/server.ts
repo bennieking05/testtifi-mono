@@ -21,6 +21,7 @@ import validationRoutes from "./routes/validationRoutes";
 import adminRoutes from "./routes/adminRoutes";
 import debugRoutes from "./routes/debugRoutes";
 import cleanupRoutes from "./routes/cleanupRoutes";
+import assetsRoutes from "./routes/assetsRoutes";
 
 dotenv.config();
 
@@ -127,6 +128,7 @@ app.use("/api/validation", validationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/debug", debugRoutes);
 app.use("/api/cleanup", cleanupRoutes);
+app.use("/api/assets", assetsRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
 app.listen(PORT, "0.0.0.0", () =>
