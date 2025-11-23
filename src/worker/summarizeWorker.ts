@@ -32,10 +32,15 @@ console.log("=== Worker starting ===");
 
 // Frontend URL with robust fallbacks for staging/production
 const frontendUrl = (() => {
-  const explicit =
-    process.env.BASE_URL ||
-    process.env.FRONTEND_URL ||
+  const raw =
+    process.env.BASE_URL ??
+    process.env.FRONTEND_URL ??
     process.env.APP_URL;
+  const isBad =
+    !raw ||
+    /^\s*$/.test(raw) ||
+    /^(undefined|null)$/i.test(String(raw).trim());
+  const explicit = isBad ? undefined : String(raw).trim();
   if (explicit) return explicit.replace(/\/+$/, "");
   const isStaging = process.env.STAGING === "1" || process.env.ENVIRONMENT === "staging";
   if (isStaging) return "https://staging.app.testifi.ai";

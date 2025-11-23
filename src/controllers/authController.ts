@@ -25,10 +25,19 @@ if (!sendgridApiKey) {
 } else {
   sgMail.setApiKey(sendgridApiKey);
 }
-const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
-  /\/+$/,
-  ""
-);
+const frontendUrl = (() => {
+  const raw =
+    process.env.BASE_URL ??
+    process.env.FRONTEND_URL ??
+    process.env.APP_URL;
+  const isBad =
+    !raw ||
+    /^\s*$/.test(String(raw)) ||
+    /^(undefined|null)$/i.test(String(raw).trim());
+  const explicit = isBad ? undefined : String(raw).trim();
+  const base = explicit || (process.env.NODE_ENV === "production" ? "https://app.testifi.ai" : "http://localhost:3000");
+  return base.replace(/\/+$/, "");
+})();
 
 /* ----------------------------------------------------------------------- */
 /*                        SHARED  –  EMAIL HELPER                          */
