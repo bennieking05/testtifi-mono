@@ -84,7 +84,25 @@ router.get(
         }
         return maxPage;
       };
-      const mergedMeta = [...new Set([...meta, ...headerMeta])];
+      const metaLabels = new Set(
+        meta
+          .map((line) => line.split(":")[0]?.trim().toLowerCase())
+          .filter((label) => label && label.length > 0)
+      );
+      const mergedMeta: string[] = [...meta];
+      for (const entry of headerMeta) {
+        if (!entry) continue;
+        if (!entry.includes(":")) {
+          if (!mergedMeta.includes(entry)) mergedMeta.push(entry);
+          continue;
+        }
+        const label = entry.split(":")[0]?.trim().toLowerCase();
+        if (!label) continue;
+        if (!metaLabels.has(label)) {
+          mergedMeta.push(entry);
+          metaLabels.add(label);
+        }
+      }
       const tableRowsHtml = rows
         .map(([p, s]) => {
           // Split very long testimony into bite-sized chunks (1–2 sentences each)
