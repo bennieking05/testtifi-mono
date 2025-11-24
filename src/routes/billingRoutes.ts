@@ -159,7 +159,35 @@ router.get(
     const userId = req.user!.userId;
 
     const balance = await getEffectiveCreditBalance(prisma, userId);
-    res.json({ balance });
+
+    const [expiredAgg, creditedAgg] = await Promise.all([
+      prisma.ledgerEntry.aggregate({
+        _sum: { credits: true },
+        where: {
+          userId,
+          type: "credit",
+          credits: { lt: 0 },
+          idempotencyKey: { startsWith: LEDGER_EXPIRATION_PREFIX },
+        },
+      }),
+      prisma.ledgerEntry.aggregate({
+        _sum: { credits: true },
+        where: {
+          userId,
+          type: "credit",
+          credits: { gt: 0 },
+        },
+      }),
+    ]);
+
+    const expiredCredits = Math.abs(toNumber(expiredAgg._sum.credits));
+    const totalPurchasedCredits = toNumber(creditedAgg._sum.credits);
+
+    res.json({
+      balance,
+      expiredCredits,
+      totalPurchasedCredits,
+    });
   }
 );
 

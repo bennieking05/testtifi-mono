@@ -297,9 +297,9 @@ router.post(
         <a href="${dashboardUrl}" class="btn" style="display: inline-block; padding: 12px 24px; background-color: #5674BC; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: 600;">View on Dashboard</a>
       </div>
       ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
-      <div class="retention-notice">
-        <p><strong>Important:</strong> Summary Retention Policy</p>
-        <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. </p>
+      <div class="retention-notice" style="margin-top:24px;padding:16px;background-color:#fff3cd;border:1px solid #ffe58f;border-left:4px solid #ffc107;border-radius:6px;color:#5c3d00;">
+        <p style="margin:0 0 8px 0;font-weight:600;color:#5c3d00;"><strong>Important:</strong> Summary Retention Policy</p>
+        <p style="margin:0;color:#5c3d00;">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records.</p>
       </div>
       <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
     </div>

@@ -641,11 +641,9 @@ async function work() {
             // Use the new email format with logo and updated text
             const subject = `Your Deposition Summary Is Ready`;
             const userName = user.name || user.email;
-            // Inline CID logos for reliable rendering (light + dark)
+            // Inline CID logo for reliable rendering across clients
             const logoLight = loadLightLogo();
-            const logoDark = (await import("../utils/logo")).loadDarkLogo();
             const logoCid = "logo_light@testifi.ai";
-            const logoCidDark = "logo_dark@testifi.ai";
             const inlineLogoLight: EmailAttachment = {
               content: logoLight.base64,
               filename: "logo-light.png",
@@ -653,13 +651,10 @@ async function work() {
               disposition: "inline",
               contentId: logoCid,
             };
-            const inlineLogoDark: EmailAttachment = {
-              content: logoDark.base64,
-              filename: "logo-dark.png",
-              type: logoDark.mime,
-              disposition: "inline",
-              contentId: logoCidDark,
-            };
+            const retentionBoxStyle =
+              "margin-top:24px;padding:16px;background-color:#fff3cd;border:1px solid #ffe58f;border-left:4px solid #ffc107;border-radius:6px;color:#5c3d00;";
+            const retentionHeadingStyle = "margin:0 0 8px 0;color:#5c3d00;font-weight:600;";
+            const retentionBodyStyle = "margin:0;color:#5c3d00;";
             
             const bodyHtml = `
               <h2>Your Deposition Summary Is Ready</h2>
@@ -669,9 +664,9 @@ async function work() {
                 <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
               </div>
               ${attachments.length > 0 ? `<p style="text-align: center;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
-              <div class="notice">
-                <p><strong>Important:</strong> Summary Retention Policy</p>
-                <p>Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. </p>
+              <div class="notice" style="${retentionBoxStyle}">
+                <p style="${retentionHeadingStyle}"><strong>Important:</strong> Summary Retention Policy</p>
+                <p style="${retentionBodyStyle}">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records.</p>
               </div>
               <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
             `;
@@ -681,12 +676,11 @@ async function work() {
               bodyHtml,
               theme: (process.env.EMAIL_THEME as any) || "auto",
               logoCid,
-              logoCidDark,
             });
 
           const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
 
-            const allAttachments = [inlineLogoLight, inlineLogoDark, ...attachments];
+            const allAttachments = [inlineLogoLight, ...attachments];
             await sendEmail(user.email, subject, text, html, allAttachments);
             console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
           } catch (emailErr) {
