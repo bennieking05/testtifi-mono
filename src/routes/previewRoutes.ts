@@ -4,6 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { getLogoDataUri } from "../utils/logo";
+import { parseMarkdown } from "./downloadRoutes";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -69,7 +70,7 @@ router.get(
       const deponent = (job as any)?.deponent ?? job.file?.deponent ?? undefined;
       const titleRow = summaryName || job.file?.title || "Deposition Summary";
       const headerMeta = buildHeaderMeta(job, titleRow, typeof deponent === "string" ? deponent : undefined);
-      const { meta, rows } = parseToRows(cleaned);
+      const { meta, rows } = parseMarkdown(cleaned);
       const deriveMaxPageFromRows = (r: string[][]): number => {
         let maxPage = 0;
         for (const [label] of r) {
@@ -83,8 +84,7 @@ router.get(
         }
         return maxPage;
       };
-      const combinedMeta = [...new Set([...headerMeta, ...meta])];
-      const metaHtml = combinedMeta.map((m) => `<p>${escapeHtml(m)}</p>`).join("\n");
+      const mergedMeta = [...new Set([...meta, ...headerMeta])];
       const tableRowsHtml = rows
         .map(([p, s]) => {
           // Split very long testimony into bite-sized chunks (1–2 sentences each)
@@ -229,7 +229,7 @@ router.get(
       `;
 
       const getMetaValue = (label: string): string | undefined => {
-        const entry = meta.find((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`));
+        const entry = mergedMeta.find((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`));
         if (!entry) return undefined;
         const idx = entry.indexOf(":");
         if (idx === -1) return entry.trim();
@@ -363,62 +363,4 @@ function buildHeaderMeta(job: any, title: string, deponent?: string): string[] {
     `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`,
     "",
   ];
-}
-
-function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
-  const clean = (s: string) =>
-    s
-      .replace(/```[\s\S]*?```/g, "")
-      .replace(/<br\s*\/?>(\s*)/gi, "\n")
-      .replace(/\*\*(.*?)\*\*/g, "$1")
-      .replace(/__(.*?)__/g, "$1")
-      .replace(/\*(.*?)\*/g, "$1")
-      .trim();
-
-  const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
-  // Robust page label matcher: supports "p.7:1-20", "12-13", "4:1-25 - 6:10"
-  const pageRegex =
-    /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
-  
-  // Regex to match page references within testimony text (e.g., ", p.7:1-20 |", "p.7:1-20 |", etc.)
-  // Matches page refs that appear after comma/start and before pipe/end (these are separators, not content)
-  const pageRefInTextRegex = /(?:^|,\s*)\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?:\||$)/gi;
-
-  const meta: string[] = [];
-  const rows: string[][] = [];
-  let seenRow = false;
-
-  mdText.split(/\r?\n/).forEach((raw) => {
-    let trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith("```")) return;
-    if (isRule(trimmed)) return;
-
-    trimmed = clean(trimmed);
-    if (!trimmed) return;
-
-    const rowMatch = trimmed.match(pageRegex);
-    if (rowMatch) {
-      seenRow = true;
-      const label = rowMatch[0].replace(/\s+/g, " ").trim();
-      let remainder = trimmed.slice(rowMatch[0].length).trim();
-      remainder = remainder.replace(/^[-–:|]\s*/, "").trim();
-      // CRITICAL: Remove page references that appear at the START of testimony text
-      // This handles cases where AI includes page numbers in testimony like "p.7:1-25 The witness..."
-      remainder = remainder.replace(/^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
-      remainder = remainder.replace(/^(?:\s|,|[-–:|])+\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
-      // Remove page references from the testimony text
-      remainder = remainder.replace(pageRefInTextRegex, "").trim();
-      // Clean up any double spaces or leading/trailing punctuation
-      remainder = remainder.replace(/\s+/g, " ").replace(/^[,|]\s*/, "").trim();
-      if (!remainder) remainder = "[No testimony extracted]";
-      rows.push([label || "", remainder]);
-      return;
-    }
-
-    if (!seenRow) {
-      meta.push(trimmed);
-    }
-  });
-
-  return { meta, rows };
 }

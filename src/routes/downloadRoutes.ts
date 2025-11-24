@@ -38,6 +38,33 @@ export const objectKey = (u: string) => {
   }
 };
 
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+const MONTH_REGEX = new RegExp(`\\b(${MONTH_NAMES.join("|")})(?=[0-9A-Za-z])`, "gi");
+const EXHIBIT_REGEX = /\bExhibits?(?=[0-9A-Za-z])/gi;
+const PAGE_REF_CORE =
+  "p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?(?:\\s*[-–]\\s*p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?)*";
+const INLINE_PAGE_REF_REGEX = new RegExp(`(^|[\\s,|])(${PAGE_REF_CORE})`, "gi");
+
+export function normalizeSummaryText(input: string): string {
+  if (!input) return input;
+  let output = input.replace(EXHIBIT_REGEX, (match) => `${match} `);
+  output = output.replace(MONTH_REGEX, (match) => `${match} `);
+  return output;
+}
+
 // RFC 5987 encoder for UTF-8 filenames in Content-Disposition
 function encodeRFC5987ValueChars(str: string) {
   return encodeURIComponent(str)
@@ -68,12 +95,7 @@ export function parseMarkdown(md: string) {
 
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
   // A single page token that may appear repeatedly at the start, separated by commas
-  const pageToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
-  
-  // Regex to match page references within testimony text (e.g., ", p.7:1-20 |", "p.7:1-20 |", "p.7:1-25, p.8:1-10", etc.)
-  // Matches page refs that appear anywhere in the text - these are formatting artifacts, not content
-  // Pattern: p. or p followed by digits, optionally with :line-line format, optionally followed by comma/pipe/end
-  const pageRefInTextRegex = /(?:^|\s|,)\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?:\s*,\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?)*(?:\s*[|,]\s*|$)/gi;
+  const pageToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?)?/i;
 
   const meta: string[] = [];
   const rows: string[][] = [];
@@ -99,27 +121,33 @@ export function parseMarkdown(md: string) {
       m = rest.match(pageToken);
     }
     if (pages.length) {
+      const validToken = (token: string) => {
+        const trimmed = token.trim();
+        const startsWithPage = /^p(?:age)?/i.test(trimmed);
+        const hasLineNumbers = /:\d+/.test(trimmed) || /[-–]\s*\d/.test(trimmed);
+        return startsWithPage || hasLineNumbers;
+      };
+      if (!pages.every(validToken)) {
+        // If the first token isn't a true page reference, treat the entire line as metadata
+        if (!seenRow) {
+          meta.push(normalizeSummaryText(trimmed));
+        }
+        return;
+      }
       seenRow = true;
       rest = rest.replace(/^[−–:,|\s]+/, "").trim();
-      // Remove page references from the testimony text (more aggressive - catch all patterns)
-      // CRITICAL: Remove page references that appear at the START of testimony text
-      // Pattern matches: "p.7:1-25", "p.7:1-25 ", "p.7:1-25 The witness...", etc.
-      // This handles cases where AI includes page numbers in testimony like "p.7:1-25 The witness..."
-      // Match page reference at start (with optional "p." or "page" prefix) and remove it
-      // The lookahead ensures we match even when followed by text, pipe, comma, or end
-      rest = rest.replace(/^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
-      // Also catch page references that appear after leading whitespace/comma/delimiter
-      rest = rest.replace(/^(?:\s|,|[-–:|])+\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?\s*(?=[|,]|$|[A-Za-z])/i, "").trim();
-      // First pass: remove the comprehensive pattern
-      rest = rest.replace(pageRefInTextRegex, "").trim();
-      // Second pass: catch any remaining standalone page references (p.123:1-25, p.124:1-10, etc.)
-      rest = rest.replace(/\s*(?:^|,)\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?(?:\s*,\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?)*(?:\s*[|,]\s*|$)/gi, "").trim();
-      // Third pass: catch any remaining patterns like ", p.7:1-25, p.8:1-10 |" at start/end
-      rest = rest.replace(/^(?:,\s*)?(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?(?:\s*,\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?)*(?:\s*[|,]\s*)/i, "").trim();
-      rest = rest.replace(/(?:[|,]\s*)?(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?(?:\s*,\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?)*$/i, "").trim();
-      // Clean up any double spaces or leading/trailing punctuation
-      rest = rest.replace(/\s+/g, " ").replace(/^[,|]\s*/, "").replace(/\s*[,|]$/, "").trim();
-      rows.push([pages.join(", "), rest || ""]);
+      rest = rest.replace(INLINE_PAGE_REF_REGEX, (_match, leading) => {
+        if (leading === "," || leading === "|") {
+          return " ";
+        }
+        if (typeof leading === "string" && leading.trim().length === 0) {
+          return leading;
+        }
+        return " ";
+      });
+      rest = rest.replace(/,\s*,/g, ", ").replace(/\s+/g, " ").replace(/^[,|]\s*/, "").replace(/\s*[,|]$/, "").trim();
+      const normalizedRest = normalizeSummaryText(rest);
+      rows.push([pages.join(", "), normalizedRest || ""]);
       return;
     }
 
@@ -128,7 +156,7 @@ export function parseMarkdown(md: string) {
       if (/^\|/.test(trimmed)) return;
       if (/^page\s*\(s\)\s*\|\s*testimony/i.test(trimmed)) return;
       if (/^page\s*number\s*\|\s*testimony/i.test(trimmed)) return;
-      meta.push(trimmed);
+      meta.push(normalizeSummaryText(trimmed));
     }
   });
 
