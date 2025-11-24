@@ -119,7 +119,7 @@ router.get(
             ${tableRowsHtml}
           </tbody>
         </table>`;
-      const htmlBody = `${metaHtml}\n${tableHtml}`;
+      const htmlBody = `${tableHtml}`;
 
       const css = `
         /* Professional legal-style document with light/dark themes */
@@ -228,11 +228,27 @@ router.get(
         code, pre { font-family: "Courier New", Courier, monospace; }
       `;
 
-      // Prefer File.title, else fall back to the uploaded filename without extension
-      const coverTitle = job.file?.title || (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
-      // ← use job.file.pages instead of pageCount
+      const getMetaValue = (label: string): string | undefined => {
+        const entry = meta.find((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`));
+        if (!entry) return undefined;
+        const idx = entry.indexOf(":");
+        if (idx === -1) return entry.trim();
+        return entry.slice(idx + 1).trim();
+      };
+
+      // Prefer metadata values when available to match DOCX/PDF exports
+      const metaCaseTitle = getMetaValue("Case Title");
+      const metaCaseCaption = getMetaValue("Case Caption");
+      const metaDeponent = getMetaValue("Deponent");
+      const metaSourceFile = getMetaValue("Source File");
+      const metaPagesValue = getMetaValue("Pages");
+      const metaDepositionDate = getMetaValue("Date of Deposition");
+
+      const coverTitle = metaCaseTitle || job.file?.title || (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
       const numericPages =
-        typeof job.file?.pages === "number"
+        metaPagesValue && !Number.isNaN(Number(metaPagesValue))
+          ? Number(metaPagesValue)
+          : typeof job.file?.pages === "number"
           ? job.file.pages
           : job.file?.pages
           ? parseInt(String(job.file.pages), 10)
@@ -247,19 +263,25 @@ router.get(
 
       // Extract deposition date from metadata
       let depositionDate: string | null = null;
-      const dateLine = meta.find(l => /date\s+of\s+deposition\s*:/i.test(l));
-      if (dateLine && !dateLine.includes("[Unknown]")) {
-        const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
-        if (mDate) depositionDate = mDate[1].trim();
+      if (metaDepositionDate) {
+        depositionDate = metaDepositionDate;
+      } else {
+        const dateLine = meta.find(l => /date\s+of\s+deposition\s*:/i.test(l));
+        if (dateLine && !dateLine.includes("[Unknown]")) {
+          const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
+          if (mDate) depositionDate = mDate[1].trim();
+        }
       }
 
       // Extract deponent name
-      let deponentName = job.file?.deponent || "Not Specified";
-      const titleLike = meta.find(l => /transcript\s+summary\s+of\s+/i.test(l));
-      if (titleLike) {
-        const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
-        if (m1 && !m1[1].includes("[Unknown]")) {
-          deponentName = m1[1].trim();
+      let deponentName = metaDeponent || job.file?.deponent || "Not Specified";
+      if (!metaDeponent) {
+        const titleLike = meta.find(l => /transcript\s+summary\s+of\s+/i.test(l));
+        if (titleLike) {
+          const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
+          if (m1 && !m1[1].includes("[Unknown]")) {
+            deponentName = m1[1].trim();
+          }
         }
       }
 
@@ -269,6 +291,8 @@ router.get(
       const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
       const downloadDate = new Date().toLocaleDateString();
       const dateForCover = depositionDate || uploadDate;
+      const caseCaption = metaCaseCaption;
+      const sourceFileDisplay = metaSourceFile || job.fileName || "Unknown";
       
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`<!doctype html>
@@ -281,8 +305,10 @@ router.get(
     <div style="text-align: left; margin: 20px 0;">
       <p><strong>Deponent:</strong> ${deponentName}</p>
       <p><strong>Case Title:</strong> ${coverTitle}</p>
-      <p><strong>Source File:</strong> ${job.fileName || "Unknown"}</p>
+      ${caseCaption ? `<p><strong>Case Caption:</strong> ${caseCaption}</p>` : ""}
+      <p><strong>Source File:</strong> ${sourceFileDisplay}</p>
       ${coverPages ? `<p><strong>Pages:</strong> ${coverPages}</p>` : ""}
+      ${depositionDate ? `<p><strong>Date of Deposition:</strong> ${depositionDate}</p>` : ""}
       <p><strong>Date:</strong> ${dateForCover}</p>
       <p><strong>Upload Date:</strong> ${uploadDate}</p>
       <p><strong>Download Date:</strong> ${downloadDate}</p>

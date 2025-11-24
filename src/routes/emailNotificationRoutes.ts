@@ -111,24 +111,15 @@ router.post(
             }
 
             const dashboardUrl = `${frontendUrl}/summaries`;
-            // Use inline CID logos (light + dark) for reliable rendering across email clients
+            // Use inline CID logo for reliable rendering across email clients
             const logoLight = loadLightLogo();
-            const logoDark = loadDarkLogo();
             const logoCid = "logo_light@testifi.ai";
-            const logoCidDark = "logo_dark@testifi.ai";
             const inlineLogoLight: EmailAttachment = {
               content: logoLight.base64,
               filename: "logo-light.png",
               type: logoLight.mime,
               disposition: "inline",
               contentId: logoCid,
-            };
-            const inlineLogoDark: EmailAttachment = {
-              content: logoDark.base64,
-              filename: "logo-dark.png",
-              type: logoDark.mime,
-              disposition: "inline",
-              contentId: logoCidDark,
             };
             // Get display title for email
             const displayTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || `Summary ${job.id}`;
@@ -202,12 +193,6 @@ router.post(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Deposition Summary Ready</title>
   <style>
-    .logo-dark { display: none; }
-    .logo-light { display: block; }
-    @media (prefers-color-scheme: dark) {
-      .logo-dark { display: block !important; }
-      .logo-light { display: none !important; }
-    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       line-height: 1.6;
@@ -302,8 +287,7 @@ router.post(
 <body>
   <div class="wrapper">
     <div class="header">
-      <img class="logo-light" src="cid:${logoCid}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
-      <img class="logo-dark" src="cid:${logoCidDark}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
+      <img src="cid:${logoCid}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
     </div>
     <div class="content">
       <h2>Your Deposition Summary Is Ready</h2>
@@ -330,7 +314,7 @@ router.post(
             const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
 
             try {
-              const allAttachments = [inlineLogoLight, inlineLogoDark, ...attachments];
+            const allAttachments = [inlineLogoLight, ...attachments];
               await sendEmail(user.email, subject, text, html, allAttachments);
               console.log(`Immediate notification sent for job ${job.id}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
             } catch (emailErr) {
