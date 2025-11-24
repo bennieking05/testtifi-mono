@@ -323,7 +323,6 @@ router.get(
     <div style="text-align: left; margin: 20px 0;">
       <p><strong>Deponent:</strong> ${deponentName}</p>
       <p><strong>Case Title:</strong> ${coverTitle}</p>
-      ${caseCaption ? `<p><strong>Case Caption:</strong> ${caseCaption}</p>` : ""}
       <p><strong>Source File:</strong> ${sourceFileDisplay}</p>
       ${coverPages ? `<p><strong>Pages:</strong> ${coverPages}</p>` : ""}
       ${depositionDate ? `<p><strong>Date of Deposition:</strong> ${depositionDate}</p>` : ""}
