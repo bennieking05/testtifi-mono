@@ -256,7 +256,6 @@ router.get(
 
       // Prefer metadata values when available to match DOCX/PDF exports
       const metaCaseTitle = getMetaValue("Case Title");
-      const metaCaseCaption = getMetaValue("Case Caption");
       const metaDeponent = getMetaValue("Deponent");
       const metaSourceFile = getMetaValue("Source File");
       const metaPagesValue = getMetaValue("Pages");
