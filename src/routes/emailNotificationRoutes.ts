@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
-import { loadLightLogo, loadDarkLogo } from "../utils/logo";
+import { loadLightLogo } from "../utils/logo";
 import { parseMarkdown } from "./downloadRoutes";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 
