@@ -309,7 +309,6 @@ router.get(
       const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
       const downloadDate = new Date().toLocaleDateString();
       const dateForCover = depositionDate || uploadDate;
-      const caseCaption = metaCaseCaption;
       const sourceFileDisplay = metaSourceFile || job.fileName || "Unknown";
       
       res.setHeader("Content-Type", "text/html; charset=utf-8");
