@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 import { fillTemplate } from "../utils/emailTemplate";
-import { getEffectiveCreditBalance } from "../billing/creditExpiration";
+import { getUsableCreditBalance } from "../billing/creditExpiration";
 
 dotenv.config();
 
@@ -270,7 +270,7 @@ export const refreshAccessToken = async (
       return;
     }
 
-    const credits = await getEffectiveCreditBalance(prisma, decoded.userId);
+    const credits = await getUsableCreditBalance(prisma, decoded.userId);
     
     // Get user role from database to ensure it's up to date
     const user = await prisma.user.findUnique({
@@ -311,7 +311,7 @@ export const login = async (
       return;
     }
 
-    const credits = await getEffectiveCreditBalance(prisma, user.id);
+    const credits = await getUsableCreditBalance(prisma, user.id);
 
     const accessToken = jwt.sign(
       {

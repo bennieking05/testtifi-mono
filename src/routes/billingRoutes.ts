@@ -2,7 +2,7 @@ import express, { Response } from "express";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, type AuthRequest } from "../middlewares/authMiddleware";
 import { allocateCreditsFIFO, InsufficientCreditsError } from "../billing/fifoAllocator";
-import { expireUnusedCredits, getEffectiveCreditBalance, LEDGER_EXPIRATION_PREFIX } from "../billing/creditExpiration";
+import { expireUnusedCredits, getUsableCreditBalance, LEDGER_EXPIRATION_PREFIX } from "../billing/creditExpiration";
 import { stringify } from "csv-stringify/sync";
 
 let prisma: PrismaClient = new PrismaClient();
@@ -158,7 +158,7 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     const userId = req.user!.userId;
 
-    const balance = await getEffectiveCreditBalance(prisma, userId);
+    const balance = await getUsableCreditBalance(prisma, userId);
 
     const [expiredAgg, creditedAgg] = await Promise.all([
       prisma.ledgerEntry.aggregate({

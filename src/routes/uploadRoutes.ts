@@ -8,7 +8,7 @@ import { authenticateToken } from "../middlewares/authMiddleware";
 import { randomUUID } from "crypto";
 import { debitCreditsForSummary } from "./billingRoutes";
 import { InsufficientCreditsError } from "../billing/fifoAllocator";
-import { getEffectiveCreditBalance } from "../billing/creditExpiration";
+import { getUsableCreditBalance } from "../billing/creditExpiration";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -85,7 +85,7 @@ router.post(
 
     // Check credits BEFORE accepting the file upload
     try {
-      const effectiveBalance = await getEffectiveCreditBalance(prisma, userId);
+      const effectiveBalance = await getUsableCreditBalance(prisma, userId);
       if (effectiveBalance < 1) {
         res
           .status(402)

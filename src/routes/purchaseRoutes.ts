@@ -2,7 +2,7 @@ import express, { Request, Response } from "express";
 import Stripe from "stripe";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
-import { getEffectiveCreditBalance } from "../billing/creditExpiration";
+import { getUsableCreditBalance } from "../billing/creditExpiration";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { loadLightLogo } from "../utils/logo";
 import { renderEmailShell } from "../utils/emailTheme";
@@ -759,7 +759,7 @@ router.post(
 
       if (existingLedgerEntry) {
         // Credits already added, just return current balance
-        const balance = await getEffectiveCreditBalance(prisma, userId);
+        const balance = await getUsableCreditBalance(prisma, userId);
         const existingPurchase = await prisma.purchase.findUnique({
           where: { stripePaymentIntentId: paymentIntentId },
         });
@@ -875,7 +875,7 @@ router.post(
         console.log(`[confirm] Purchase already processed for payment intent ${paymentIntentId}, skipping email`);
       }
 
-      const balance = await getEffectiveCreditBalance(prisma, userId);
+      const balance = await getUsableCreditBalance(prisma, userId);
 
       res.json({
         balance,
@@ -890,7 +890,7 @@ router.post(
           where: { idempotencyKey },
         });
         if (existingLedgerEntry) {
-          const balance = await getEffectiveCreditBalance(prisma, userId);
+          const balance = await getUsableCreditBalance(prisma, userId);
           const existingPurchase = await prisma.purchase.findUnique({
             where: { stripePaymentIntentId: paymentIntentId },
           });

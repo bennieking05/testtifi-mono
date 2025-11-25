@@ -3,7 +3,7 @@
 import express, { Response, NextFunction } from "express";
 import { PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin, AuthRequest } from "../middlewares/authMiddleware";
-import { getEffectiveCreditBalance } from "../billing/creditExpiration";
+import { getUsableCreditBalance } from "../billing/creditExpiration";
 
 const prisma = new PrismaClient();
 const router = express.Router();
@@ -39,7 +39,7 @@ router.get(
         return;
       }
 
-      const credits = await getEffectiveCreditBalance(prisma, userId);
+      const credits = await getUsableCreditBalance(prisma, userId);
 
       res.json({ ...user, credits });
     } catch (err) {
@@ -79,7 +79,7 @@ router.get(
         return;
       }
 
-      const credits = await getEffectiveCreditBalance(prisma, userId);
+      const credits = await getUsableCreditBalance(prisma, userId);
       res.json({ credits });
     } catch (err) {
       next(err as Error);
