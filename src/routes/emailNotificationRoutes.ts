@@ -4,10 +4,8 @@ import express, { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
-import { sendEmail, EmailAttachment } from "../lib/sendEmail";
-import { loadLightLogo } from "../utils/logo";
 import { parseMarkdown } from "./downloadRoutes";
-import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
+import { sendSummaryReadyEmail } from "../utils/summaryEmail";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -111,21 +109,9 @@ router.post(
             }
 
             const dashboardUrl = `${frontendUrl}/summaries`;
-            // Use inline CID logo for reliable rendering across email clients
-            const logoLight = loadLightLogo();
-            const logoCid = "logo_light@testifi.ai";
-            const inlineLogoLight: EmailAttachment = {
-              content: logoLight.base64,
-              filename: "logo-light.png",
-              type: logoLight.mime,
-              disposition: "inline",
-              contentId: logoCid,
-            };
-            // Get display title for email
             const displayTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || `Summary ${job.id}`;
 
             // Generate document attachments
-            const attachments: EmailAttachment[] = [];
             try {
               console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments for immediate notification...`);
               
@@ -150,173 +136,21 @@ router.post(
                 } : null,
               };
               
-              // Generate DOCX
-              const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, summaryContent);
-              const docxFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.docx`;
-              attachments.push({
-                content: docxBuffer.toString("base64"),
-                filename: docxFilename,
-                type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              const emailResult = await sendSummaryReadyEmail({
+                jobId: job.id,
+                userEmail: user.email,
+                userName: user.name || user.email,
+                displayTitle,
+                dashboardUrl,
+                jobData,
+                documentData: { meta, rows },
+                summaryContent,
               });
-              
-              // Generate PDF
-              const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, summaryContent);
-              const pdfFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.pdf`;
-              attachments.push({
-                content: pdfBuffer.toString("base64"),
-                filename: pdfFilename,
-                type: "application/pdf",
-              });
-
-              // If combined attachments are too large for email, drop them to ensure delivery
-              const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // < 25MB
-              const totalBytes = docxBuffer.length + pdfBuffer.length;
-              if (totalBytes > MAX_EMAIL_BYTES) {
-                console.warn(`[${job.id}] ⚠️ Attachments too large (${totalBytes} bytes). Email will be sent without attachments.`);
-                attachments.length = 0;
-              }
-
-              console.log(`[${job.id}] ✅ Generated ${attachments.length} document attachments (size=${totalBytes} bytes)`);
-            } catch (docErr) {
-              console.warn(`[${job.id}] ⚠️ Failed to generate document attachments:`, docErr);
-              // Continue sending email without attachments if document generation fails
-            }
-
-            const subject = `Your Deposition Summary Is Ready`;
-            const userName = user.name || user.email;
-            
-            const html = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Deposition Summary Ready</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      margin: 0;
-      padding: 0;
-      background-color: #f5f5f5;
-    }
-    .wrapper {
-      max-width: 600px;
-      margin: 0 auto;
-      background-color: #ffffff;
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .header {
-      background-color: #5674BC;
-      padding: 24px 16px;
-      text-align: center;
-    }
-    .header img {
-      max-width: 200px;
-      height: auto;
-    }
-    .content {
-      padding: 32px 24px;
-    }
-    .content h2 {
-      color: #333;
-      margin-top: 0;
-      margin-bottom: 20px;
-      font-size: 24px;
-    }
-    .content p {
-      margin: 16px 0;
-      color: #555;
-    }
-    .cta-wrap {
-      text-align: center;
-      margin: 28px 0;
-    }
-    .btn {
-      display: inline-block;
-      padding: 12px 24px;
-      background-color: #5674BC;
-      color: #ffffff !important;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: 600;
-    }
-    .btn:hover {
-      background-color: #4563a3;
-      color: #ffffff !important;
-    }
-    .retention-notice {
-      margin-top: 24px;
-      padding: 16px;
-      background-color: #fff3cd;
-      border-left: 4px solid #ffc107;
-      border-radius: 4px;
-    }
-    .retention-notice p {
-      margin: 0;
-      color: #856404;
-    }
-    .retention-notice p:first-child {
-      font-weight: bold;
-      margin-bottom: 8px;
-    }
-    .footer {
-      background-color: #f7f7f7;
-      color: #888;
-      font-size: 13px;
-      text-align: center;
-      padding: 24px 16px;
-      border-top: 1px solid #e0e0e0;
-    }
-    .footer p {
-      margin: 4px 0;
-    }
-    @media (max-width: 600px) {
-      .wrapper {
-        border-radius: 0;
-      }
-      .content {
-        padding: 24px 16px;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="header">
-      <img src="cid:${logoCid}" alt="Testifi AI" style="display: block; margin: 0 auto; max-width: 200px; height: auto;" />
-    </div>
-    <div class="content">
-      <h2>Your Deposition Summary Is Ready</h2>
-      <p>Hello ${userName},</p>
-      <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
-      <div class="cta-wrap">
-        <a href="${dashboardUrl}" class="btn" style="display: inline-block; padding: 12px 24px; background-color: #5674BC; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: 600;">View on Dashboard</a>
-      </div>
-      ${attachments.length > 0 ? `<p style="text-align: center; color: #666; font-size: 14px;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
-      <div class="retention-notice" style="margin-top:24px;padding:16px;background-color:#fff3cd;border:1px solid #ffe58f;border-left:4px solid #ffc107;border-radius:6px;color:#5c3d00;">
-        <p style="margin:0 0 8px 0;font-weight:600;color:#5c3d00;"><strong>Important:</strong> Summary Retention Policy</p>
-        <p style="margin:0;color:#5c3d00;">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records.</p>
-      </div>
-      <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
-    </div>
-    <div class="footer">
-      <p><strong>© 2025 Testifi AI. All rights reserved.</strong></p>
-      <p>You're receiving this because you have an account on Testifi AI.</p>
-    </div>
-  </div>
-</body>
-</html>`;
-
-            const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
-
-            try {
-            const allAttachments = [inlineLogoLight, ...attachments];
-              await sendEmail(user.email, subject, text, html, allAttachments);
-              console.log(`Immediate notification sent for job ${job.id}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
+              console.log(
+                `Immediate notification sent for job ${job.id}${
+                  emailResult.attachmentCount ? ` with ${emailResult.attachmentCount} attachment(s)` : ""
+                }`
+              );
             } catch (emailErr) {
               console.error(
                 `Failed to send immediate email for job ${job.id}:`,

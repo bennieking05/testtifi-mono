@@ -16,7 +16,7 @@ import {
 import PDFDocument from "pdfkit";
 import { loadLogo } from "./logo";
 
-interface JobData {
+export interface JobData {
   id: string;
   fileName: string | null;
   createdAt: Date;
@@ -27,7 +27,7 @@ interface JobData {
   } | null;
 }
 
-interface DocumentData {
+export interface DocumentData {
   meta: string[];
   rows: Array<[string, string]>;
 }
@@ -184,7 +184,7 @@ export async function generateDocxBuffer(
           new Paragraph({ children: [], spacing: { before: 80 } }),
           new Paragraph({
             children: [
-              new TextRun({ text: "Date:", bold: true }),
+              new TextRun({ text: "Date of Deposition:", bold: true }),
               new TextRun(
                 ` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`
               ),
@@ -364,7 +364,7 @@ export async function generatePdfBuffer(
       if (hasPages) contentH += pdf.heightOfString(`Pages: ${displayPages}`, lineOpts) + 10;
 
       pdf.font("Times-Roman").fontSize(12);
-      const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
+      const dateLine = `Date of Deposition: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
       contentH += pdf.heightOfString(dateLine, lineOpts) + 2;
 
       const startY = top + Math.max(0, (usableH - contentH) / 2);
@@ -396,7 +396,7 @@ export async function generatePdfBuffer(
       const downloadDate = new Date().toLocaleDateString();
       const dateForCover = depositionDate || uploadDate;
 
-      pdf.font("Times-Roman").fontSize(14).text(`Date: ${dateForCover}`, { align: "left" });
+      pdf.font("Times-Roman").fontSize(14).text(`Date of Deposition: ${dateForCover}`, { align: "left" });
       pdf.moveDown(0.5);
       pdf.font("Times-Roman").fontSize(14).text(`Upload Date: ${uploadDate}`, { align: "left" });
       pdf.moveDown(0.5);

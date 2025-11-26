@@ -53,14 +53,14 @@ const MONTH_NAMES = [
   "December",
 ];
 const MONTH_REGEX = new RegExp(`\\b(${MONTH_NAMES.join("|")})(?=[0-9A-Za-z])`, "gi");
-const EXHIBIT_REGEX = /\bExhibits?(?=[0-9A-Za-z])/gi;
+const EXHIBIT_STUCK_REGEX = /\b(Exhibits?)([0-9A-Za-z]+)/gi;
 const PAGE_REF_CORE =
   "p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?(?:\\s*[-–]\\s*p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?)*";
 const INLINE_PAGE_REF_REGEX = new RegExp(`(^|[\\s,|])(${PAGE_REF_CORE})`, "gi");
 
 export function normalizeSummaryText(input: string): string {
   if (!input) return input;
-  let output = input.replace(EXHIBIT_REGEX, (match) => `${match} `);
+  let output = input.replace(EXHIBIT_STUCK_REGEX, (_full, word, suffix) => `${word} ${suffix}`);
   output = output.replace(MONTH_REGEX, (match) => `${match} `);
   return output;
 }
@@ -284,7 +284,7 @@ router.get(
           `Case Title: ${coverTitle}`,
           `Source File: ${sourceFileName}`,
           ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
-          `Date: ${dateForCover}`,
+          `Date of Deposition: ${dateForCover}`,
           `Upload Date: ${uploadDate}`,
           `Download Date: ${downloadDate}`,
           "",
@@ -383,7 +383,12 @@ router.get(
                   : []),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
-                  children: [new TextRun({ text: "Date:", bold: true }), new TextRun(` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
+                  children: [
+                    new TextRun({ text: "Date of Deposition:", bold: true }),
+                    new TextRun(
+                      ` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`
+                    ),
+                  ],
                   alignment: "left",
                 }),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
@@ -520,7 +525,7 @@ router.get(
           }
           
           pdf.font("Times-Roman").fontSize(12);
-          const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
+        const dateLine = `Date of Deposition: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
           contentH += pdf.heightOfString(dateLine, lineOpts) + 2;
 
           const startY = top + Math.max(0, (usableH - contentH) / 2);
@@ -553,7 +558,7 @@ router.get(
           const downloadDate = new Date().toLocaleDateString();
           const dateForCover = depositionDate || uploadDate;
           
-          pdf.font("Times-Roman").fontSize(14).text(`Date: ${dateForCover}` , { align: "left" });
+          pdf.font("Times-Roman").fontSize(14).text(`Date of Deposition: ${dateForCover}` , { align: "left" });
           pdf.moveDown(0.5);
           pdf.font("Times-Roman").fontSize(14).text(`Upload Date: ${uploadDate}` , { align: "left" });
           pdf.moveDown(0.5);

@@ -9,13 +9,11 @@ import fs from "fs";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
-import { sendEmail, EmailAttachment } from "../lib/sendEmail";
-import { loadLightLogo } from "../utils/logo";
 import { loadPromptConfig } from "../lib/promptConfig";
-import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 import { parseMarkdown } from "../routes/downloadRoutes";
 import pLimit from "p-limit";
 import os from "os";
+import { sendSummaryReadyEmail } from "../utils/summaryEmail";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -583,106 +581,34 @@ async function work() {
           console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
           try {
             const dashboardUrl = `${frontendUrl}/summaries`;
-            
-            // Generate document attachments
-            const attachments: EmailAttachment[] = [];
-            try {
-              console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
-              const { meta, rows } = parseMarkdown(merged);
-              
-              // Convert job to match JobData interface (pages needs to be string)
-              const jobData = {
-                id: job.id,
-                fileName: job.fileName,
-                createdAt: job.createdAt,
-                file: job.file ? {
-                  title: job.file.title,
-                  deponent: job.file.deponent,
-                  pages: job.file.pages !== null ? String(job.file.pages) : null,
-                } : null,
-              };
-              
-              // Generate DOCX
-              const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, merged);
-              const docxFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.docx`;
-              attachments.push({
-                content: docxBuffer.toString("base64"),
-                filename: docxFilename,
-                type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-              });
-              
-              // Generate PDF
-              const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, merged);
-              const pdfFilename = `${displayTitle.replace(/[^a-z0-9_.-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "summary"}.pdf`;
-              attachments.push({
-                content: pdfBuffer.toString("base64"),
-                filename: pdfFilename,
-                type: "application/pdf",
-              });
-
-              // If combined attachments are too large for email, drop them (still send email)
-              const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // keep under Gmail 25MB
-              const totalBytes = docxBuffer.length + pdfBuffer.length;
-              if (totalBytes > MAX_EMAIL_BYTES) {
-                console.warn(
-                  `[${job.id}] ⚠️ Attachments too large (${totalBytes} bytes). Sending email without attachments.`
-                );
-                attachments.length = 0; // drop attachments
-              }
-
-              console.log(
-                `[${job.id}] ✅ Generated ${attachments.length} document attachments (size=${totalBytes} bytes)`
-              );
-            } catch (docErr) {
-              console.warn(`[${job.id}] ⚠️ Failed to generate document attachments:`, docErr);
-              // Continue sending email without attachments if document generation fails
-            }
-            
-            // Use the new email format with logo and updated text
-            const subject = `Your Deposition Summary Is Ready`;
-            const userName = user.name || user.email;
-            // Inline CID logo for reliable rendering across clients
-            const logoLight = loadLightLogo();
-            const logoCid = "logo_light@testifi.ai";
-            const inlineLogoLight: EmailAttachment = {
-              content: logoLight.base64,
-              filename: "logo-light.png",
-              type: logoLight.mime,
-              disposition: "inline",
-              contentId: logoCid,
+            const { meta, rows } = parseMarkdown(merged);
+            const jobData = {
+              id: job.id,
+              fileName: job.fileName,
+              createdAt: job.createdAt,
+              file: job.file
+                ? {
+                    title: job.file.title,
+                    deponent: job.file.deponent,
+                    pages: job.file.pages !== null ? String(job.file.pages) : null,
+                  }
+                : null,
             };
-            const retentionBoxStyle =
-              "margin-top:24px;padding:16px;background-color:#fff3cd;border:1px solid #ffe58f;border-left:4px solid #ffc107;border-radius:6px;color:#5c3d00;";
-            const retentionHeadingStyle = "margin:0 0 8px 0;color:#5c3d00;font-weight:600;";
-            const retentionBodyStyle = "margin:0;color:#5c3d00;";
-            
-            const bodyHtml = `
-              <h2>Your Deposition Summary Is Ready</h2>
-              <p>Hello ${userName},</p>
-              <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
-              <div class="cta-wrap">
-                <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
-              </div>
-              ${attachments.length > 0 ? `<p style="text-align: center;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>` : ""}
-              <div class="notice" style="${retentionBoxStyle}">
-                <p style="${retentionHeadingStyle}"><strong>Important:</strong> Summary Retention Policy</p>
-                <p style="${retentionBodyStyle}">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records.</p>
-              </div>
-              <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
-            `;
-            const { renderEmailShell } = await import("../utils/emailTheme");
-            const html = renderEmailShell({
-              title: "Deposition Summary Ready",
-              bodyHtml,
-              theme: (process.env.EMAIL_THEME as any) || "auto",
-              logoCid,
+            const emailResult = await sendSummaryReadyEmail({
+              jobId: job.id,
+              userEmail: user.email,
+              userName: user.name || user.email,
+              displayTitle,
+              dashboardUrl,
+              jobData,
+              documentData: { meta, rows },
+              summaryContent: merged,
             });
-
-          const text = `Hello ${userName},\n\nGreat news — the summary you requested for ${displayTitle} is now complete. Click the link below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.\n\n${dashboardUrl}\n\n${attachments.length > 0 ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy\nSummaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records. \n\nNeed help or have questions? Reply to this email and our support team will be happy to assist.\n\n© 2025 Testifi AI. All rights reserved.\nYou're receiving this because you have an account on Testifi AI.`;
-
-            const allAttachments = [inlineLogoLight, ...attachments];
-            await sendEmail(user.email, subject, text, html, allAttachments);
-            console.log(`[${job.id}] 📬 Email sent to ${user.email}${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ""}`);
+            console.log(
+              `[${job.id}] 📬 Email sent to ${user.email}${
+                emailResult.attachmentCount ? ` with ${emailResult.attachmentCount} attachment(s)` : ""
+              }`
+            );
           } catch (emailErr) {
             console.warn(`[${job.id}] Email failed:`, emailErr);
             // If email fails, reset the completionEmailSentAt so it can be retried
