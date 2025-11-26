@@ -53,7 +53,9 @@ const MONTH_NAMES = [
   "December",
 ];
 const MONTH_REGEX = new RegExp(`\\b(${MONTH_NAMES.join("|")})(?=[0-9A-Za-z])`, "gi");
-const EXHIBIT_STUCK_REGEX = /\b(Exhibits?)([0-9A-Za-z]+)/gi;
+// Only insert a space when "Exhibit" or "Exhibits" is glued directly to a numeric
+// or uppercase suffix like "Exhibit12" or "ExhibitA". Avoid splitting the plural "Exhibits".
+const EXHIBIT_STUCK_REGEX = /\b(Exhibits?)([0-9A-Z]+)/g;
 const PAGE_REF_CORE =
   "p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?(?:\\s*[-–]\\s*p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?)*";
 const INLINE_PAGE_REF_REGEX = new RegExp(`(^|[\\s,|])(${PAGE_REF_CORE})`, "gi");
