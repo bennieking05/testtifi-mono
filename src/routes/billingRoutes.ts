@@ -349,19 +349,43 @@ router.get(
         },
       });
 
-      const payload = entries.map((entry) => ({
-        id: entry.id,
-        creditsExpired: Math.abs(entry.credits),
-        expiredAt: entry.createdAt,
-        purchaseId: entry.purchaseId,
-        purchaseDate: entry.purchase?.createdAt ?? null,
-        stripePaymentIntentId: entry.purchase?.stripePaymentIntentId ?? null,
-      }));
+      const grouped = new Map<
+        string,
+        {
+          id: string;
+          creditsExpired: number;
+          expiredAt: Date;
+          purchaseId?: string | null;
+          purchaseDate: Date | null;
+          stripePaymentIntentId: string | null;
+        }
+      >();
 
-      const totalExpired = payload.reduce(
-        (sum, item) => sum + item.creditsExpired,
-        0
+      for (const entry of entries) {
+        const key = entry.purchaseId ?? entry.id;
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.creditsExpired += Math.abs(entry.credits);
+          if (entry.createdAt > existing.expiredAt) {
+            existing.expiredAt = entry.createdAt;
+          }
+        } else {
+          grouped.set(key, {
+            id: key,
+            creditsExpired: Math.abs(entry.credits),
+            expiredAt: entry.createdAt,
+            purchaseId: entry.purchaseId,
+            purchaseDate: entry.purchase?.createdAt ?? null,
+            stripePaymentIntentId: entry.purchase?.stripePaymentIntentId ?? null,
+          });
+        }
+      }
+
+      const payload = Array.from(grouped.values()).sort(
+        (a, b) => b.expiredAt.getTime() - a.expiredAt.getTime()
       );
+
+      const totalExpired = payload.reduce((sum, item) => sum + item.creditsExpired, 0);
 
       res.json({
         totalExpired,
