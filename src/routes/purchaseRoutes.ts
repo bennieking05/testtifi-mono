@@ -2,6 +2,7 @@ import express, { Request, Response } from "express";
 import Stripe from "stripe";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
+import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -370,6 +371,49 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
 
   res.json({ clientSecret: paymentIntent.client_secret });
 });
+
+router.post(
+  "/confirm",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).user?.userId as string | undefined;
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const { paymentIntentId } = req.body as { paymentIntentId?: string };
+      if (!paymentIntentId) {
+        res.status(400).json({ error: "paymentIntentId is required" });
+        return;
+      }
+
+      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+      if (!paymentIntent) {
+        res.status(404).json({ error: "Payment intent not found" });
+        return;
+      }
+
+      const ownerId = paymentIntent.metadata?.userId;
+      if (!ownerId || ownerId !== userId) {
+        res.status(403).json({ error: "Payment does not belong to this user" });
+        return;
+      }
+
+      await handlePaymentIntentSucceeded(paymentIntent as Stripe.PaymentIntent);
+
+      const balance = await getEffectiveCreditBalance(prisma, userId);
+      const creditsAdded = parsePositiveInt(paymentIntent.metadata?.credits ?? "") ?? 0;
+
+      res.json({ balance, creditsAdded });
+    } catch (err) {
+      console.error("[POST /api/purchase/confirm] error", err);
+      res.status(500).json({ error: "Failed to confirm purchase" });
+    }
+  }
+);
 
 router.get(
   "/history",
