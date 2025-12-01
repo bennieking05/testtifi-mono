@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 import { fillTemplate } from "../utils/emailTemplate";
-import { getUsableCreditBalance } from "../billing/creditExpiration";
+import { getEffectiveCreditBalance } from "../billing/creditExpiration";
 
 dotenv.config();
 
@@ -25,19 +25,10 @@ if (!sendgridApiKey) {
 } else {
   sgMail.setApiKey(sendgridApiKey);
 }
-const frontendUrl = (() => {
-  const raw =
-    process.env.BASE_URL ??
-    process.env.FRONTEND_URL ??
-    process.env.APP_URL;
-  const isBad =
-    !raw ||
-    /^\s*$/.test(String(raw)) ||
-    /^(undefined|null)$/i.test(String(raw).trim());
-  const explicit = isBad ? undefined : String(raw).trim();
-  const base = explicit || (process.env.NODE_ENV === "production" ? "https://app.testifi.ai" : "http://localhost:3000");
-  return base.replace(/\/+$/, "");
-})();
+const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
+  /\/+$/,
+  ""
+);
 
 /* ----------------------------------------------------------------------- */
 /*                        SHARED  –  EMAIL HELPER                          */
@@ -270,20 +261,13 @@ export const refreshAccessToken = async (
       return;
     }
 
-    const credits = await getUsableCreditBalance(prisma, decoded.userId);
-    
-    // Get user role from database to ensure it's up to date
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: { role: true },
-    });
+    const credits = await getEffectiveCreditBalance(prisma, decoded.userId);
 
     const newAccessToken = jwt.sign(
       {
         userId: decoded.userId,
         email: decoded.email,
         credits,
-        role: user?.role || (decoded as any).role || "user",
       },
       JWT_SECRET,
       { expiresIn: "115m" }
@@ -311,7 +295,7 @@ export const login = async (
       return;
     }
 
-    const credits = await getUsableCreditBalance(prisma, user.id);
+    const credits = await getEffectiveCreditBalance(prisma, user.id);
 
     const accessToken = jwt.sign(
       {

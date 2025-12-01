@@ -2,10 +2,6 @@ import express, { Request, Response } from "express";
 import Stripe from "stripe";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
-import { getUsableCreditBalance } from "../billing/creditExpiration";
-import { sendEmail, EmailAttachment } from "../lib/sendEmail";
-import { loadLightLogo } from "../utils/logo";
-import { renderEmailShell } from "../utils/emailTheme";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -76,7 +72,7 @@ async function recordPurchaseCredit(
     currency: string;
     receiptUrl?: string | null;
   }
-): Promise<boolean> {
+): Promise<void> {
   const purchase = await tx.purchase.upsert({
     where: { stripePaymentIntentId: paymentIntentId },
     update: {
@@ -101,7 +97,7 @@ async function recordPurchaseCredit(
   const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
 
   const existing = await tx.ledgerEntry.findUnique({ where: { idempotencyKey } });
-  if (existing) return false;
+  if (existing) return;
 
   await tx.ledgerEntry.create({
     data: {
@@ -113,204 +109,6 @@ async function recordPurchaseCredit(
       purchaseId: purchase.id,
     },
   });
-
-  return true;
-}
-
-// Tiered pricing helper (matches frontend logic)
-function getTierPricing(quantity: number): number {
-  if (quantity >= 50) return 100.0;
-  if (quantity >= 25) return 110.0;
-  if (quantity >= 10) return 120.0;
-  return 125.0; // 1–9 credits
-}
-
-// Track emails sent to prevent duplicates (in-memory cache, cleared on restart)
-const emailSentCache = new Set<string>();
-
-async function sendPurchaseReceiptEmail({
-  userId,
-  credits,
-  amountCents,
-  currency,
-  paymentIntentId,
-  receiptUrl,
-  taxAmountCents,
-}: {
-  userId: string;
-  credits: number;
-  amountCents: number;
-  currency: string;
-  paymentIntentId: string;
-  receiptUrl?: string | null;
-  taxAmountCents?: number;
-}): Promise<void> {
-  try {
-    // Check if we've already sent an email for this payment intent
-    if (emailSentCache.has(paymentIntentId)) {
-      console.log(`[purchase-receipt] Email already sent for payment intent ${paymentIntentId}, skipping`);
-      return;
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { email: true, name: true },
-    });
-
-    if (!user?.email) {
-      console.warn("Purchase receipt email skipped: user email missing", {
-        userId,
-      });
-      return;
-    }
-
-    // Calculate subtotal and tax
-    // Get the actual purchase record to verify credits and amount
-    const purchase = await prisma.purchase.findUnique({
-      where: { stripePaymentIntentId: paymentIntentId },
-    });
-    
-    // Use credits from purchase record if available (more reliable than metadata)
-    const actualCredits = purchase?.creditsAdded ?? credits;
-    const unitPrice = getTierPricing(actualCredits);
-    const subtotal = unitPrice * actualCredits;
-    const totalAmount = amountCents / 100;
-    
-    // Use tax from Stripe if available, otherwise calculate as difference
-    // But ensure tax is reasonable (not more than 20% of subtotal)
-    let taxAmount = taxAmountCents !== undefined 
-      ? taxAmountCents / 100 
-      : totalAmount - subtotal;
-    
-    // Sanity check: if tax seems unreasonable, recalculate properly
-    if (taxAmount > subtotal * 0.2) {
-      // Tax is more than 20% - likely a calculation error
-      // Recalculate tax properly (8.25% for Texas)
-      const expectedTax = subtotal * 0.0825;
-      const expectedTotal = subtotal + expectedTax;
-      
-      // If the total matches expected total with tax, use calculated tax
-      if (Math.abs(totalAmount - expectedTotal) < 1) {
-        taxAmount = expectedTax;
-      } else {
-        // Otherwise, use the difference but log a warning
-        console.warn(`[receipt-email] Unusual tax calculation for payment ${paymentIntentId}: tax=${taxAmount}, subtotal=${subtotal}, total=${totalAmount}`);
-        taxAmount = totalAmount - subtotal;
-      }
-    }
-    
-    // Always show tax line
-    const hasTax = Math.abs(taxAmount) > 0.001;
-
-    const currencyFormatter = new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency.toUpperCase(),
-    });
-
-    const subtotalFormatted = currencyFormatter.format(subtotal);
-    const taxFormatted = hasTax ? currencyFormatter.format(taxAmount) : "$0.00";
-    const totalFormatted = currencyFormatter.format(totalAmount);
-
-    const subject = `Receipt: ${actualCredits} summary credit${actualCredits === 1 ? "" : "s"} added to your Testifi AI account`;
-    const greetingName = user.name?.split(" ")[0] ?? "there";
-    // Prefer inline CID image so logos render reliably across email clients
-    const logoAsset = loadLightLogo();
-    const logoCid = "logo@testifi.ai";
-    const inlineLogo: EmailAttachment = {
-      content: logoAsset.base64,
-      filename: "logo.png",
-      type: logoAsset.mime,
-      disposition: "inline",
-      contentId: logoCid,
-    };
-    const logoSrc = `cid:${logoCid}`;
-
-    const bodyHtml = `
-      <h2>Thank You for Your Purchase</h2>
-      <p>Hi ${greetingName},</p>
-      <p>Thank you for your purchase. We've added <strong>${actualCredits.toLocaleString()} summary credit${actualCredits === 1 ? "" : "s"}</strong> to your Testifi AI account.</p>
-      <div class="receipt-details">
-        <div class="receipt-row">
-          <span class="receipt-label">Subtotal (${actualCredits} credit${actualCredits === 1 ? "" : "s"}):</span>
-          <span class="receipt-value">${subtotalFormatted}</span>
-        </div>
-        ${hasTax ? `
-        <div class="receipt-row">
-          <span class="receipt-label">Texas Sales Tax (8.25%):</span>
-          <span class="receipt-value">${taxFormatted}</span>
-        </div>
-        ` : `
-        <div class="receipt-row">
-          <span class="receipt-label">Tax:</span>
-          <span class="receipt-value">$0.00</span>
-        </div>
-        `}
-        <div class="receipt-row">
-          <span class="receipt-label">Total:</span>
-          <span class="receipt-value">${totalFormatted}</span>
-        </div>
-        <div class="payment-id">Payment ID: ${paymentIntentId}</div>
-      </div>
-      ${receiptUrl ? `<div class="cta-wrap"><a href="${receiptUrl}" class="btn">Download Stripe Receipt</a></div>` : ""}
-      <div class="notice">
-        <p><strong>Important:</strong> Credits Expiration Policy</p>
-        <p>Credits must be used within 72 hours (3 days) from now. Any unused credits will expire and cannot be recovered. Please use your credits before they expire.</p>
-      </div>
-      <p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>
-    `;
-
-    const html = renderEmailShell({
-      title: "Purchase Receipt",
-      bodyHtml,
-      theme: (process.env.EMAIL_THEME as any) || "auto",
-      logoCid,
-    });
-
-    // Generate text version of email
-    const text = `Thank You for Your Purchase
-
-Hi ${greetingName},
-
-Thank you for your purchase. We've added ${actualCredits.toLocaleString()} summary credit${actualCredits === 1 ? "" : "s"} to your Testifi AI account.
-
-Receipt Details:
-- Subtotal (${actualCredits} credit${actualCredits === 1 ? "" : "s"}): ${subtotalFormatted}
-${hasTax ? `- Texas Sales Tax (8.25%): ${taxFormatted}` : `- Tax: $0.00`}
-- Total: ${totalFormatted}
-- Payment ID: ${paymentIntentId}
-
-${receiptUrl ? `Download your Stripe receipt: ${receiptUrl}\n\n` : ""}Important: Credits Expiration Policy\nCredits must be used within 72 hours (3 days) from now. Any unused credits will expire and cannot be recovered. Please use your credits before they expire.\n\nThe credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.
-
-Testifi AI
-P.O. Box 600876
-Dallas, TX 75360-0876
-
-© ${new Date().getFullYear()} Testifi AI. All rights reserved.
-You're receiving this because you made a purchase on Testifi AI.`;
-
-    // Log email details for debugging
-    console.log(`[purchase-receipt] Sending email to ${user.email}:`, {
-      subject,
-      hasHtml: !!html,
-      htmlLength: html.length,
-      logoUrl: logoSrc,
-      receiptUrl: receiptUrl || "none",
-      actualCredits,
-    });
-
-    // Send styled HTML email with text fallback
-    await sendEmail(user.email, subject, text, html, [inlineLogo]);
-    
-    // Mark email as sent to prevent duplicates
-    emailSentCache.add(paymentIntentId);
-    
-    // Clean up cache after 1 hour to prevent memory leaks
-    setTimeout(() => {
-      emailSentCache.delete(paymentIntentId);
-    }, 60 * 60 * 1000);
-  } catch (error) {
-    console.error("Failed to send purchase receipt email:", error);
-  }
 }
 
 function determineRefundCredits(
@@ -390,66 +188,27 @@ async function recordRefundLedger(
 
 async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promise<void> {
   const userId = intent.metadata?.userId;
-  let credits = parsePositiveInt(intent.metadata?.credits ?? "");
+  const credits = parsePositiveInt(intent.metadata?.credits ?? "");
 
-  if (!userId) {
-    throw new Error("Missing userId in payment intent metadata");
+  if (!userId || !credits) {
+    throw new Error("Missing metadata for credits or userId");
   }
 
   const amountCents = intent.amount_received ?? intent.amount ?? 0;
   const currency = intent.currency ?? "usd";
   const paymentIntentId = intent.id;
-  const receiptUrl = (intent as any).charges?.data?.[0]?.receipt_url ?? null;
-  
-  // Try to get tax from Stripe's breakdown if available
-  const taxAmountCents = (intent as any).amount_details?.amount_tax ?? null;
+      const receiptUrl = (intent as any).charges?.data?.[0]?.receipt_url ?? null;
 
-  // If credits not in metadata, try to get from purchase record (in case metadata wasn't updated)
-  if (!credits) {
-    const existingPurchase = await prisma.purchase.findUnique({
-      where: { stripePaymentIntentId: paymentIntentId },
-    });
-    if (existingPurchase?.creditsAdded) {
-      credits = existingPurchase.creditsAdded;
-      console.log(`[webhook] Using credits from purchase record: ${credits}`);
-    } else {
-      throw new Error("Missing credits in payment intent metadata and purchase record");
-    }
-  }
-
-  const created = await prisma.$transaction(async (tx) =>
-    recordPurchaseCredit(tx, {
+  await prisma.$transaction(async (tx) => {
+    await recordPurchaseCredit(tx, {
       paymentIntentId,
       userId,
       credits,
       amountCents,
       currency,
       receiptUrl,
-    })
-  );
-
-  // Send email if this is a new purchase
-  // If checkout.session.completed also fires, the email function will prevent duplicates
-  if (created) {
-    // Get the final credits from the purchase record to ensure accuracy
-    const purchase = await prisma.purchase.findUnique({
-      where: { stripePaymentIntentId: paymentIntentId },
     });
-    const finalCredits = purchase?.creditsAdded ?? credits;
-    
-    console.log(`[webhook] Sending purchase receipt email for payment intent ${paymentIntentId}`);
-    await sendPurchaseReceiptEmail({
-      userId,
-      credits: finalCredits,
-      amountCents,
-      currency,
-      paymentIntentId,
-      receiptUrl: receiptUrl ?? undefined,
-      taxAmountCents: taxAmountCents ?? undefined,
-    });
-  } else {
-    console.log(`[webhook] Purchase already processed for payment intent ${paymentIntentId}, skipping email`);
-  }
+  });
 }
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session): Promise<void> {
@@ -470,47 +229,20 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
   const credits = await fetchCreditsForSession(session);
   const amountCents = session.amount_total ?? session.amount_subtotal ?? 0;
   const currency = session.currency ?? "usd";
-  const receiptUrl = (session as any).latest_charge && typeof (session as any).latest_charge !== "string"
-    ? (session as any).latest_charge.receipt_url
-    : undefined;
-  
-  // Get tax from Stripe's breakdown if available
-  const taxAmountCents = (session.total_details as any)?.breakdown?.tax_total ?? null;
+      const receiptUrl = (session as any).latest_charge && typeof (session as any).latest_charge !== "string"
+        ? (session as any).latest_charge.receipt_url
+        : undefined;
 
-  const created = await prisma.$transaction(async (tx) =>
-    recordPurchaseCredit(tx, {
+  await prisma.$transaction(async (tx) => {
+    await recordPurchaseCredit(tx, {
       paymentIntentId,
       userId,
       credits,
       amountCents,
       currency,
       receiptUrl,
-    })
-  );
-
-  // Only send email if this is a new purchase (not already processed)
-  // This is the primary handler for sending purchase receipt emails
-  // payment_intent.succeeded handler skips email to prevent duplicates
-  if (created) {
-    // Get the final credits from the purchase record to ensure accuracy
-    const purchase = await prisma.purchase.findUnique({
-      where: { stripePaymentIntentId: paymentIntentId },
     });
-    const finalCredits = purchase?.creditsAdded ?? credits;
-    
-    console.log(`[webhook] Sending purchase receipt email for payment intent ${paymentIntentId}`);
-    await sendPurchaseReceiptEmail({
-      userId,
-      credits: finalCredits,
-      amountCents,
-      currency,
-      paymentIntentId,
-      receiptUrl,
-      taxAmountCents: taxAmountCents ?? undefined,
-    });
-  } else {
-    console.log(`[webhook] Purchase already processed for payment intent ${paymentIntentId}, skipping email`);
-  }
+  });
 }
 
 async function handleRefund(refund: Stripe.Refund): Promise<void> {
@@ -548,17 +280,13 @@ async function handleDispute(dispute: Stripe.Dispute): Promise<void> {
 }
 
 export const stripeWebhookHandler = async (req: Request, res: Response): Promise<void> => {
-  console.log("🔔 Stripe webhook received");
-  
   if (!webhookSecret) {
-    console.error("❌ Missing STRIPE_WEBHOOK_SECRET");
     res.status(500).json({ error: "Missing STRIPE_WEBHOOK_SECRET" });
     return;
   }
 
   const signature = req.headers["stripe-signature"] as string | undefined;
   if (!signature) {
-    console.error("❌ Missing stripe-signature header");
     res.status(400).json({ error: "Missing stripe-signature header" });
     return;
   }
@@ -566,9 +294,8 @@ export const stripeWebhookHandler = async (req: Request, res: Response): Promise
   let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
-    console.log(`✅ Webhook verified: ${event.type}`);
   } catch (err: any) {
-    console.error("❌ Stripe webhook signature verification failed:", err.message);
+    console.error("Stripe webhook signature verification failed", err.message);
     res.status(400).send(`Webhook Error: ${err.message}`);
     return;
   }
@@ -576,41 +303,26 @@ export const stripeWebhookHandler = async (req: Request, res: Response): Promise
   try {
     switch ((event as any).type) {
       case "payment_intent.succeeded":
-        console.log("💳 Processing payment_intent.succeeded");
         await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
-        console.log("✅ Payment intent processed successfully");
         break;
       case "checkout.session.completed":
-        console.log("🛒 Processing checkout.session.completed");
-        const session = event.data.object as Stripe.Checkout.Session;
-        // Fetch full session with line items to get tax breakdown
-        const fullSession = await stripe.checkout.sessions.retrieve(session.id, {
-          expand: ['line_items', 'total_details.breakdown']
-        });
-        await handleCheckoutSessionCompleted(fullSession);
-        console.log("✅ Checkout session processed successfully");
+        await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
         break;
       case "charge.refund.created":
-        console.log("💸 Processing charge.refund.created");
         await handleRefund((event as any).data.object as Stripe.Refund);
-        console.log("✅ Refund processed successfully");
         break;
       case "charge.dispute.created":
-        console.log("⚠️ Processing charge.dispute.created");
         await handleDispute(event.data.object as Stripe.Dispute);
-        console.log("✅ Dispute processed successfully");
         break;
       default:
-        console.log(`ℹ️ Unhandled webhook type: ${event.type}`);
         break;
     }
   } catch (err: any) {
-    console.error("❌ Stripe webhook processing error:", err);
+    console.error("Stripe webhook processing error", err);
     res.status(500).json({ error: err.message || "Webhook processing failed" });
     return;
   }
 
-  console.log("✅ Webhook handled successfully");
   res.json({ received: true });
 };
 
@@ -631,9 +343,6 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
   const paymentIntent = await stripe.paymentIntents.create({
     amount: amountCents,
     currency: "usd",
-    description: `Deposition summary token(s) - ${credits} credit${credits === 1 ? "" : "s"}`,
-    statement_descriptor_suffix: "TESTIFI AI",
-    // Don't set receipt_email - Stripe will send automatic receipt, but we send our own styled email
     metadata: {
       userId,
       credits: String(credits),
@@ -659,256 +368,8 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
     },
   });
 
-  res.json({ 
-    clientSecret: paymentIntent.client_secret,
-    paymentIntentId: paymentIntent.id,
-  });
+  res.json({ clientSecret: paymentIntent.client_secret });
 });
-
-router.post("/update-payment-intent", authenticateToken, async (req: Request, res: Response) => {
-  const userId = (req as any).user.userId as string;
-  const { paymentIntentId, amountCents, credits } = req.body as { 
-    paymentIntentId?: string; 
-    amountCents?: number;
-    credits?: number;
-  };
-
-  if (!userId) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-
-  if (!paymentIntentId || !amountCents) {
-    res.status(400).json({ error: "Missing paymentIntentId or amountCents" });
-    return;
-  }
-
-  try {
-    // Verify the payment intent belongs to this user
-    const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
-    const intentUserId = intent.metadata?.userId;
-    
-    if (!intentUserId || intentUserId !== userId) {
-      res.status(403).json({ error: "PaymentIntent does not belong to this user" });
-      return;
-    }
-
-    // Only allow updates if payment intent is in a mutable state
-    if (intent.status !== "requires_payment_method" && intent.status !== "requires_confirmation") {
-      res.status(400).json({ 
-        error: `Cannot update PaymentIntent in status: ${intent.status}`,
-        status: intent.status 
-      });
-      return;
-    }
-
-    // Update the payment intent amount and metadata (credits if provided)
-    const updateData: Stripe.PaymentIntentUpdateParams = {
-      amount: amountCents,
-    };
-    
-    if (credits !== undefined) {
-      updateData.metadata = {
-        ...intent.metadata,
-        credits: String(credits),
-      };
-    }
-
-    const updatedIntent = await stripe.paymentIntents.update(paymentIntentId, updateData);
-
-    // Update the purchase record
-    await prisma.purchase.update({
-      where: { stripePaymentIntentId: paymentIntentId },
-      data: {
-        amountCents,
-        ...(credits !== undefined ? { creditsAdded: credits } : {}),
-      },
-    });
-
-    res.json({ 
-      clientSecret: updatedIntent.client_secret,
-      paymentIntentId: updatedIntent.id,
-    });
-  } catch (error: any) {
-    console.error("[update-payment-intent] Error:", error);
-    res.status(500).json({ 
-      error: "Failed to update payment intent",
-      details: error.message 
-    });
-  }
-});
-
-router.post(
-  "/confirm",
-  authenticateToken,
-  async (req: Request, res: Response) => {
-    const userId = (req as any).user.userId as string;
-    const { paymentIntentId } = req.body as { paymentIntentId?: string };
-
-    if (!paymentIntentId) {
-      res.status(400).json({ error: "Missing paymentIntentId" });
-      return;
-    }
-
-    try {
-      // Check if credits were already added (check ledger entry, not just purchase)
-      const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
-      const existingLedgerEntry = await prisma.ledgerEntry.findUnique({
-        where: { idempotencyKey },
-      });
-
-      if (existingLedgerEntry) {
-        // Credits already added, just return current balance
-        const balance = await getUsableCreditBalance(prisma, userId);
-        const existingPurchase = await prisma.purchase.findUnique({
-          where: { stripePaymentIntentId: paymentIntentId },
-        });
-        res.json({
-          balance,
-          creditsAdded: existingPurchase?.creditsAdded ?? 0,
-          alreadyProcessed: true,
-        });
-        return;
-      }
-
-      let intent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-        expand: ["charges.data", "latest_charge"],
-      });
-
-      if (!intent) {
-        res.status(404).json({ error: "PaymentIntent not found" });
-        return;
-      }
-
-      console.log(`[confirm] PaymentIntent ${paymentIntentId} status: ${intent.status}`);
-
-      const intentUserId = intent.metadata?.userId ?? null;
-      if (!intentUserId || intentUserId !== userId) {
-        res.status(403).json({ error: "PaymentIntent does not belong to this user" });
-        return;
-      }
-
-      // Allow processing if succeeded or processing (might be in transition)
-      if (intent.status !== "succeeded" && intent.status !== "processing") {
-        console.log(`[confirm] PaymentIntent ${paymentIntentId} rejected - status: ${intent.status}`);
-        res.status(400).json({ 
-          error: `PaymentIntent not succeeded (status: ${intent.status})`,
-          status: intent.status 
-        });
-        return;
-      }
-
-      // If processing, wait a moment and check again (up to 3 times)
-      if (intent.status === "processing") {
-        console.log(`[confirm] PaymentIntent ${paymentIntentId} is processing, waiting...`);
-        for (let i = 0; i < 3; i++) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          const refreshedIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-          console.log(`[confirm] Retry ${i + 1}: PaymentIntent ${paymentIntentId} status: ${refreshedIntent.status}`);
-          if (refreshedIntent.status === "succeeded") {
-            intent = refreshedIntent;
-            break;
-          }
-          if (i === 2) {
-            res.status(400).json({ 
-              error: `PaymentIntent still processing after retries (status: ${refreshedIntent.status})`,
-              status: refreshedIntent.status 
-            });
-            return;
-          }
-        }
-      }
-
-      const credits = parsePositiveInt(intent.metadata?.credits ?? "");
-      if (!credits) {
-        res.status(400).json({ error: "Unable to determine purchased credits" });
-        return;
-      }
-
-      const amountCents = intent.amount_received ?? intent.amount ?? 0;
-      const currency = intent.currency ?? "usd";
-      const receiptUrl =
-        (intent as any).charges?.data?.[0]?.receipt_url ??
-        ((intent as any).latest_charge &&
-        typeof (intent as any).latest_charge !== "string"
-          ? (intent as any).latest_charge.receipt_url
-          : undefined);
-
-      const created = await prisma.$transaction((tx) =>
-        recordPurchaseCredit(tx, {
-          paymentIntentId,
-          userId,
-          credits,
-          amountCents,
-          currency,
-          receiptUrl,
-        })
-      );
-
-      // Note: Stripe's automatic receipts are controlled in Dashboard Settings
-      // They cannot be disabled programmatically per payment
-      // To disable: Dashboard → Settings → Business settings → Customer emails → Toggle off "Successful payments"
-
-      // Send email if this is a new purchase
-      // The emailSentCache will prevent duplicates if webhook also fires
-      if (created) {
-        // Get the final credits from the purchase record to ensure accuracy
-        const purchase = await prisma.purchase.findUnique({
-          where: { stripePaymentIntentId: paymentIntentId },
-        });
-        const finalCredits = purchase?.creditsAdded ?? credits;
-        
-        // Try to get tax from Stripe's breakdown if available
-        const taxAmountCents = (intent as any).amount_details?.amount_tax ?? null;
-        
-        console.log(`[confirm] Sending purchase receipt email for payment intent ${paymentIntentId}`);
-        await sendPurchaseReceiptEmail({
-          userId,
-          credits: finalCredits,
-          amountCents,
-          currency,
-          paymentIntentId,
-          receiptUrl,
-          taxAmountCents: taxAmountCents ?? undefined,
-        });
-      } else {
-        console.log(`[confirm] Purchase already processed for payment intent ${paymentIntentId}, skipping email`);
-      }
-
-      const balance = await getUsableCreditBalance(prisma, userId);
-
-      res.json({
-        balance,
-        creditsAdded: credits,
-      });
-    } catch (error: any) {
-      console.error("Error confirming purchase:", error);
-      // If it's a Stripe error about unexpected state, check if credits were already added
-      if (error?.code === "payment_intent_unexpected_state" || error?.type === "StripeInvalidRequestError") {
-        const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
-        const existingLedgerEntry = await prisma.ledgerEntry.findUnique({
-          where: { idempotencyKey },
-        });
-        if (existingLedgerEntry) {
-          const balance = await getUsableCreditBalance(prisma, userId);
-          const existingPurchase = await prisma.purchase.findUnique({
-            where: { stripePaymentIntentId: paymentIntentId },
-          });
-          res.json({
-            balance,
-            creditsAdded: existingPurchase?.creditsAdded ?? 0,
-            alreadyProcessed: true,
-          });
-          return;
-        }
-      }
-      const status = error?.statusCode ?? 500;
-      res.status(status).json({
-        error: error?.message ?? "Failed to confirm purchase",
-      });
-    }
-  }
-);
 
 router.get(
   "/history",
@@ -947,14 +408,8 @@ router.get(
       return;
     }
 
-    // Only show actual Stripe purchases (not manual credits)
-    // Filter out legacy/manual credits that start with "legacy-"
     const purchases = await prisma.purchase.findMany({
-      where: { 
-        userId,
-        stripePaymentIntentId: { not: { startsWith: "legacy-" } },
-        status: { in: ["succeeded", "partially_refunded", "refunded"] }
-      },
+      where: { userId },
       orderBy: { createdAt: "desc" },
     });
 
@@ -970,19 +425,6 @@ router.get(
         createdAt: purchase.createdAt,
       }))
     );
-  }
-);
-
-router.get(
-  "/stripe-account",
-  authenticateToken,
-  async (_req: Request, res: Response): Promise<void> => {
-    try {
-      const account = await stripe.accounts.retrieve();
-      res.json({ accountId: account.id });
-    } catch (error: any) {
-      res.status(500).json({ error: error?.message ?? "Unable to retrieve account" });
-    }
   }
 );
 

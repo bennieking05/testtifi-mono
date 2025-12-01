@@ -9,11 +9,15 @@ import fs from "fs";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
+import { sendEmail } from "../lib/sendEmail";
 import { loadPromptConfig } from "../lib/promptConfig";
-import { parseMarkdown } from "../routes/downloadRoutes";
 import pLimit from "p-limit";
 import os from "os";
-import { sendSummaryReadyEmail } from "../utils/summaryEmail";
+import { resolveFrontendBaseUrl } from "../utils/frontendUrl";
+import {
+  claimCompletionEmailSend,
+  releaseCompletionEmailSend,
+} from "../utils/emailDeliveryGuard";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -21,30 +25,12 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
-// Note: Duplicate prevention now uses database field completionEmailSentAt instead of in-memory cache
-
 console.log(
   "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
 );
 console.log("=== Worker starting ===");
 
-// Frontend URL with robust fallbacks for staging/production
-const frontendUrl = (() => {
-  const raw =
-    process.env.BASE_URL ??
-    process.env.FRONTEND_URL ??
-    process.env.APP_URL;
-  const isBad =
-    !raw ||
-    /^\s*$/.test(raw) ||
-    /^(undefined|null)$/i.test(String(raw).trim());
-  const explicit = isBad ? undefined : String(raw).trim();
-  if (explicit) return explicit.replace(/\/+$/, "");
-  const isStaging = process.env.STAGING === "1" || process.env.ENVIRONMENT === "staging";
-  if (isStaging) return "https://staging.app.testifi.ai";
-  if (process.env.NODE_ENV === "production") return "https://app.testifi.ai";
-  return "http://localhost:3000";
-})();
+const frontendUrl = resolveFrontendBaseUrl();
 
 // Tuning knobs (env‑overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
@@ -205,22 +191,14 @@ function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?
   const lines = tr.split(/\r?\n/);
   const header = lines.slice(0, 40).join("\n");
 
-  // Capture common case-number patterns (robust to punctuation/spacing)
-  const civMatch =
-    header.match(
-      /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?|CAUSE\s+NO\.?)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9:\-\/_.]*)/i
-    ) || header.match(/No\.\s*([A-Za-z0-9][A-Za-z0-9:\-\/_.]*)/i);
+  const civMatch = header.match(
+    /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
+  );
   const civil = civMatch?.[2] || "[Unknown]";
 
   const captionLine =
     lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
-  // Include civil action number if we have it and it's not already present
-  let caption = captionLine.trim();
-  if (!caption) {
-    caption = `Civil Action No. ${civil}`;
-  } else if (civil && civil !== "[Unknown]" && !new RegExp(civil.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(caption)) {
-    caption = `${caption} — Civil Action No. ${civil}`;
-  }
+  const caption = captionLine.trim() || `Civil Action No. ${civil}`;
 
   // Enhanced deponent extraction patterns with debugging
   let extractedDeponent = null;
@@ -428,6 +406,23 @@ async function withRetry<T>(
   throw lastErr;
 }
 
+async function getRenderedEmailTemplate(
+  templateId: number,
+  variables: Record<string, string>
+) {
+  const emailTemplate = await prisma.email.findUnique({
+    where: { id: templateId },
+  });
+  if (!emailTemplate) throw new Error(`Email template ${templateId} not found`);
+
+  let { subject, body } = emailTemplate;
+  for (const [key, value] of Object.entries(variables)) {
+    const regex = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+    body = body.replace(regex, value);
+    subject = subject.replace(regex, value);
+  }
+  return { subject, body };
+}
 
 async function work() {
   while (true) {
@@ -458,9 +453,8 @@ async function work() {
         id: true,
         userId: true,
         fileName: true,
-        createdAt: true,
         notifyOnComplete: true,
-        file: { select: { title: true, deponent: true, pages: true } },
+        file: { select: { title: true, deponent: true } },
       },
     });
 
@@ -565,59 +559,51 @@ async function work() {
         },
       });
 
-      // Always send completion email once (regardless of notifyOnComplete)
-      // Atomically mark sent to prevent duplicates across processes
-      if (user?.email) {
-        const emailUpdateResult = await prisma.summaryJob.updateMany({
-          where: { 
-            id: job.id,
-            completionEmailSentAt: null, // Only update if email hasn't been sent
-          },
-          data: { completionEmailSentAt: new Date() },
-        });
-        if (emailUpdateResult.count === 0) {
-          console.log(`[${job.id}] 📧 Email already sent for summary job ${job.id}, skipping`);
+      // Re-fetch notifyOnComplete at completion time to honor late opt-ins
+      const fresh = await prisma.summaryJob.findUnique({
+        where: { id: job.id },
+        select: { notifyOnComplete: true },
+      });
+      if (fresh?.notifyOnComplete && user?.email) {
+        const claimed = await claimCompletionEmailSend(prisma, job.id);
+        if (!claimed) {
+          console.log(
+            `[${job.id}] 📧 Completion email already sent, skipping worker delivery`
+          );
         } else {
-          console.log(`[${job.id}] 📧 Attempting to send email to ${user.email}`);
+          console.log(
+            `[${job.id}] 📧 Attempting to send email to ${user.email}`
+          );
+          const dashboardUrl = `${frontendUrl}/summaries`;
           try {
-            const dashboardUrl = `${frontendUrl}/summaries`;
-            const { meta, rows } = parseMarkdown(merged);
-            const jobData = {
-              id: job.id,
-              fileName: job.fileName,
-              createdAt: job.createdAt,
-              file: job.file
-                ? {
-                    title: job.file.title,
-                    deponent: job.file.deponent,
-                    pages: job.file.pages !== null ? String(job.file.pages) : null,
-                  }
-                : null,
-            };
-            const emailResult = await sendSummaryReadyEmail({
-              jobId: job.id,
-              userEmail: user.email,
-              userName: user.name || user.email,
-              displayTitle,
-              dashboardUrl,
-              jobData,
-              documentData: { meta, rows },
-              summaryContent: merged,
-            });
-            console.log(
-              `[${job.id}] 📬 Email sent to ${user.email}${
-                emailResult.attachmentCount ? ` with ${emailResult.attachmentCount} attachment(s)` : ""
-              }`
-            );
+            try {
+              const { subject, body } = await getRenderedEmailTemplate(4, {
+                name: user.name || user.email,
+                deposition_title: displayTitle,
+                dashboard_link: dashboardUrl,
+              });
+              await sendEmail(user.email, subject, undefined, body);
+            } catch (tplErr) {
+              // Fallback minimal email if the template is missing or invalid
+              console.warn(`[${job.id}] Email template fallback:`, tplErr);
+              const subject = `Your deposition summary is ready`;
+              const html = `
+                <p>Hello ${user.name || user.email},</p>
+                <p>Your deposition summary <strong>${displayTitle}</strong> is ready.</p>
+                <p><a href="${dashboardUrl}">Open Testifi AI Dashboard</a></p>
+              `;
+              await sendEmail(user.email, subject, undefined, html);
+            }
+            console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
           } catch (emailErr) {
+            await releaseCompletionEmailSend(prisma, job.id);
             console.warn(`[${job.id}] Email failed:`, emailErr);
-            // If email fails, reset the completionEmailSentAt so it can be retried
-            await prisma.summaryJob.updateMany({
-              where: { id: job.id },
-              data: { completionEmailSentAt: null },
-            });
           }
         }
+      } else {
+        console.log(
+          `[${job.id}] ℹ️ Skipping email notification (notifyOnComplete: ${fresh?.notifyOnComplete}, email: ${user?.email})`
+        );
       }
 
       fs.unlinkSync(tmpPath);

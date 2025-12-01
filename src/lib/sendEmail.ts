@@ -31,14 +31,24 @@ export interface EmailAttachment {
   contentId?: string;
 }
 
+interface SendEmailOptions {
+  disableTextFallback?: boolean;
+}
+
 export async function sendEmail(
   to: string,
   subject: string,
   text?: string,
   html?: string,
-  attachments?: EmailAttachment[]
+  attachments?: EmailAttachment[],
+  options?: SendEmailOptions
 ) {
-  const fallbackText = text?.trim() || (html ? stripHtml(html) : "No content");
+  const trimmedText = text?.trim();
+  const fallbackText =
+    trimmedText ||
+    (options?.disableTextFallback ? "" : html ? stripHtml(html) : "No content");
+  const shouldIncludeText =
+    options?.disableTextFallback ? !!trimmedText : true;
 
   // Prepare attachments with sensible defaults
   const prepared = (attachments ?? []).map((att) => {
@@ -73,15 +83,23 @@ export async function sendEmail(
     finalAttachments = prepared.filter((p) => p.isInline).map((p) => p.api);
   }
 
+  const msgContent: Partial<MailDataRequired> = {};
+  if (html) {
+    msgContent.html = html.trim();
+  }
+  if (shouldIncludeText && fallbackText) {
+    msgContent.text = fallbackText;
+  } else if (!html) {
+    msgContent.text = trimmedText || "No content";
+  }
+
   const msg: MailDataRequired = {
     to,
     from: senderEmail,
     subject,
-    // Always include HTML if provided, and include text as fallback
-    // SendGrid will use HTML for clients that support it, text for others
-    ...(html ? { html: html.trim(), text: fallbackText } : { text: fallbackText }),
+    ...msgContent,
     ...(finalAttachments.length > 0 ? { attachments: finalAttachments } : {}),
-  };
+  } as MailDataRequired;
 
   try {
     const cidAttachments = (attachments ?? [])

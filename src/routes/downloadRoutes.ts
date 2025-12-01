@@ -38,35 +38,6 @@ export const objectKey = (u: string) => {
   }
 };
 
-const MONTH_NAMES = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-const MONTH_REGEX = new RegExp(`\\b(${MONTH_NAMES.join("|")})(?=[0-9A-Za-z])`, "gi");
-// Only insert a space when "Exhibit" or "Exhibits" is glued directly to a numeric
-// or uppercase suffix like "Exhibit12" or "ExhibitA". Avoid splitting the plural "Exhibits".
-const EXHIBIT_STUCK_REGEX = /\b(Exhibits?)([0-9A-Z]+)/g;
-const PAGE_REF_CORE =
-  "p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?(?:\\s*[-–]\\s*p(?:age)?\\.?\\s*\\d+(?::\\d+(?:-\\d+)?)?)*";
-const INLINE_PAGE_REF_REGEX = new RegExp(`(^|[\\s,|])(${PAGE_REF_CORE})`, "gi");
-
-export function normalizeSummaryText(input: string): string {
-  if (!input) return input;
-  let output = input.replace(EXHIBIT_STUCK_REGEX, (_full, word, suffix) => `${word} ${suffix}`);
-  output = output.replace(MONTH_REGEX, (match) => `${match} `);
-  return output;
-}
-
 // RFC 5987 encoder for UTF-8 filenames in Content-Disposition
 function encodeRFC5987ValueChars(str: string) {
   return encodeURIComponent(str)
@@ -97,7 +68,7 @@ export function parseMarkdown(md: string) {
 
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
   // A single page token that may appear repeatedly at the start, separated by commas
-  const pageToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?)?/i;
+  const pageToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
 
   const meta: string[] = [];
   const rows: string[][] = [];
@@ -123,33 +94,9 @@ export function parseMarkdown(md: string) {
       m = rest.match(pageToken);
     }
     if (pages.length) {
-      const validToken = (token: string) => {
-        const trimmed = token.trim();
-        const startsWithPage = /^p(?:age)?/i.test(trimmed);
-        const hasLineNumbers = /:\d+/.test(trimmed) || /[-–]\s*\d/.test(trimmed);
-        return startsWithPage || hasLineNumbers;
-      };
-      if (!pages.every(validToken)) {
-        // If the first token isn't a true page reference, treat the entire line as metadata
-        if (!seenRow) {
-          meta.push(normalizeSummaryText(trimmed));
-        }
-        return;
-      }
       seenRow = true;
       rest = rest.replace(/^[−–:,|\s]+/, "").trim();
-      rest = rest.replace(INLINE_PAGE_REF_REGEX, (_match, leading) => {
-        if (leading === "," || leading === "|") {
-          return " ";
-        }
-        if (typeof leading === "string" && leading.trim().length === 0) {
-          return leading;
-        }
-        return " ";
-      });
-      rest = rest.replace(/,\s*,/g, ", ").replace(/\s+/g, " ").replace(/^[,|]\s*/, "").replace(/\s*[,|]$/, "").trim();
-      const normalizedRest = normalizeSummaryText(rest);
-      rows.push([pages.join(", "), normalizedRest || ""]);
+      rows.push([pages.join(", "), rest || ""]);
       return;
     }
 
@@ -158,7 +105,7 @@ export function parseMarkdown(md: string) {
       if (/^\|/.test(trimmed)) return;
       if (/^page\s*\(s\)\s*\|\s*testimony/i.test(trimmed)) return;
       if (/^page\s*number\s*\|\s*testimony/i.test(trimmed)) return;
-      meta.push(normalizeSummaryText(trimmed));
+      meta.push(trimmed);
     }
   });
 
@@ -184,23 +131,6 @@ router.get(
     if (!job) {
       res.status(404).json({ error: "Summary job not found." });
       return;
-    }
-
-    // Check if summary is older than 3 days
-    const RETENTION_DAYS = 3;
-    const DAY_IN_MS = 24 * 60 * 60 * 1000;
-    const cutoffDate = new Date(Date.now() - RETENTION_DAYS * DAY_IN_MS);
-    
-    if (job.finishedAt && job.finishedAt < cutoffDate) {
-      // Summary is older than 3 days - check if it still exists
-      if (!job.summaryCsvUrl && !job.file?.summaryFileName) {
-        res.status(410).json({ 
-          error: "This summary has been deleted per our 3-day retention policy. Summary content older than 3 days is automatically removed. Access may be available in extenuating circumstances - please contact support.",
-          deleted: true,
-          finishedAt: job.finishedAt.toISOString(),
-        });
-        return;
-      }
     }
 
     const key = job.summaryCsvUrl
@@ -286,7 +216,7 @@ router.get(
           `Case Title: ${coverTitle}`,
           `Source File: ${sourceFileName}`,
           ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
-          `Date of Deposition: ${dateForCover}`,
+          `Date: ${dateForCover}`,
           `Upload Date: ${uploadDate}`,
           `Download Date: ${downloadDate}`,
           "",
@@ -385,12 +315,7 @@ router.get(
                   : []),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
-                  children: [
-                    new TextRun({ text: "Date of Deposition:", bold: true }),
-                    new TextRun(
-                      ` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`
-                    ),
-                  ],
+                  children: [new TextRun({ text: "Date:", bold: true }), new TextRun(` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
                   alignment: "left",
                 }),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
@@ -527,7 +452,7 @@ router.get(
           }
           
           pdf.font("Times-Roman").fontSize(12);
-        const dateLine = `Date of Deposition: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
+          const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
           contentH += pdf.heightOfString(dateLine, lineOpts) + 2;
 
           const startY = top + Math.max(0, (usableH - contentH) / 2);
@@ -560,7 +485,7 @@ router.get(
           const downloadDate = new Date().toLocaleDateString();
           const dateForCover = depositionDate || uploadDate;
           
-          pdf.font("Times-Roman").fontSize(14).text(`Date of Deposition: ${dateForCover}` , { align: "left" });
+          pdf.font("Times-Roman").fontSize(14).text(`Date: ${dateForCover}` , { align: "left" });
           pdf.moveDown(0.5);
           pdf.font("Times-Roman").fontSize(14).text(`Upload Date: ${uploadDate}` , { align: "left" });
           pdf.moveDown(0.5);

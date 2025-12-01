@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient, PurchaseStatus } from "@prisma/client";
 
-export const LEDGER_EXPIRATION_PREFIX = "expire:";
+const LEDGER_EXPIRATION_PREFIX = "expire:";
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_EXPIRATION_DAYS = Number(process.env.CREDIT_EXPIRATION_DAYS ?? 3);
 
@@ -142,46 +142,5 @@ export async function getEffectiveCreditBalance(
   });
 
   return fallbackUser?.credits ?? 0;
-}
-
-export async function getUsableCreditBalance(
-  prisma: PrismaClient,
-  userId: string,
-  options: { now?: Date } = {}
-): Promise<number> {
-  const now = options.now ?? new Date();
-  const cutoff = new Date(now.getTime() - DEFAULT_EXPIRATION_DAYS * DAY_IN_MS);
-
-  const purchases = await prisma.purchase.findMany({
-    where: {
-      userId,
-      status: normalizeStatusFilter(),
-      createdAt: { gte: cutoff },
-    },
-    select: {
-      id: true,
-      creditsAdded: true,
-    },
-  });
-
-  if (!purchases.length) return 0;
-
-  const usage = await prisma.creditAllocation.groupBy({
-    by: ["purchaseId"],
-    where: {
-      purchaseId: { in: purchases.map((p) => p.id) },
-    },
-    _sum: { creditsUsed: true },
-  });
-
-  const usageMap = new Map<string, number>(
-    usage.map((row) => [row.purchaseId, toNumber(row._sum.creditsUsed)])
-  );
-
-  return purchases.reduce((sum, purchase) => {
-    const used = usageMap.get(purchase.id) ?? 0;
-    const remaining = Math.max(purchase.creditsAdded - used, 0);
-    return sum + remaining;
-  }, 0);
 }
 
