@@ -1,8 +1,11 @@
 import express, { Request, Response } from "express";
 import Stripe from "stripe";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient, Purchase } from "@prisma/client";
 import { authenticateToken, requireAdmin } from "../middlewares/authMiddleware";
 import { getEffectiveCreditBalance } from "../billing/creditExpiration";
+import { sendEmail, EmailAttachment } from "../lib/sendEmail";
+import { loadLightLogo } from "../utils/logo";
+import { renderEmailShell } from "../utils/emailTheme";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -15,6 +18,117 @@ const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 const PAYMENT_LEDGER_PREFIX = "pi:";
 const REFUND_LEDGER_PREFIX = "refund:";
 const DISPUTE_LEDGER_PREFIX = "dispute:";
+const emailTheme = (process.env.EMAIL_THEME as any) || "auto";
+
+function formatCurrency(amountCents: number, currency: string): string {
+  const value = (amountCents || 0) / 100;
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: (currency || "USD").toUpperCase(),
+    }).format(value);
+  } catch {
+    return `$${value.toFixed(2)}`;
+  }
+}
+
+async function sendPurchaseReceiptEmail({
+  userId,
+  credits,
+  amountCents,
+  currency,
+  receiptUrl,
+  paymentIntentId,
+}: {
+  userId: string;
+  credits: number;
+  amountCents: number;
+  currency: string;
+  receiptUrl?: string | null;
+  paymentIntentId: string;
+}): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user?.email) {
+    console.warn(`[purchase-receipt] Missing email for user ${userId}`);
+    return;
+  }
+
+  const greetingName = user.name || user.email;
+  const creditsLabel = credits.toLocaleString();
+  const amountLabel = formatCurrency(amountCents, currency);
+  const subject = `Receipt for ${creditsLabel} summary credit${credits === 1 ? "" : "s"}`;
+
+  const logoAsset = loadLightLogo();
+  const logoCid = "logo_light@testifi.ai";
+  const inlineLogo: EmailAttachment = {
+    content: logoAsset.base64,
+    filename: "logo-light.png",
+    type: logoAsset.mime,
+    disposition: "inline",
+    contentId: logoCid,
+  };
+
+  const noticeStyle =
+    "margin-top:24px;padding:16px;background-color:#fff3cd;border:1px solid #ffe58f;border-left:4px solid #ffc107;border-radius:6px;color:#5c3d00;";
+  const noticeHeadingStyle = "margin:0 0 8px 0;color:#5c3d00;font-weight:600;";
+  const noticeBodyStyle = "margin:0;color:#5c3d00;";
+
+  const bodyHtml = `
+    <h2>Thank You for Your Purchase</h2>
+    <p>Hi ${greetingName},</p>
+    <p>We've added <strong>${creditsLabel} summary credit${credits === 1 ? "" : "s"}</strong> to your Testifi AI account.</p>
+    <div class="receipt-details">
+      <div class="receipt-row">
+        <span class="receipt-label">Credits Added:</span>
+        <span class="receipt-value">${creditsLabel}</span>
+      </div>
+      <div class="receipt-row">
+        <span class="receipt-label">Total Paid:</span>
+        <span class="receipt-value">${amountLabel}</span>
+      </div>
+      <div class="receipt-row">
+        <span class="receipt-label">Payment ID:</span>
+        <span class="receipt-value">${paymentIntentId}</span>
+      </div>
+    </div>
+    ${
+      receiptUrl
+        ? `<div class="cta-wrap"><a href="${receiptUrl}" class="btn">View Stripe Receipt</a></div>`
+        : ""
+    }
+    <div class="notice" style="${noticeStyle}">
+      <p style="${noticeHeadingStyle}"><strong>Important:</strong> Credits Expiration Policy</p>
+      <p style="${noticeBodyStyle}">Credits must be used within 72 hours (3 days) from purchase. Unused credits will expire and cannot be recovered.</p>
+    </div>
+    <p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>
+  `;
+
+  const html = renderEmailShell({
+    title: "Purchase Receipt",
+    bodyHtml,
+    theme: emailTheme,
+    logoCid,
+  });
+
+  const text = `Hi ${greetingName},
+
+Thank you for your purchase. We've added ${creditsLabel} summary credit${credits === 1 ? "" : "s"} to your Testifi AI account.
+
+Total Paid: ${amountLabel}
+Payment ID: ${paymentIntentId}
+${receiptUrl ? `Stripe Receipt: ${receiptUrl}\n` : ""}
+
+Important: Credits Expiration Policy
+Credits must be used within 72 hours (3 days) from purchase. Unused credits will expire and cannot be recovered.
+
+The credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.
+
+© ${new Date().getFullYear()} Testifi AI. All rights reserved.
+You're receiving this because you made a purchase on Testifi AI.`;
+
+  await sendEmail(user.email, subject, text, html, [inlineLogo]);
+  console.log(`[purchase-receipt] Sent receipt email to ${user.email}`);
+}
 
 function parsePositiveInt(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -73,7 +187,7 @@ async function recordPurchaseCredit(
     currency: string;
     receiptUrl?: string | null;
   }
-): Promise<void> {
+): Promise<{ purchase: Purchase; ledgerCreated: boolean }> {
   const purchase = await tx.purchase.upsert({
     where: { stripePaymentIntentId: paymentIntentId },
     update: {
@@ -98,7 +212,9 @@ async function recordPurchaseCredit(
   const idempotencyKey = `${PAYMENT_LEDGER_PREFIX}${paymentIntentId}`;
 
   const existing = await tx.ledgerEntry.findUnique({ where: { idempotencyKey } });
-  if (existing) return;
+  if (existing) {
+    return { purchase, ledgerCreated: false };
+  }
 
   await tx.ledgerEntry.create({
     data: {
@@ -110,6 +226,8 @@ async function recordPurchaseCredit(
       purchaseId: purchase.id,
     },
   });
+
+  return { purchase, ledgerCreated: true };
 }
 
 function determineRefundCredits(
@@ -200,8 +318,8 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
   const paymentIntentId = intent.id;
       const receiptUrl = (intent as any).charges?.data?.[0]?.receipt_url ?? null;
 
-  await prisma.$transaction(async (tx) => {
-    await recordPurchaseCredit(tx, {
+  const recordResult = await prisma.$transaction(async (tx) => {
+    return recordPurchaseCredit(tx, {
       paymentIntentId,
       userId,
       credits,
@@ -210,6 +328,21 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
       receiptUrl,
     });
   });
+
+  if (recordResult?.ledgerCreated) {
+    try {
+      await sendPurchaseReceiptEmail({
+        userId,
+        credits: recordResult.purchase.creditsAdded,
+        amountCents: recordResult.purchase.amountCents,
+        currency: recordResult.purchase.currency,
+        receiptUrl: recordResult.purchase.receiptUrl,
+        paymentIntentId,
+      });
+    } catch (emailErr) {
+      console.error("[purchase-receipt] Failed to send payment_intent receipt:", emailErr);
+    }
+  }
 }
 
 async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session): Promise<void> {
@@ -234,8 +367,8 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
         ? (session as any).latest_charge.receipt_url
         : undefined;
 
-  await prisma.$transaction(async (tx) => {
-    await recordPurchaseCredit(tx, {
+  const recordResult = await prisma.$transaction(async (tx) => {
+    return recordPurchaseCredit(tx, {
       paymentIntentId,
       userId,
       credits,
@@ -244,6 +377,21 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
       receiptUrl,
     });
   });
+
+  if (recordResult?.ledgerCreated) {
+    try {
+      await sendPurchaseReceiptEmail({
+        userId,
+        credits: recordResult.purchase.creditsAdded,
+        amountCents: recordResult.purchase.amountCents,
+        currency: recordResult.purchase.currency,
+        receiptUrl: recordResult.purchase.receiptUrl,
+        paymentIntentId,
+      });
+    } catch (emailErr) {
+      console.error("[purchase-receipt] Failed to send checkout receipt:", emailErr);
+    }
+  }
 }
 
 async function handleRefund(refund: Stripe.Refund): Promise<void> {

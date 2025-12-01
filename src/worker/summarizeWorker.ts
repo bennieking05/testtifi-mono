@@ -9,7 +9,7 @@ import fs from "fs";
 import vision from "@google-cloud/vision";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
-import { sendEmail } from "../lib/sendEmail";
+import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { loadPromptConfig } from "../lib/promptConfig";
 import pLimit from "p-limit";
 import os from "os";
@@ -18,6 +18,10 @@ import {
   claimCompletionEmailSend,
   releaseCompletionEmailSend,
 } from "../utils/emailDeliveryGuard";
+import { loadLightLogo } from "../utils/logo";
+import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
+import { parseMarkdown } from "../routes/downloadRoutes";
+import { renderEmailShell } from "../utils/emailTheme";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -38,6 +42,7 @@ const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === 
 const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1); // Reduced from 3 to 1 to avoid rate limits
 const WORKER_ID = process.env.WORKER_ID || os.hostname();
+const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // keep email payloads <25MB
 
 async function extractFullText(
   buffer: Buffer,
@@ -406,24 +411,6 @@ async function withRetry<T>(
   throw lastErr;
 }
 
-async function getRenderedEmailTemplate(
-  templateId: number,
-  variables: Record<string, string>
-) {
-  const emailTemplate = await prisma.email.findUnique({
-    where: { id: templateId },
-  });
-  if (!emailTemplate) throw new Error(`Email template ${templateId} not found`);
-
-  let { subject, body } = emailTemplate;
-  for (const [key, value] of Object.entries(variables)) {
-    const regex = new RegExp(`{{\\s*${key}\\s*}}`, "g");
-    body = body.replace(regex, value);
-    subject = subject.replace(regex, value);
-  }
-  return { subject, body };
-}
-
 async function work() {
   while (true) {
     // 1) Find and atomically claim the next queued job
@@ -452,9 +439,10 @@ async function work() {
       select: {
         id: true,
         userId: true,
+        createdAt: true,
         fileName: true,
         notifyOnComplete: true,
-        file: { select: { title: true, deponent: true } },
+        file: { select: { title: true, deponent: true, pages: true } },
       },
     });
 
@@ -576,25 +564,118 @@ async function work() {
           );
           const dashboardUrl = `${frontendUrl}/summaries`;
           try {
+            const attachments: EmailAttachment[] = [];
             try {
-              const { subject, body } = await getRenderedEmailTemplate(4, {
-                name: user.name || user.email,
-                deposition_title: displayTitle,
-                dashboard_link: dashboardUrl,
-              });
-              await sendEmail(user.email, subject, undefined, body);
-            } catch (tplErr) {
-              // Fallback minimal email if the template is missing or invalid
-              console.warn(`[${job.id}] Email template fallback:`, tplErr);
-              const subject = `Your deposition summary is ready`;
-              const html = `
-                <p>Hello ${user.name || user.email},</p>
-                <p>Your deposition summary <strong>${displayTitle}</strong> is ready.</p>
-                <p><a href="${dashboardUrl}">Open Testifi AI Dashboard</a></p>
-              `;
-              await sendEmail(user.email, subject, undefined, html);
+              console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
+              const { meta, rows } = parseMarkdown(merged);
+              const filePages =
+                typeof job.file?.pages === "number" && !Number.isNaN(job.file.pages)
+                  ? String(job.file.pages)
+                  : null;
+              const jobData = {
+                id: job.id,
+                fileName: job.fileName,
+                createdAt: job.createdAt,
+                file: job.file
+                  ? {
+                      title: job.file.title,
+                      deponent: job.file.deponent,
+                      pages: filePages,
+                    }
+                  : null,
+              };
+              const safeTitle =
+                displayTitle
+                  .replace(/[^a-z0-9_.-]+/gi, "-")
+                  .replace(/-+/g, "-")
+                  .replace(/^-|-$/g, "") || "summary";
+              const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, merged);
+              const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, merged);
+              const totalBytes = docxBuffer.length + pdfBuffer.length;
+              if (totalBytes > MAX_EMAIL_BYTES) {
+                console.warn(
+                  `[${job.id}] ⚠️ Attachments too large (${totalBytes} bytes). Sending email without attachments.`
+                );
+              } else {
+                attachments.push({
+                  content: docxBuffer.toString("base64"),
+                  filename: `${safeTitle}.docx`,
+                  type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                });
+                attachments.push({
+                  content: pdfBuffer.toString("base64"),
+                  filename: `${safeTitle}.pdf`,
+                  type: "application/pdf",
+                });
+              }
+            } catch (docErr) {
+              console.warn(
+                `[${job.id}] ⚠️ Failed to generate document attachments:`,
+                docErr
+              );
             }
-            console.log(`[${job.id}] 📬 Email sent to ${user.email}`);
+
+            const logoLight = loadLightLogo();
+            const logoCid = "logo_light@testifi.ai";
+            const inlineLogo: EmailAttachment = {
+              content: logoLight.base64,
+              filename: "logo-light.png",
+              type: logoLight.mime,
+              disposition: "inline",
+              contentId: logoCid,
+            };
+
+            const subject = `Your Deposition Summary Is Ready`;
+            const userName = user.name || user.email;
+            const attachmentsNote = attachments.length
+              ? `<p style="text-align: center;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>`
+              : "";
+            const retentionStyle =
+              "margin-top:24px;padding:16px;background-color:#fff3cd;border:1px solid #ffe58f;border-left:4px solid #ffc107;border-radius:6px;color:#5c3d00;";
+            const retentionHeadingStyle =
+              "margin:0 0 8px 0;color:#5c3d00;font-weight:600;";
+            const retentionBodyStyle = "margin:0;color:#5c3d00;";
+
+            const bodyHtml = `
+              <h2>Your Deposition Summary Is Ready</h2>
+              <p>Hello ${userName},</p>
+              <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
+              <div class="cta-wrap">
+                <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
+              </div>
+              ${attachmentsNote}
+              <div class="notice" style="${retentionStyle}">
+                <p style="${retentionHeadingStyle}"><strong>Important:</strong> Summary Retention Policy</p>
+                <p style="${retentionBodyStyle}">Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records.</p>
+              </div>
+              <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
+            `;
+            const html = renderEmailShell({
+              title: "Deposition Summary Ready",
+              bodyHtml,
+              theme: (process.env.EMAIL_THEME as any) || "auto",
+              logoCid,
+            });
+
+            const text = `Hello ${userName},
+
+Great news — the summary you requested for ${displayTitle} is now complete. Visit ${dashboardUrl} to review it during the next 3 days before it is automatically deleted.
+
+${attachments.length ? "Your summary is attached to this email in Word (DOCX) and PDF formats.\n\n" : ""}Important: Summary Retention Policy
+Summaries older than 3 days will be automatically deleted from the platform and the content will be irretrievable. Please download and save your summary files for your records.
+
+Need help or have questions? Reply to this email and our support team will be happy to assist.
+
+© ${new Date().getFullYear()} Testifi AI. All rights reserved.
+You're receiving this because you have an account on Testifi AI.`;
+
+            const allAttachments = [inlineLogo, ...attachments];
+            await sendEmail(user.email, subject, text, html, allAttachments);
+            console.log(
+              `[${job.id}] 📬 Email sent to ${user.email}${
+                attachments.length ? ` with ${attachments.length} attachment(s)` : ""
+              }`
+            );
           } catch (emailErr) {
             await releaseCompletionEmailSend(prisma, job.id);
             console.warn(`[${job.id}] Email failed:`, emailErr);
