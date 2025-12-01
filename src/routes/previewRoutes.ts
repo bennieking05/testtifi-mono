@@ -47,13 +47,24 @@ router.get(
       const [buf] = await bucket.file(objectName).download();
       const raw = buf.toString("utf-8");
       const cleaned = stripContinuations(raw);
-      const summaryName = (job as any)?.summaryName as string | null;
-      const deponent = (job as any)?.deponent ?? job.file?.deponent ?? undefined;
-      const titleRow = summaryName || job.file?.title || "Deposition Summary";
-      const headerMeta = buildHeaderMeta(job, titleRow, typeof deponent === "string" ? deponent : undefined);
       const { meta, rows } = parseToRows(cleaned);
-      const combinedMeta = [...new Set([...headerMeta, ...meta])];
-      const metaHtml = combinedMeta.map((m) => `<p>${escapeHtml(m)}</p>`).join("\n");
+      const filteredMeta = meta.filter((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return false;
+        const suppressedPrefixes = [
+          "Deponent:",
+          "Case Title:",
+          "Source File:",
+          "Pages:",
+          "Date:",
+          "Upload Date:",
+          "Download Date:",
+        ];
+        return !suppressedPrefixes.some((prefix) =>
+          trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+        );
+      });
+      const metaHtml = filteredMeta.map((m) => `<p>${escapeHtml(m)}</p>`).join("\n");
       const tableRowsHtml = rows
         .map(
           ([p, s]) =>
@@ -212,20 +223,6 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function buildHeaderMeta(job: any, title: string, deponent?: string): string[] {
-  // Extract source filename from job.fileName
-  const sourceFileName = job.fileName || "Unknown";
-  
-  return [
-    title,
-    `Deponent: ${deponent || "Not Specified"}`,
-    `Case Title: ${job.file?.title || "Not Specified"}`,
-    `Source File: ${sourceFileName}`,
-    ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
-    `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`,
-    "",
-  ];
-}
 function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
   const clean = (s: string) =>
     s
