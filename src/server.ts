@@ -22,11 +22,14 @@ import adminRoutes from "./routes/adminRoutes";
 import debugRoutes from "./routes/debugRoutes";
 import cleanupRoutes from "./routes/cleanupRoutes";
 import assetsRoutes from "./routes/assetsRoutes";
+import { startCreditExpirationJob } from "./jobs/creditExpirationJob";
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
+
+startCreditExpirationJob();
 
 /* ─────────────── HEALTH CHECKS ──────────────── */
 const health: RequestHandler = (_req, res) => {

@@ -630,6 +630,9 @@ async function work() {
             const attachmentsNote = attachments.length
               ? `<p style="text-align: center;">Your summary is attached to this email in Word (DOCX) and PDF formats.</p>`
               : "";
+            const ctaWrapStyle = "text-align:center;margin:28px 0;";
+            const ctaButtonStyle =
+              "display:inline-block;padding:12px 24px;background-color:#5674BC;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;";
             const retentionStyle =
               "margin-top:24px;padding:16px;background-color:#fff3cd;border:1px solid #ffe58f;border-left:4px solid #ffc107;border-radius:6px;color:#5c3d00;";
             const retentionHeadingStyle =
@@ -640,8 +643,8 @@ async function work() {
               <h2>Your Deposition Summary Is Ready</h2>
               <p>Hello ${userName},</p>
               <p>Great news — the summary you requested for <strong>${displayTitle}</strong> is now complete. Click the button below to return to your dashboard and review it for the next 3 days. The summary will be automatically deleted after 3 days.</p>
-              <div class="cta-wrap">
-                <a href="${dashboardUrl}" class="btn">View on Dashboard</a>
+              <div class="cta-wrap" style="${ctaWrapStyle}">
+                <a href="${dashboardUrl}" class="btn" style="${ctaButtonStyle}">View on Dashboard</a>
               </div>
               ${attachmentsNote}
               <div class="notice" style="${retentionStyle}">
