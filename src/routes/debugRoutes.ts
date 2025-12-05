@@ -4,9 +4,7 @@ import Stripe from "stripe";
 const router = express.Router();
 
 const stripeKey = process.env.STRIPE_API_KEY || "";
-const stripe = stripeKey
-  ? new Stripe(stripeKey, { apiVersion: "2025-09-30.clover" })
-  : null;
+const stripe = stripeKey ? new Stripe(stripeKey, { apiVersion: "2025-10-29.clover" }) : null;
 
 router.get("/stripe-account", async (_req, res) => {
   if (!stripe) {

@@ -10,7 +10,7 @@ import { renderEmailShell } from "../utils/emailTheme";
 const router = express.Router();
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_API_KEY!, {
-  apiVersion: "2025-09-30.clover",
+  apiVersion: "2025-10-29.clover",
 });
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -122,6 +122,18 @@ async function sendPurchaseReceiptEmail({
     return;
   }
 
+  let resolvedReceiptUrl = receiptUrl ?? null;
+  if (!resolvedReceiptUrl) {
+    try {
+      const hydratedIntent = (await stripe.paymentIntents.retrieve(paymentIntentId, {
+        expand: ["latest_charge"],
+      })) as Stripe.PaymentIntent;
+      resolvedReceiptUrl = extractReceiptUrl(hydratedIntent);
+    } catch (err) {
+      console.warn(`[purchase-receipt] Unable to fetch Stripe receipt ${paymentIntentId}`, err);
+    }
+  }
+
   const greetingName = user.name || user.email;
   const creditsLabel = credits.toLocaleString();
   const creditNoun = `summary credit${credits === 1 ? "" : "s"}`;
@@ -144,7 +156,7 @@ async function sendPurchaseReceiptEmail({
     showTaxRow ? `Sales Tax (if applicable): ${taxLabel}` : null,
     `Total Paid: ${amountLabel}`,
     `Payment ID: ${paymentIntentId}`,
-    receiptUrl ? `Stripe Receipt: ${receiptUrl}` : null,
+    resolvedReceiptUrl ? `Stripe Receipt: ${resolvedReceiptUrl}` : null,
   ].filter((line): line is string => Boolean(line));
 
   const logoAsset = loadLightLogo();
@@ -194,9 +206,9 @@ async function sendPurchaseReceiptEmail({
       </div>
       <div class="payment-id">Payment ID: ${paymentIntentId}</div>
     </div>
-    ${
-      receiptUrl
-        ? `<div class="cta-wrap"><a href="${receiptUrl}" class="btn">View Stripe Receipt</a></div>`
+      ${
+        resolvedReceiptUrl
+        ? `<div class="cta-wrap"><a href="${resolvedReceiptUrl}" class="btn">View Stripe Receipt</a></div>`
         : ""
     }
     <div class="notice" style="${noticeStyle}">
