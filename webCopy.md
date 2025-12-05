@@ -132,7 +132,7 @@
 - We chunk by page and line to preserve citations. Your credits cover end‑to‑end processing with legal‑style output.
 - Downloading summaries
 - Open the completed item → Download → choose PDF/DOCX/TXT. The export includes a cover page and a two‑column page‑line table.
-- Billing and subscriptions
+- Biling and payments
 - Manage your plan from the Payment page. Purchases are reflected as credits applied to new summaries.
 - Documentation
 - Detailed guides and reference materials

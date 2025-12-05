@@ -20,6 +20,71 @@ const REFUND_LEDGER_PREFIX = "refund:";
 const DISPUTE_LEDGER_PREFIX = "dispute:";
 const emailTheme = (process.env.EMAIL_THEME as any) || "auto";
 
+function getTierUnitPrice(credits: number): number {
+  if (credits >= 50) return 100;
+  if (credits >= 25) return 110;
+  if (credits >= 10) return 120;
+  return credits > 0 ? 125 : 0;
+}
+
+function computeSubtotalCents(credits: number): number | null {
+  if (!credits || credits <= 0) return null;
+  const subtotalDollars = getTierUnitPrice(credits) * credits;
+  return Math.round(subtotalDollars * 100);
+}
+
+function deriveTaxCents({
+  totalCents,
+  subtotalCents,
+  taxOverrideCents,
+}: {
+  totalCents: number;
+  subtotalCents?: number | null;
+  taxOverrideCents?: number | null;
+}): number | null {
+  if (!Number.isFinite(totalCents) || totalCents <= 0) {
+    return null;
+  }
+  if (typeof taxOverrideCents === "number") {
+    return Math.max(taxOverrideCents, 0);
+  }
+  if (typeof subtotalCents === "number") {
+    return Math.max(totalCents - subtotalCents, 0);
+  }
+  return null;
+}
+
+function getChargeList(intent: Stripe.PaymentIntent): Array<{ receipt_url?: string | null }> {
+  const charges = (intent as any).charges?.data;
+  return Array.isArray(charges) ? (charges as Array<{ receipt_url?: string | null }>) : [];
+}
+
+function extractReceiptUrl(intent: Stripe.PaymentIntent): string | null {
+  const latestCharge = intent.latest_charge;
+  if (latestCharge && typeof latestCharge !== "string" && latestCharge.receipt_url) {
+    return latestCharge.receipt_url;
+  }
+  const chargeWithReceipt = getChargeList(intent).find((charge) => Boolean(charge.receipt_url));
+  return chargeWithReceipt?.receipt_url ?? null;
+}
+
+async function ensureIntentHasReceiptData(intent: Stripe.PaymentIntent): Promise<Stripe.PaymentIntent> {
+  const hasReceipt =
+    (intent.latest_charge && typeof intent.latest_charge !== "string" && Boolean(intent.latest_charge.receipt_url)) ||
+    getChargeList(intent).some((charge) => Boolean(charge.receipt_url));
+
+  if (hasReceipt) {
+    return intent;
+  }
+
+  try {
+    return (await stripe.paymentIntents.retrieve(intent.id, { expand: ["latest_charge"] })) as Stripe.PaymentIntent;
+  } catch (err) {
+    console.warn(`[purchase-receipt] Unable to hydrate payment intent ${intent.id}`, err);
+    return intent;
+  }
+}
+
 function formatCurrency(amountCents: number, currency: string): string {
   const value = (amountCents || 0) / 100;
   try {
@@ -39,6 +104,8 @@ async function sendPurchaseReceiptEmail({
   currency,
   receiptUrl,
   paymentIntentId,
+  subtotalCents,
+  taxCents,
 }: {
   userId: string;
   credits: number;
@@ -46,6 +113,8 @@ async function sendPurchaseReceiptEmail({
   currency: string;
   receiptUrl?: string | null;
   paymentIntentId: string;
+  subtotalCents?: number | null;
+  taxCents?: number | null;
 }): Promise<void> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user?.email) {
@@ -55,8 +124,28 @@ async function sendPurchaseReceiptEmail({
 
   const greetingName = user.name || user.email;
   const creditsLabel = credits.toLocaleString();
+  const creditNoun = `summary credit${credits === 1 ? "" : "s"}`;
   const amountLabel = formatCurrency(amountCents, currency);
+  const resolvedSubtotalCents =
+    typeof subtotalCents === "number" ? subtotalCents : computeSubtotalCents(credits);
+  const resolvedTaxCents = deriveTaxCents({
+    totalCents: amountCents,
+    subtotalCents: resolvedSubtotalCents,
+    taxOverrideCents: typeof taxCents === "number" ? taxCents : undefined,
+  });
+  const subtotalLabel =
+    typeof resolvedSubtotalCents === "number" ? formatCurrency(resolvedSubtotalCents, currency) : null;
+  const showTaxRow = typeof resolvedTaxCents === "number" && resolvedTaxCents > 0;
+  const taxLabel = showTaxRow ? formatCurrency(resolvedTaxCents!, currency) : null;
   const subject = `Receipt for ${creditsLabel} summary credit${credits === 1 ? "" : "s"}`;
+  const breakdownLines = [
+    `Credits Added: ${creditsLabel}`,
+    subtotalLabel ? `Subtotal (${creditsLabel} ${creditNoun}): ${subtotalLabel}` : null,
+    showTaxRow ? `Sales Tax (if applicable): ${taxLabel}` : null,
+    `Total Paid: ${amountLabel}`,
+    `Payment ID: ${paymentIntentId}`,
+    receiptUrl ? `Stripe Receipt: ${receiptUrl}` : null,
+  ].filter((line): line is string => Boolean(line));
 
   const logoAsset = loadLightLogo();
   const logoCid = "logo_light@testifi.ai";
@@ -76,20 +165,34 @@ async function sendPurchaseReceiptEmail({
   const bodyHtml = `
     <h2>Thank You for Your Purchase</h2>
     <p>Hi ${greetingName},</p>
-    <p>We've added <strong>${creditsLabel} summary credit${credits === 1 ? "" : "s"}</strong> to your Testifi AI account.</p>
+    <p>We've added <strong>${creditsLabel} ${creditNoun}</strong> to your Testifi AI account.</p>
     <div class="receipt-details">
       <div class="receipt-row">
         <span class="receipt-label">Credits Added:</span>
         <span class="receipt-value">${creditsLabel}</span>
       </div>
+      ${
+        subtotalLabel
+          ? `<div class="receipt-row">
+        <span class="receipt-label">Subtotal (${creditsLabel} ${creditNoun}):</span>
+        <span class="receipt-value">${subtotalLabel}</span>
+      </div>`
+          : ""
+      }
+      ${
+        showTaxRow
+          ? `<div class="receipt-row">
+        <span class="receipt-label">Sales Tax (if applicable):</span>
+        <span class="receipt-value">${taxLabel}</span>
+      </div>
+      `
+          : ""
+      }
       <div class="receipt-row">
         <span class="receipt-label">Total Paid:</span>
         <span class="receipt-value">${amountLabel}</span>
       </div>
-      <div class="receipt-row">
-        <span class="receipt-label">Payment ID:</span>
-        <span class="receipt-value">${paymentIntentId}</span>
-      </div>
+      <div class="payment-id">Payment ID: ${paymentIntentId}</div>
     </div>
     ${
       receiptUrl
@@ -112,11 +215,9 @@ async function sendPurchaseReceiptEmail({
 
   const text = `Hi ${greetingName},
 
-Thank you for your purchase. We've added ${creditsLabel} summary credit${credits === 1 ? "" : "s"} to your Testifi AI account.
+Thank you for your purchase. We've added ${creditsLabel} ${creditNoun} to your Testifi AI account.
 
-Total Paid: ${amountLabel}
-Payment ID: ${paymentIntentId}
-${receiptUrl ? `Stripe Receipt: ${receiptUrl}\n` : ""}
+${breakdownLines.join("\n")}
 
 Important: Credits Expiration Policy
 Credits must be used within 72 hours (3 days) from purchase. Unused credits will expire and cannot be recovered.
@@ -313,10 +414,13 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
     throw new Error("Missing metadata for credits or userId");
   }
 
-  const amountCents = intent.amount_received ?? intent.amount ?? 0;
-  const currency = intent.currency ?? "usd";
+  const enrichedIntent = await ensureIntentHasReceiptData(intent);
+  const amountCents = enrichedIntent.amount_received ?? enrichedIntent.amount ?? 0;
+  const currency = enrichedIntent.currency ?? "usd";
   const paymentIntentId = intent.id;
-      const receiptUrl = (intent as any).charges?.data?.[0]?.receipt_url ?? null;
+  const receiptUrl = extractReceiptUrl(enrichedIntent);
+  const subtotalCents = computeSubtotalCents(credits);
+  const taxCents = deriveTaxCents({ totalCents: amountCents, subtotalCents });
 
   const recordResult = await prisma.$transaction(async (tx) => {
     return recordPurchaseCredit(tx, {
@@ -336,8 +440,10 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
         credits: recordResult.purchase.creditsAdded,
         amountCents: recordResult.purchase.amountCents,
         currency: recordResult.purchase.currency,
-        receiptUrl: recordResult.purchase.receiptUrl,
+        receiptUrl: recordResult.purchase.receiptUrl ?? receiptUrl ?? undefined,
         paymentIntentId,
+        subtotalCents,
+        taxCents,
       });
     } catch (emailErr) {
       console.error("[purchase-receipt] Failed to send payment_intent receipt:", emailErr);
@@ -361,11 +467,30 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
   }
 
   const credits = await fetchCreditsForSession(session);
-  const amountCents = session.amount_total ?? session.amount_subtotal ?? 0;
-  const currency = session.currency ?? "usd";
-      const receiptUrl = (session as any).latest_charge && typeof (session as any).latest_charge !== "string"
-        ? (session as any).latest_charge.receipt_url
-        : undefined;
+  let paymentIntent: Stripe.PaymentIntent | null = null;
+  try {
+    paymentIntent = (await stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ["latest_charge"],
+    })) as Stripe.PaymentIntent;
+  } catch (err) {
+    console.warn(`[purchase-receipt] Unable to retrieve payment intent ${paymentIntentId}`, err);
+  }
+
+  const amountCents =
+    paymentIntent?.amount_received ??
+    paymentIntent?.amount ??
+    session.amount_total ??
+    session.amount_subtotal ??
+    0;
+  const currency = paymentIntent?.currency ?? session.currency ?? "usd";
+  const receiptUrl = paymentIntent ? extractReceiptUrl(paymentIntent) : null;
+  const sessionSubtotalCents = session.amount_subtotal ?? null;
+  const subtotalCents = sessionSubtotalCents ?? computeSubtotalCents(credits);
+  const taxCents = deriveTaxCents({
+    totalCents: amountCents,
+    subtotalCents,
+    taxOverrideCents: session.total_details?.amount_tax ?? null,
+  });
 
   const recordResult = await prisma.$transaction(async (tx) => {
     return recordPurchaseCredit(tx, {
@@ -385,8 +510,10 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
         credits: recordResult.purchase.creditsAdded,
         amountCents: recordResult.purchase.amountCents,
         currency: recordResult.purchase.currency,
-        receiptUrl: recordResult.purchase.receiptUrl,
+        receiptUrl: recordResult.purchase.receiptUrl ?? receiptUrl ?? undefined,
         paymentIntentId,
+        subtotalCents,
+        taxCents,
       });
     } catch (emailErr) {
       console.error("[purchase-receipt] Failed to send checkout receipt:", emailErr);

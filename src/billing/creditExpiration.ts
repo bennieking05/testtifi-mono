@@ -23,6 +23,66 @@ export type ExpireSummary = {
   creditsExpired: number;
 };
 
+async function expireLegacyCredits(
+  prisma: PrismaClient,
+  cutoff: Date,
+  opts: ExpireOptions
+): Promise<ExpireSummary> {
+  const legacyWhere: Prisma.LedgerEntryWhereInput = {
+    type: "credit",
+    purchaseId: null,
+    createdAt: { lt: cutoff },
+  };
+
+  if (opts.userId) {
+    legacyWhere.userId = opts.userId;
+  }
+
+  const legacyCredits = await prisma.ledgerEntry.findMany({
+    where: legacyWhere,
+    select: {
+      id: true,
+      userId: true,
+      credits: true,
+    },
+  });
+
+  let creditsExpired = 0;
+  let entriesExpired = 0;
+
+  for (const legacy of legacyCredits) {
+    const available = toNumber(legacy.credits);
+    if (available <= 0) continue;
+
+    const idempotencyKey = `${LEDGER_EXPIRATION_PREFIX}legacy:${legacy.id}`;
+    const reclaimed = await prisma.$transaction(async (tx) => {
+      const existing = await tx.ledgerEntry.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) return 0;
+
+      await tx.ledgerEntry.create({
+        data: {
+          userId: legacy.userId,
+          type: "credit",
+          credits: -available,
+          description: "Expired unused credits (legacy adjustment)",
+          idempotencyKey,
+        },
+      });
+
+      return available;
+    });
+
+    if (reclaimed > 0) {
+      creditsExpired += reclaimed;
+      entriesExpired += 1;
+    }
+  }
+
+  return { purchasesExpired: entriesExpired, creditsExpired };
+}
+
 export async function expireUnusedCredits(
   prisma: PrismaClient,
   options: ExpireOptions = {}
@@ -109,7 +169,12 @@ export async function expireUnusedCredits(
     }
   }
 
-  return { purchasesExpired, creditsExpired };
+  const legacySummary = await expireLegacyCredits(prisma, cutoff, options);
+
+  return {
+    purchasesExpired: purchasesExpired + legacySummary.purchasesExpired,
+    creditsExpired: creditsExpired + legacySummary.creditsExpired,
+  };
 }
 
 export async function getEffectiveCreditBalance(
