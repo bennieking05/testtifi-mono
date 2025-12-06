@@ -40,7 +40,7 @@ steps:
     name: "gcr.io/cloud-builders/gke-deploy"
     entrypoint: "bash"
     env:
-      - TARGET_BRANCH=$${BRANCH_NAME}
+      - TARGET_BRANCH=$BRANCH_NAME
     args:
       - "-c"
       - |
