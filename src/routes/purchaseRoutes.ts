@@ -129,6 +129,17 @@ async function sendPurchaseReceiptEmail({
         expand: ["latest_charge"],
       })) as Stripe.PaymentIntent;
       resolvedReceiptUrl = extractReceiptUrl(hydratedIntent);
+
+      if (resolvedReceiptUrl) {
+        await prisma.purchase
+          .updateMany({
+            where: { stripePaymentIntentId: paymentIntentId },
+            data: { receiptUrl: resolvedReceiptUrl },
+          })
+          .catch((err) => {
+            console.warn(`[purchase-receipt] Failed to persist Stripe receipt ${paymentIntentId}`, err);
+          });
+      }
     } catch (err) {
       console.warn(`[purchase-receipt] Unable to fetch Stripe receipt ${paymentIntentId}`, err);
     }
@@ -147,8 +158,8 @@ async function sendPurchaseReceiptEmail({
   });
   const subtotalLabel =
     typeof resolvedSubtotalCents === "number" ? formatCurrency(resolvedSubtotalCents, currency) : null;
-  const showTaxRow = typeof resolvedTaxCents === "number" && resolvedTaxCents > 0;
-  const taxLabel = showTaxRow ? formatCurrency(resolvedTaxCents!, currency) : null;
+  const showTaxRow = typeof resolvedTaxCents === "number";
+  const taxLabel = showTaxRow ? formatCurrency(resolvedTaxCents ?? 0, currency) : null;
   const subject = `Receipt for ${creditsLabel} summary credit${credits === 1 ? "" : "s"}`;
   const breakdownLines = [
     `Credits Added: ${creditsLabel}`,
@@ -208,9 +219,15 @@ async function sendPurchaseReceiptEmail({
     </div>
       ${
         resolvedReceiptUrl
-        ? `<div class="cta-wrap"><a href="${resolvedReceiptUrl}" class="btn">View Stripe Receipt</a></div>`
-        : ""
-    }
+          ? `<div class="cta-wrap">
+        <a href="${resolvedReceiptUrl}" class="btn">View Stripe Receipt</a>
+        <p style="margin-top:8px;font-size:13px;">
+          If the button does not work, copy and paste this link:
+          <a href="${resolvedReceiptUrl}">${resolvedReceiptUrl}</a>
+        </p>
+      </div>`
+          : ""
+      }
     <div class="notice" style="${noticeStyle}">
       <p style="${noticeHeadingStyle}"><strong>Important:</strong> Credits Expiration Policy</p>
       <p style="${noticeBodyStyle}">Credits must be used within 72 hours (3 days) from purchase. Unused credits will expire and cannot be recovered.</p>
