@@ -39,6 +39,8 @@ steps:
   - id: "Deploy to GKE (pin and rollouts)"
     name: "gcr.io/cloud-builders/gke-deploy"
     entrypoint: "bash"
+    env:
+      - TARGET_BRANCH=$${BRANCH_NAME}
     args:
       - "-c"
       - |
@@ -47,7 +49,7 @@ steps:
         gcloud container clusters get-credentials "${_CLUSTER}" --zone "${_CLUSTER_LOCATION}"
 
         TARGET_NAMESPACE="${_NAMESPACE:-default}"
-        if [[ "${BRANCH_NAME:-}" == "staging" ]]; then
+        if [[ "${TARGET_BRANCH:-}" == "staging" ]]; then
           TARGET_NAMESPACE="staging"
         fi
         echo "Deploying to namespace: $${TARGET_NAMESPACE}"
