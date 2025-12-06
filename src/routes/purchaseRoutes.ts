@@ -106,6 +106,7 @@ async function sendPurchaseReceiptEmail({
   paymentIntentId,
   subtotalCents,
   taxCents,
+  taxLabel,
 }: {
   userId: string;
   credits: number;
@@ -115,6 +116,7 @@ async function sendPurchaseReceiptEmail({
   paymentIntentId: string;
   subtotalCents?: number | null;
   taxCents?: number | null;
+  taxLabel?: string | null;
 }): Promise<void> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user?.email) {
@@ -159,12 +161,15 @@ async function sendPurchaseReceiptEmail({
   const subtotalLabel =
     typeof resolvedSubtotalCents === "number" ? formatCurrency(resolvedSubtotalCents, currency) : null;
   const showTaxRow = typeof resolvedTaxCents === "number";
-  const taxLabel = showTaxRow ? formatCurrency(resolvedTaxCents ?? 0, currency) : null;
+  const taxAmountLabel = showTaxRow ? formatCurrency(resolvedTaxCents ?? 0, currency) : null;
+  const taxDescription = taxLabel ?? (showTaxRow ? "Sales Tax (if applicable)" : null);
   const subject = `Receipt for ${creditsLabel} summary credit${credits === 1 ? "" : "s"}`;
   const breakdownLines = [
     `Credits Added: ${creditsLabel}`,
     subtotalLabel ? `Subtotal (${creditsLabel} ${creditNoun}): ${subtotalLabel}` : null,
-    showTaxRow ? `Sales Tax (if applicable): ${taxLabel}` : null,
+    showTaxRow && taxAmountLabel
+      ? `${taxDescription ?? "Sales Tax"}: ${taxAmountLabel}`
+      : null,
     `Total Paid: ${amountLabel}`,
     `Payment ID: ${paymentIntentId}`,
     resolvedReceiptUrl ? `Stripe Receipt: ${resolvedReceiptUrl}` : null,
@@ -203,12 +208,11 @@ async function sendPurchaseReceiptEmail({
           : ""
       }
       ${
-        showTaxRow
+        showTaxRow && taxAmountLabel
           ? `<div class="receipt-row">
-        <span class="receipt-label">Sales Tax (if applicable):</span>
-        <span class="receipt-value">${taxLabel}</span>
-      </div>
-      `
+        <span class="receipt-label">${taxDescription ?? "Sales Tax"}:</span>
+        <span class="receipt-value">${taxAmountLabel}</span>
+      </div>`
           : ""
       }
       <div class="receipt-row">
@@ -450,6 +454,8 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
   const receiptUrl = extractReceiptUrl(enrichedIntent);
   const subtotalCents = computeSubtotalCents(credits);
   const taxCents = deriveTaxCents({ totalCents: amountCents, subtotalCents });
+  const metadataTaxLabel =
+    typeof enrichedIntent.metadata?.taxLabel === "string" ? enrichedIntent.metadata.taxLabel : undefined;
 
   const recordResult = await prisma.$transaction(async (tx) => {
     return recordPurchaseCredit(tx, {
@@ -473,6 +479,7 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
         paymentIntentId,
         subtotalCents,
         taxCents,
+        taxLabel: metadataTaxLabel,
       });
     } catch (emailErr) {
       console.error("[purchase-receipt] Failed to send payment_intent receipt:", emailErr);
@@ -520,6 +527,8 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
     subtotalCents,
     taxOverrideCents: session.total_details?.amount_tax ?? null,
   });
+  const metadataTaxLabel =
+    typeof paymentIntent?.metadata?.taxLabel === "string" ? paymentIntent.metadata.taxLabel : undefined;
 
   const recordResult = await prisma.$transaction(async (tx) => {
     return recordPurchaseCredit(tx, {
@@ -543,6 +552,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
         paymentIntentId,
         subtotalCents,
         taxCents,
+        taxLabel: metadataTaxLabel,
       });
     } catch (emailErr) {
       console.error("[purchase-receipt] Failed to send checkout receipt:", emailErr);
@@ -633,7 +643,12 @@ export const stripeWebhookHandler = async (req: Request, res: Response): Promise
 
 router.post("/purchase-credits", authenticateToken, async (req: Request, res: Response) => {
   const userId = (req as any).user.userId as string;
-  const { amountCents, credits } = req.body as { amountCents?: number; credits?: number };
+  const {
+    amountCents,
+    credits,
+    taxCents,
+    taxLabel,
+  } = req.body as { amountCents?: number; credits?: number; taxCents?: number; taxLabel?: string | null };
 
   if (!userId) {
     res.status(401).json({ error: "Unauthorized" });
@@ -651,6 +666,8 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
     metadata: {
       userId,
       credits: String(credits),
+      ...(typeof taxCents === "number" ? { taxCents: String(Math.max(taxCents, 0)) } : {}),
+      ...(taxLabel ? { taxLabel } : {}),
     },
   });
 
@@ -682,10 +699,12 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = (req as any).user?.userId as string | undefined;
-      const { paymentIntentId, amountCents, credits } = req.body as {
+      const { paymentIntentId, amountCents, credits, taxCents, taxLabel } = req.body as {
         paymentIntentId?: string;
         amountCents?: number;
         credits?: number;
+        taxCents?: number;
+        taxLabel?: string | null;
       };
 
       if (!userId) {
@@ -708,13 +727,17 @@ router.post(
       const normalizedCredits =
         typeof credits === "number" && credits > 0 ? credits : parsePositiveInt(currentIntent.metadata?.credits ?? "");
 
+      const metadataUpdate: Record<string, string> = {
+        ...currentIntent.metadata,
+        userId,
+      };
+      if (normalizedCredits) metadataUpdate.credits = String(normalizedCredits);
+      if (typeof taxCents === "number") metadataUpdate.taxCents = String(Math.max(taxCents, 0));
+      if (taxLabel) metadataUpdate.taxLabel = taxLabel;
+
       const updatedIntent = await stripe.paymentIntents.update(paymentIntentId, {
         amount: amountCents,
-        metadata: {
-          ...currentIntent.metadata,
-          userId,
-          ...(normalizedCredits ? { credits: String(normalizedCredits) } : {}),
-        },
+        metadata: metadataUpdate,
       });
 
       await prisma.purchase.upsert({
