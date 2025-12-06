@@ -677,6 +677,73 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
 });
 
 router.post(
+  "/update-payment-intent",
+  authenticateToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).user?.userId as string | undefined;
+      const { paymentIntentId, amountCents, credits } = req.body as {
+        paymentIntentId?: string;
+        amountCents?: number;
+        credits?: number;
+      };
+
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      if (!paymentIntentId || !amountCents || amountCents <= 0) {
+        res.status(400).json({ error: "paymentIntentId and positive amountCents are required" });
+        return;
+      }
+
+      const currentIntent = (await stripe.paymentIntents.retrieve(paymentIntentId)) as Stripe.PaymentIntent;
+      const ownerId = currentIntent.metadata?.userId;
+      if (!ownerId || ownerId !== userId) {
+        res.status(403).json({ error: "Payment intent does not belong to this user" });
+        return;
+      }
+
+      const normalizedCredits =
+        typeof credits === "number" && credits > 0 ? credits : parsePositiveInt(currentIntent.metadata?.credits ?? "");
+
+      const updatedIntent = await stripe.paymentIntents.update(paymentIntentId, {
+        amount: amountCents,
+        metadata: {
+          ...currentIntent.metadata,
+          userId,
+          ...(normalizedCredits ? { credits: String(normalizedCredits) } : {}),
+        },
+      });
+
+      await prisma.purchase.upsert({
+        where: { stripePaymentIntentId: paymentIntentId },
+        update: {
+          userId,
+          amountCents,
+          creditsAdded: normalizedCredits ?? 0,
+          status: "requires_payment_method",
+        },
+        create: {
+          userId,
+          stripePaymentIntentId: paymentIntentId,
+          amountCents,
+          creditsAdded: normalizedCredits ?? 0,
+          currency: "usd",
+          status: "requires_payment_method",
+        },
+      });
+
+      res.json({ clientSecret: updatedIntent.client_secret });
+    } catch (err: any) {
+      console.error("[POST /api/purchase/update-payment-intent] error", err);
+      res.status(500).json({ error: err?.message || "Failed to update payment intent" });
+    }
+  }
+);
+
+router.post(
   "/confirm",
   authenticateToken,
   async (req: Request, res: Response): Promise<void> => {
