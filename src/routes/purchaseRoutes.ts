@@ -673,7 +673,7 @@ router.post("/purchase-credits", authenticateToken, async (req: Request, res: Re
     },
   });
 
-  res.json({ clientSecret: paymentIntent.client_secret });
+  res.json({ clientSecret: paymentIntent.client_secret, paymentIntentId: paymentIntent.id });
 });
 
 router.post(
