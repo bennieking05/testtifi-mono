@@ -527,16 +527,9 @@ export class MetricsService {
       prisma.downloadHistory.count(),
       prisma.downloadHistory.findMany({
         select: {
-          id: true,
           format: true,
           createdAt: true,
           fileId: true,
-          user: {
-            select: {
-              name: true,
-              email: true,
-            },
-          },
           file: { select: { title: true } },
         },
       }),
@@ -591,20 +584,6 @@ export class MetricsService {
       return acc;
     }, {} as Record<string, { date: string; count: number }>);
 
-    const recentDownloads = downloads
-      .slice()
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, 50)
-      .map((d) => ({
-        id: d.id,
-        summaryId: d.fileId,
-        title: d.file?.title || "Unknown",
-        format: d.format.toUpperCase(),
-        downloadedAt: d.createdAt.toISOString(),
-        userName: d.user?.name ?? null,
-        userEmail: d.user?.email ?? null,
-      }));
-
     return {
       totalDownloads,
       byFormat: formatCounts,
@@ -612,7 +591,6 @@ export class MetricsService {
       avgDownloadsPerSummary: Math.round(avgDownloadsPerSummary * 10) / 10,
       topDownloaded,
       downloadsByDay: Object.values(downloadsByDay),
-      recentDownloads,
     };
   }
 

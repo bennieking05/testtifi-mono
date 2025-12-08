@@ -48,18 +48,22 @@ router.get(
       const raw = buf.toString("utf-8");
       const cleaned = stripContinuations(raw);
       const { meta, rows } = parseToRows(cleaned);
+      const suppressedPrefixes = [
+        "Deponent:",
+        "Case Title:",
+        "Source File:",
+        "Pages:",
+        "Date:",
+        "Upload Date:",
+        "Download Date:",
+        "Case Caption:",
+        "Title of Document:",
+        "Date of Deposition:",
+      ];
+
       const filteredMeta = meta.filter((line) => {
         const trimmed = line.trim();
         if (!trimmed) return false;
-        const suppressedPrefixes = [
-          "Deponent:",
-          "Case Title:",
-          "Source File:",
-          "Pages:",
-          "Date:",
-          "Upload Date:",
-          "Download Date:",
-        ];
         return !suppressedPrefixes.some((prefix) =>
           trimmed.toLowerCase().startsWith(prefix.toLowerCase())
         );

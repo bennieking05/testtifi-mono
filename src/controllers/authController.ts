@@ -6,7 +6,6 @@ import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 import { fillTemplate } from "../utils/emailTemplate";
 import { getEffectiveCreditBalance } from "../billing/creditExpiration";
-import { resolveFrontendBaseUrl } from "../utils/frontendUrl";
 
 dotenv.config();
 
@@ -26,7 +25,10 @@ if (!sendgridApiKey) {
 } else {
   sgMail.setApiKey(sendgridApiKey);
 }
-const frontendUrl = resolveFrontendBaseUrl();
+const frontendUrl = (process.env.BASE_URL || "http://localhost:3000").replace(
+  /\/+$/,
+  ""
+);
 
 /* ----------------------------------------------------------------------- */
 /*                        SHARED  –  EMAIL HELPER                          */
