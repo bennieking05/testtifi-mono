@@ -59,15 +59,45 @@ async function extractFullText(
   const isDocx = /\.(docx?|DOCX?)$/.test(filename);
 
   if (isPDF) {
-    const parsed = await pdf(buffer);
+    // Custom render to inject page markers which are critical for robust splitting
+    const renderPage = (pageData: any) => {
+      const render_options = {
+        normalizeWhitespace: false,
+        disableCombineTextItems: false,
+      };
+      return pageData
+        .getTextContent(render_options)
+        .then(function (textContent: any) {
+          let lastY,
+            text = "";
+          for (let item of textContent.items) {
+            if (lastY == item.transform[5] || !lastY) {
+              text += item.str;
+            } else {
+              text += "\n" + item.str;
+            }
+            lastY = item.transform[5];
+          }
+          return `---PAGE ${pageData.pageNumber}---` + "\n" + text;
+        });
+    };
+
+    const parsed = await pdf(buffer, { pagerender: renderPage });
     const trimmed = parsed.text.trim();
     // Check for meaningful text (not just whitespace/newlines)
-    const nonWhitespace = trimmed.replace(/\s/g, '').length;
-    if (nonWhitespace > 100) {
-      console.log(`[${jobId}] PDF text extraction successful: ${trimmed.length} chars (${nonWhitespace} non-whitespace)`);
+    const nonWhitespace = trimmed.replace(/\s/g, "").length;
+    // Account for explicit markers in length check (approx 15 chars per page)
+    const markerOverhead = (parsed.numpages || 1) * 20;
+    
+    if (nonWhitespace > 100 + markerOverhead) {
+      console.log(
+        `[${jobId}] PDF text extraction successful: ${trimmed.length} chars (${nonWhitespace} non-whitespace)`
+      );
       return parsed.text;
     }
-    console.log(`[${jobId}] PDF appears to be scanned/image-based (only ${nonWhitespace} chars), using Vision API...`);
+    console.log(
+      `[${jobId}] PDF appears to be scanned/image-based (only ${nonWhitespace} chars), using Vision API...`
+    );
     return extractTextWithVision(gcsUri, jobId);
   }
 
@@ -98,14 +128,26 @@ async function extractTextWithVision(gcsUri: string, jobId: string): Promise<str
     prefix: `vision-output/${jobId}/`,
   });
   const jsonFiles = files.filter((f) => f.name.toLowerCase().endsWith(".json"));
+  // Sort files to ensure page order (output-1-to-1.json, output-2-to-2.json, etc)
+  jsonFiles.sort((a, b) => {
+    const na = parseInt(a.name.match(/output-(\d+)-to/)?.[1] || "0", 10);
+    const nb = parseInt(b.name.match(/output-(\d+)-to/)?.[1] || "0", 10);
+    return na - nb;
+  });
+
   let combined = "";
+  let globalPageIndex = 1;
+  
   for (const f of jsonFiles) {
     const [raw] = await f.download();
     const parsed = JSON.parse(raw.toString());
-    combined +=
-      parsed.responses
-        .map((r: any) => r.fullTextAnnotation?.text || "")
-        .join("\n") + "\n";
+    // Each response corresponds to a page in the batch (usually batchSize=1 means 1 response per file)
+    // But GCS output might chunk differently, so we iterate responses
+    for (const r of parsed.responses) {
+       const pageText = r.fullTextAnnotation?.text || "";
+       combined += `---PAGE ${globalPageIndex}---` + "\n" + pageText + "\n";
+       globalPageIndex++;
+    }
   }
   // best-effort cleanup of temporary Vision output
   await Promise.all(
