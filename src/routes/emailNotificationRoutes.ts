@@ -8,6 +8,10 @@ import { sendEmail, EmailAttachment } from "../lib/sendEmail";
 import { parseMarkdown } from "./downloadRoutes";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 import { getLightLogoDataUri } from "../utils/logo";
+import {
+  resolveSummaryMetadata,
+  renderMetadataMarkdown,
+} from "../utils/summaryMetadata";
 import { resolveFrontendBaseUrl } from "../utils/frontendUrl";
 import {
   claimCompletionEmailSend,
@@ -112,7 +116,9 @@ router.post(
 
                 const [buf] = await bucket.file(key).download();
                 const summaryContent = buf.toString("utf-8");
-                const { meta, rows } = parseMarkdown(summaryContent);
+                const { rows } = parseMarkdown(summaryContent);
+                const metadata = await resolveSummaryMetadata(bucket, job as any);
+                const metadataLines = renderMetadataMarkdown(metadata).split("\n");
 
                 // Convert job to match JobData interface (pages needs to be string)
                 const jobData = {
@@ -134,7 +140,8 @@ router.post(
                 // Generate DOCX
                 const docxBuffer = await generateDocxBuffer(
                   jobData,
-                  { meta, rows },
+                  metadata,
+                  { meta: metadataLines, rows },
                   summaryContent
                 );
                 const docxFilename = `${
@@ -152,7 +159,8 @@ router.post(
                 // Generate PDF
                 const pdfBuffer = await generatePdfBuffer(
                   jobData,
-                  { meta, rows },
+                  metadata,
+                  { meta: metadataLines, rows },
                   summaryContent
                 );
                 const pdfFilename = `${

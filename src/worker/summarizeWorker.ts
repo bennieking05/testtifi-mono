@@ -22,6 +22,11 @@ import { loadLightLogo } from "../utils/logo";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 import { parseMarkdown } from "../routes/downloadRoutes";
 import { renderEmailShell } from "../utils/emailTheme";
+import {
+  SummaryMetadata,
+  renderMetadataMarkdown,
+  saveSummaryMetadata,
+} from "../utils/summaryMetadata";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -109,11 +114,37 @@ async function extractTextWithVision(gcsUri: string, jobId: string): Promise<str
   return combined.trim();
 }
 
-function splitPages(txt: string) {
-  // Detect explicit page markers - handles multi-page scans (4 transcript pages per PDF page)
-  // Look for: "Page 147", "147", standalone numbers, or "147:1" format
-  // Be aggressive in finding page numbers since they may appear in corners/margins
+export function splitPages(txt: string) {
+  // 1. First pass: detect explicit "---PAGE X---" markers (very strong signal)
+  const explicitMarkers: { lineIndex: number; page: number }[] = [];
+  const lines = txt.split(/\r?\n/);
   
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^---PAGE\s+(\d+)---$/i);
+    if (m) {
+      explicitMarkers.push({ lineIndex: i, page: parseInt(m[1], 10) });
+    }
+  }
+
+  // If we have explicit markers covering the document, use them exclusively
+  if (explicitMarkers.length > 0) {
+    const out: { page: number; text: string }[] = [];
+    for (let i = 0; i < explicitMarkers.length; i++) {
+      const current = explicitMarkers[i];
+      const next = explicitMarkers[i + 1];
+      const endLine = next ? next.lineIndex : lines.length;
+      
+      // Start from the line after the marker
+      const chunkLines = lines.slice(current.lineIndex + 1, endLine);
+      out.push({
+        page: current.page,
+        text: chunkLines.join("\n"),
+      });
+    }
+    return out;
+  }
+
+  // 2. Fallback: heuristic detection
   let currentPage: number | null = null;
   let buf: string[] = [];
   const out: { page: number; text: string }[] = [];
@@ -125,46 +156,53 @@ function splitPages(txt: string) {
     buf = [];
   };
 
-  for (const raw of txt.split(/\r?\n/)) {
+  for (const raw of lines) {
     const line = raw.trim();
-    
-    // Pattern 1: Standalone page number (most common)
-    // Matches: "147", "Page 147", "PAGE 147"
-    const standaloneMatch = line.match(/^(?:Page\s*)?(\d{1,5})$/i);
+    const normalized = line.replace(/^-+|-+$/g, "").trim();
+
+    // Pattern 1: Standalone page number "Page 147" or "147"
+    const standaloneMatch =
+      line.match(/^(?:Page\s*)?(\d{1,5})$/i) ||
+      (normalized ? normalized.match(/^(?:Page\s*)?(\d{1,5})$/i) : null);
+
     if (standaloneMatch) {
-      push();
-      currentPage = parseInt(standaloneMatch[1], 10);
-      continue;
-    }
-    
-    // Pattern 2: Page:Line format (e.g., "147:1-15")
-    // Common in transcripts - extract just the page number
-    const pageLineMatch = line.match(/^(\d{1,5}):\d/);
-    if (pageLineMatch) {
-      push();
-      currentPage = parseInt(pageLineMatch[1], 10);
-      continue;
-    }
-    
-    // Pattern 3: Line starts or ends with just a number (corner numbers)
-    // E.g., "147 " or " 147"
-    if (line.length <= 6 && /^\d{1,5}$/.test(line)) {
-      const num = parseInt(line, 10);
-      // Only treat as page marker if it's reasonably sequential or first page
-      if (currentPage === null || num === currentPage + 1 || num > currentPage) {
+      const num = parseInt(standaloneMatch[1], 10);
+      
+      // STRICT SEQUENTIALITY CHECK for bare numbers to avoid noise (like "147" in text)
+      const isBareNumber = /^\d+$/.test(normalized || line);
+      const isSequential = currentPage === null 
+        ? num === 1 
+        : num === currentPage + 1;
+        
+      // Allow gaps only if explicit "Page" prefix is present, but not huge gaps
+      // AND require bare numbers to be strictly sequential
+      const isExplicitPage = /^Page\s+\d+$/i.test(normalized || line);
+      const isReasonableGap = currentPage !== null && num > currentPage && num < currentPage + 10;
+
+      if ((isBareNumber && isSequential) || (!isBareNumber && (isSequential || (isExplicitPage && isReasonableGap)))) {
         push();
         currentPage = num;
         continue;
       }
     }
     
-    buf.push(raw); // Keep original line with whitespace
+    // Pattern 2: Page:Line format (e.g., "147:1-15")
+    const pageLineMatch = line.match(/^(\d{1,5}):\d/);
+    if (pageLineMatch) {
+      const num = parseInt(pageLineMatch[1], 10);
+      if (currentPage === null ? num === 1 : num === currentPage + 1) {
+        push();
+        currentPage = num;
+        continue;
+      }
+    }
+    
+    buf.push(raw); 
   }
 
-  // Flush last buffer
   push();
   
-  // Deduplicate by page number, keeping the longest text segment per page
+  // Deduplicate by page number
   const byPage = new Map<number, string>();
   for (const { page, text } of out) {
     const prev = byPage.get(page) || "";
@@ -192,9 +230,48 @@ function groupPagesToChunks(
   return out;
 }
 
-function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?: string }, jobId?: string) {
+interface LegalMetadataFields {
+  caseCaption: string;
+  caseNumber?: string | null;
+  deponent: string;
+  depositionDate: string;
+}
+
+function cleanName(raw: string): string {
+  return raw.replace(/[,;].*$/, "").replace(/\b(a|an|the)\s+witness\b/i, "").trim();
+}
+
+function looksLikePerson(value: string): boolean {
+  const hasNumber = /\d/.test(value);
+  if (hasNumber) return false;
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return false;
+  
+  // Explicitly blacklist common address/entity terms
+  const blacklist = [
+    "north", "south", "east", "west",
+    "street", "st", "st.", "avenue", "ave", "ave.", "road", "rd", "rd.", "lane", "ln", "ln.",
+    "drive", "dr", "dr.", "boulevard", "blvd", "blvd.", "way", "court", "ct", "ct.",
+    "plaza", "square", "sq", "sq.", "circle", "cir", "cir.", "floor", "fl", "fl.",
+    "suite", "ste", "ste.", "unit", "apt", "apartment", "building", "bldg", "bldg.",
+    "ri", "ma", "ct", "ny", "nj", "nh", "vt", "me", "pa", "de", "md", "va", "dc",
+    "inc", "inc.", "llc", "l.l.c.", "ltd", "ltd.", "corp", "corp.", "co", "co.",
+    "department", "dept", "dept.", "office", "offices", "division", "section",
+  ];
+  
+  const hasBlacklistedWord = words.some(w => blacklist.includes(w.toLowerCase().replace(/[.,]$/, "")));
+  if (hasBlacklistedWord) return false;
+
+  return words.every((w) => /^[A-Za-z.'-]+$/.test(w));
+}
+
+function extractLegalMetadata(
+  tr: string,
+  fileData?: { title?: string; deponent?: string }
+): LegalMetadataFields {
   const lines = tr.split(/\r?\n/);
-  const header = lines.slice(0, 40).join("\n");
+  // Look at more lines to catch the Index page which often lists the Witness
+  const header = lines.slice(0, 300).join("\n");
 
   const civMatch = header.match(
     /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
@@ -205,54 +282,31 @@ function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?
     lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
   const caption = captionLine.trim() || `Civil Action No. ${civil}`;
 
-  // Enhanced deponent extraction patterns with debugging
-  let extractedDeponent = null;
-  
-  // Debug: Log first 500 chars of header for debugging
-  console.log(`[${jobId || 'debug'}] Header text (first 500 chars):`, header.substring(0, 500));
-  
-  // Pattern 1: "DEPONENT: RICHARD SACKLER, M.D." (various OCR variations)
-  const deponentPatterns = [
-    /DEPONENT:\s*([^\n\r]+)/i,
-    /DEPONENT\s+([^\n\r]+)/i,
-    /DEPONENT\s*:\s*([^\n\r]+)/i,
-    /DEPONENT\s*:\s*([A-Z\s,\.]+)/i,
-    // Specific pattern for "Richard Sackler, M.D." format - more flexible
-    /([A-Z][a-z]+\s+[A-Z][a-z]+,\s*[A-Z]\.\s*[A-Z]\.?)/,
-    // Pattern for "Richard Sackler, M.D." without comma
-    /([A-Z][a-z]+\s+[A-Z][a-z]+\s+[A-Z]\.\s*[A-Z]\.?)/,
-    // Pattern for names without periods
-    /([A-Z][a-z]+\s+[A-Z][a-z]+,\s*[A-Z]\s*[A-Z])/,
-    // Very specific pattern for "Richard Sackler, M.D." from OCR
-    /(Richard\s+Sackler,\s*M\.D\.)/i,
+  const deponentMatchers = [
+    // explicit "Witness" in index
+    /WITNESS\s+PAGE\s+([A-Z\s\.]+)/i,
+    /WITNESS\s+([A-Z\s\.]+?)\s+PAGE/i,
+    /WITNESS\s*\n\s*([A-Z\s\.]+)/i,
+    // standard headers
+    /continued\s+deposition\s+of\s+([^\n,]+)/i,
+    /deposition\s+of\s+([^\n,]+)/i,
+    /witness:\s*([^\n,]+)/i,
+    /deponent[:\s]+([^\n]+)/i,
   ];
-  
-  for (const pattern of deponentPatterns) {
+  let extractedDeponent: string | null = null;
+  for (const pattern of deponentMatchers) {
     const match = header.match(pattern);
-    if (match && match[1] && match[1].trim().length > 2) {
-      extractedDeponent = match[1].trim();
-      console.log(`[${jobId || 'debug'}] Found deponent with pattern:`, match[0]);
-      break;
+    if (match && match[1]) {
+      const candidate = cleanName(match[1]);
+      if (candidate && looksLikePerson(candidate)) {
+        extractedDeponent = candidate;
+        break;
+      }
     }
   }
-  
-  // Pattern 2: "continued deposition of" or "deposition of"
-  if (!extractedDeponent) {
-    const contDep = header.match(/continued\s+deposition\s+of\s+([^\n,]+)/i)?.[1];
-    const depOf = header.match(/deposition\s+of\s+([^\n,]+)/i)?.[1];
-    extractedDeponent = (contDep || depOf)?.trim();
-    if (extractedDeponent) {
-      console.log(`[${jobId || 'debug'}] Found deponent with 'deposition of' pattern:`, extractedDeponent);
-    }
-  }
-  
   const deponent = extractedDeponent || fileData?.deponent || "[Unknown]";
-  console.log(`[${jobId || 'debug'}] Final deponent:`, deponent);
 
-  // Enhanced date extraction patterns with debugging
   let extractedDate = null;
-  
-  // Pattern 1: "DATE: AUGUST 28, 2015" (various OCR variations)
   const datePatterns = [
     /DATE:\s*([^\n\r]+)/i,
     /DATE\s+([^\n\r]+)/i,
@@ -270,32 +324,25 @@ function extractLegalMetadata(tr: string, fileData?: { title?: string; deponent?
   
   for (const pattern of datePatterns) {
     const match = header.match(pattern);
-    if (match && match[1] && match[1].trim().length > 2) {
+    if (match && match[1]) {
       extractedDate = match[1].trim();
-      console.log(`[${jobId || 'debug'}] Found date with pattern:`, match[0]);
       break;
     }
   }
-  
-  // Pattern 2: Standard date format in header
   if (!extractedDate) {
     const dateRegex =
       /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i;
     const top3 = lines.slice(0, 3).join("\n");
-    extractedDate = top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0];
-    if (extractedDate) {
-      console.log(`[${jobId || 'debug'}] Found date with regex:`, extractedDate);
-    }
+    extractedDate = top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0] || null;
   }
-  
   const date = extractedDate || "[Unknown]";
-  console.log(`[${jobId || 'debug'}] Final date:`, date);
 
-  return `
-Case Caption: ${caption}
-Title of Document: Transcript Summary of ${deponent}
-Date of Deposition: ${date}
-`.trim();
+  return {
+    caseCaption: caption,
+    caseNumber: civil,
+    deponent,
+    depositionDate: date,
+  };
 }
 
 function makePrompt(
@@ -466,10 +513,23 @@ async function work() {
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
       const chunks = groupPagesToChunks(pages);
-      const meta = extractLegalMetadata(transcript, { 
-        title: job.file?.title, 
-        deponent: job.file?.deponent || undefined 
-      }, job.id);
+      const legalMeta = extractLegalMetadata(transcript, {
+        title: job.file?.title,
+        deponent: job.file?.deponent || undefined,
+      });
+      const metadata: SummaryMetadata = {
+        jobId: job.id,
+        caseCaption: legalMeta.caseCaption,
+        caseNumber: legalMeta.caseNumber,
+        caseTitle: job.file?.title || displayTitle,
+        deponent: legalMeta.deponent,
+        depositionDate: legalMeta.depositionDate,
+        sourceFileName: job.fileName,
+        totalPages: pages.length,
+        uploadDate: (job.createdAt || new Date()).toISOString(),
+      };
+      await saveSummaryMetadata(summaryBucket, metadata);
+      const metaMarkdown = renderMetadataMarkdown(metadata);
 
       // Persist totalPages early for better UI progress feedback
       try {
@@ -498,7 +558,7 @@ async function work() {
               () => {
                 const cfg = loadPromptConfig();
                 return azureChatCompletion(
-                  makePrompt(chunk, i === 0, meta, cfg.system),
+                  makePrompt(chunk, i === 0, metaMarkdown, cfg.system),
                   typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
                   typeof cfg.temperature === "number" ? cfg.temperature : 0.0
                 );
@@ -520,7 +580,7 @@ async function work() {
       const rowsOnly = sanitizeGeneratedMarkdown(mergedRaw)
         .replace(/```[\s\S]*?```/g, "")
         .trim();
-      const merged = [meta, "", rowsOnly].join("\n\n");
+      const merged = [metaMarkdown, "", rowsOnly].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 
@@ -567,7 +627,7 @@ async function work() {
             const attachments: EmailAttachment[] = [];
             try {
               console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
-              const { meta, rows } = parseMarkdown(merged);
+              const { rows } = parseMarkdown(merged);
               const filePages =
                 typeof job.file?.pages === "number" && !Number.isNaN(job.file.pages)
                   ? String(job.file.pages)
@@ -589,8 +649,18 @@ async function work() {
                   .replace(/[^a-z0-9_.-]+/gi, "-")
                   .replace(/-+/g, "-")
                   .replace(/^-|-$/g, "") || "summary";
-              const docxBuffer = await generateDocxBuffer(jobData, { meta, rows }, merged);
-              const pdfBuffer = await generatePdfBuffer(jobData, { meta, rows }, merged);
+              const docxBuffer = await generateDocxBuffer(
+                jobData,
+                metadata,
+                { meta: metaMarkdown.split("\n"), rows },
+                merged
+              );
+              const pdfBuffer = await generatePdfBuffer(
+                jobData,
+                metadata,
+                { meta: metaMarkdown.split("\n"), rows },
+                merged
+              );
               const totalBytes = docxBuffer.length + pdfBuffer.length;
               if (totalBytes > MAX_EMAIL_BYTES) {
                 console.warn(

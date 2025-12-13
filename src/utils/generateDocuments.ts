@@ -15,6 +15,7 @@ import {
 } from "docx";
 import PDFDocument from "pdfkit";
 import { loadLogo } from "./logo";
+import { SummaryMetadata } from "./summaryMetadata";
 
 interface JobData {
   id: string;
@@ -51,36 +52,18 @@ function deriveMaxPageFromRows(rows: Array<[string, string]>): number {
  */
 export async function generateDocxBuffer(
   job: JobData,
+  metadata: SummaryMetadata,
   documentData: DocumentData,
   _summaryContent: string
 ): Promise<Buffer> {
-  const { meta, rows } = documentData;
-  const uploadedTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "summary";
-  const sourceFileName = job.fileName || "Unknown Source";
-  const coverTitle = uploadedTitle;
-
-  // Extract deponent name
-  let deponentName = job.file?.deponent || "Not Specified";
-  const titleLike = meta.find((l) => /transcript\s+summary\s+of\s+/i.test(l));
-  if (titleLike) {
-    const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
-    if (m1 && !m1[1].includes("[Unknown]")) {
-      deponentName = m1[1].trim();
-    } else if (job.file?.deponent) {
-      deponentName = job.file.deponent;
-    }
-  }
-
-  // Extract deposition date
-  let depositionDate: string | null = null;
-  const dateLine = meta.find((l) => /date\s+of\s+deposition\s*:/i.test(l));
-  if (dateLine && !dateLine.includes("[Unknown]")) {
-    const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
-    if (mDate) depositionDate = mDate[1].trim();
-  }
-
-  // Construct title
-  let titleOfDocument = `Transcript Summary of ${deponentName}`;
+  const { rows } = documentData;
+  const coverTitle =
+    metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
+  const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
+  const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
+  const depositionDate =
+    metadata.depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString();
+  const titleOfDocument = `Transcript Summary of ${deponentName}`;
 
   const logo = loadLogo();
   const logoMaxWidth = 400;
@@ -159,35 +142,23 @@ export async function generateDocxBuffer(
             ],
             alignment: "left",
           }),
-          ...((() => {
-            const numericPages =
-              typeof job.file?.pages === "string" ? parseInt(job.file.pages, 10) : undefined;
-            const derived = deriveMaxPageFromRows(rows);
-            const displayPages =
-              numericPages && numericPages > 0 ? numericPages : derived > 0 ? derived : undefined;
-            if (!displayPages) return [];
-            return [
-              new Paragraph({ children: [], spacing: { before: 80 } }),
-              new Paragraph({
-                children: [
-                  new TextRun({ text: "Pages:", bold: true }),
-                  new TextRun(` ${displayPages}`),
-                ],
-                alignment: "left",
-              }),
-            ];
-          })()
+          ...(metadata.totalPages
             ? [
-                // placeholder - never used (kept for block structure)
+                new Paragraph({ children: [], spacing: { before: 80 } }),
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: "Pages:", bold: true }),
+                    new TextRun(` ${metadata.totalPages}`),
+                  ],
+                  alignment: "left",
+                }),
               ]
             : []),
           new Paragraph({ children: [], spacing: { before: 80 } }),
           new Paragraph({
             children: [
               new TextRun({ text: "Date:", bold: true }),
-              new TextRun(
-                ` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`
-              ),
+              new TextRun(` ${depositionDate}`),
             ],
             alignment: "left",
           }),
@@ -273,36 +244,18 @@ export async function generateDocxBuffer(
  */
 export async function generatePdfBuffer(
   job: JobData,
+  metadata: SummaryMetadata,
   documentData: DocumentData,
   _summaryContent: string
 ): Promise<Buffer> {
-  const { meta, rows } = documentData;
-  const uploadedTitle = job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "summary";
-  const sourceFileName = job.fileName || "Unknown Source";
-  const coverTitle = uploadedTitle;
-
-  // Extract deponent name
-  let deponentName = job.file?.deponent || "Not Specified";
-  const titleLike = meta.find((l) => /transcript\s+summary\s+of\s+/i.test(l));
-  if (titleLike) {
-    const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
-    if (m1 && !m1[1].includes("[Unknown]")) {
-      deponentName = m1[1].trim();
-    } else if (job.file?.deponent) {
-      deponentName = job.file.deponent;
-    }
-  }
-
-  // Extract deposition date
-  let depositionDate: string | null = null;
-  const dateLine = meta.find((l) => /date\s+of\s+deposition\s*:/i.test(l));
-  if (dateLine && !dateLine.includes("[Unknown]")) {
-    const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
-    if (mDate) depositionDate = mDate[1].trim();
-  }
-
-  // Construct title
-  let titleOfDocument = `Transcript Summary of ${deponentName}`;
+  const { rows } = documentData;
+  const coverTitle =
+    metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
+  const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
+  const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
+  const depositionDate =
+    metadata.depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString();
+  const titleOfDocument = `Transcript Summary of ${deponentName}`;
 
   return new Promise((resolve, reject) => {
     const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
@@ -355,12 +308,11 @@ export async function generatePdfBuffer(
       const fileLine = `Source File: ${sourceFileName}`;
       contentH += pdf.heightOfString(fileLine, lineOpts) + 10;
 
-      const numericPages =
-        typeof job.file?.pages === "string" ? parseInt(job.file.pages, 10) : undefined;
-      const derived = deriveMaxPageFromRows(rows);
       const displayPages =
-        numericPages && numericPages > 0 ? numericPages : derived > 0 ? derived : undefined;
-      const hasPages = !!displayPages;
+        (metadata.totalPages && metadata.totalPages > 0
+          ? metadata.totalPages
+          : deriveMaxPageFromRows(rows)) || 0;
+      const hasPages = displayPages > 0;
       if (hasPages) contentH += pdf.heightOfString(`Pages: ${displayPages}`, lineOpts) + 10;
 
       pdf.font("Times-Roman").fontSize(12);

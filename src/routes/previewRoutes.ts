@@ -4,6 +4,10 @@ import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { getLogoDataUri } from "../utils/logo";
+import {
+  resolveSummaryMetadata,
+  renderMetadataMarkdown,
+} from "../utils/summaryMetadata";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -48,6 +52,8 @@ router.get(
       const raw = buf.toString("utf-8");
       const cleaned = stripContinuations(raw);
       const { meta, rows } = parseToRows(cleaned);
+      const metadata = await resolveSummaryMetadata(bucket, job as any);
+      const metadataMarkdown = renderMetadataMarkdown(metadata);
       const suppressedPrefixes = [
         "Deponent:",
         "Case Title:",
@@ -68,7 +74,10 @@ router.get(
           trimmed.toLowerCase().startsWith(prefix.toLowerCase())
         );
       });
-      const metaHtml = filteredMeta.map((m) => `<p>${escapeHtml(m)}</p>`).join("\n");
+      const metadataParagraphs = metadataMarkdown.split("\n").filter(Boolean);
+      const metaHtml = [...metadataParagraphs, ...filteredMeta]
+        .map((m) => `<p>${escapeHtml(m)}</p>`)
+        .join("\n");
       const tableRowsHtml = rows
         .map(
           ([p, s]) =>
@@ -141,35 +150,27 @@ router.get(
         code, pre { font-family: "Courier New", Courier, monospace; }
       `;
 
-      // Prefer File.title, else fall back to the uploaded filename without extension
-      const coverTitle = job.file?.title || (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
-      // ← use job.file.pages instead of pageCount
-      const coverPages = job.file?.pages ?? "";
+      const coverTitle =
+        metadata.caseTitle ||
+        job.file?.title ||
+        (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
+      const coverPages =
+        (metadata.totalPages && metadata.totalPages > 0
+          ? String(metadata.totalPages)
+          : job.file?.pages ?? "") || "";
       const logoDataUri = getLogoDataUri();
       const logoHtml = logoDataUri ? `<img src="${logoDataUri}" alt="Testifi AI Logo" />` : "";
 
       // Extract deposition date from metadata
-      let depositionDate: string | null = null;
-      const dateLine = meta.find(l => /date\s+of\s+deposition\s*:/i.test(l));
-      if (dateLine && !dateLine.includes("[Unknown]")) {
-        const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
-        if (mDate) depositionDate = mDate[1].trim();
-      }
+      const depositionDate = metadata.depositionDate || null;
 
       // Extract deponent name
-      let deponentName = job.file?.deponent || "Not Specified";
-      const titleLike = meta.find(l => /transcript\s+summary\s+of\s+/i.test(l));
-      if (titleLike) {
-        const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
-        if (m1 && !m1[1].includes("[Unknown]")) {
-          deponentName = m1[1].trim();
-        }
-      }
+      const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
 
       // Construct enhanced title to match DOCX format
       let titleOfDocument = `Transcript Summary of ${deponentName}`;
       
-      const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
+      const uploadDate = new Date(metadata.uploadDate || job.createdAt || new Date()).toLocaleDateString();
       const downloadDate = new Date().toLocaleDateString();
       const dateForCover = depositionDate || uploadDate;
       

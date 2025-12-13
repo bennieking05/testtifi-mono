@@ -19,6 +19,7 @@ import {
 import PDFDocument from "pdfkit";
 import stream from "stream";
 import { loadLogo } from "../utils/logo";
+import { resolveSummaryMetadata } from "../utils/summaryMetadata";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -137,8 +138,8 @@ router.get(
       ? objectKey(job.summaryCsvUrl)
       : job.file?.summaryFileName ?? `summary-${job.id}.md`;
     const uploadedTitle = job.file?.title || stripExt(job.fileName || "summary");
-    const sourceFileName = job.fileName || "Unknown Source";
-    const coverTitle = uploadedTitle;
+    let sourceFileName = job.fileName || "Unknown Source";
+    let coverTitle = uploadedTitle;
 
     console.log(`[Download] Job ID: ${jobId}, Format: ${format}`);
     console.log(`[Download] File data:`, {
@@ -152,28 +153,17 @@ router.get(
       const [buf] = await bucket.file(key).download();
       const data = buf.toString("utf-8");
       const { meta, rows } = parseMarkdown(data);
-      
-      // Enhanced metadata extraction and title construction
-      let deponentName = job.file?.deponent || "Not Specified";
-      const titleLike = meta.find(l => /transcript\s+summary\s+of\s+/i.test(l));
-      
-      // Extract deponent from metadata if available
-      if (titleLike) {
-        const m1 = titleLike.match(/transcript\s+summary\s+of\s+(.+)/i);
-        if (m1 && !m1[1].includes("[Unknown]")) {
-          deponentName = m1[1].trim();
-        } else if (job.file?.deponent) {
-          deponentName = job.file.deponent;
-        }
-      }
-
-      // Extract deposition date
-      let depositionDate: string | null = null;
-      const dateLine = meta.find(l => /date\s+of\s+deposition\s*:/i.test(l));
-      if (dateLine && !dateLine.includes("[Unknown]")) {
-        const mDate = dateLine.match(/date\s+of\s+deposition\s*:\s*(.+)/i);
-        if (mDate) depositionDate = mDate[1].trim();
-      }
+      const metadata = await resolveSummaryMetadata(bucket, job);
+      let deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
+      sourceFileName = metadata.sourceFileName || sourceFileName;
+      coverTitle = metadata.caseTitle || coverTitle;
+      let depositionDate: string | null = metadata.depositionDate || null;
+      const normalizedPages =
+        metadata.totalPages && metadata.totalPages > 0
+          ? metadata.totalPages
+          : job.file?.pages
+          ? Number(job.file.pages)
+          : undefined;
 
       // Extract company information from case caption
       let companyName = "";
@@ -204,8 +194,7 @@ router.get(
 
       // TXT — clean text format with consistent title page matching DOCX format
       if (format === "txt") {
-        // Create consistent title page format matching DOCX
-        const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
+        const uploadDate = new Date(metadata.uploadDate || job.createdAt || new Date()).toLocaleDateString();
         const downloadDate = new Date().toLocaleDateString();
         const dateForCover = depositionDate || uploadDate;
         
@@ -215,7 +204,7 @@ router.get(
           `Deponent: ${deponentName}`,
           `Case Title: ${coverTitle}`,
           `Source File: ${sourceFileName}`,
-          ...(job.file?.pages ? [`Pages: ${job.file.pages}`] : []),
+          ...(normalizedPages ? [`Pages: ${normalizedPages}`] : []),
           `Date: ${dateForCover}`,
           `Upload Date: ${uploadDate}`,
           `Download Date: ${downloadDate}`,
@@ -304,11 +293,11 @@ router.get(
                   children: [new TextRun({ text: "Source File:", bold: true }), new TextRun(` ${sourceFileName}`)],
                   alignment: "left",
                 }),
-                ...(job.file?.pages
+                ...(normalizedPages
                   ? [
                       new Paragraph({ children: [], spacing: { before: 80 } }),
                       new Paragraph({
-                        children: [new TextRun({ text: "Pages:", bold: true }), new TextRun(` ${job.file.pages}`)],
+                        children: [new TextRun({ text: "Pages:", bold: true }), new TextRun(` ${normalizedPages}`)],
                         alignment: "left",
                       }),
                     ]
@@ -446,9 +435,9 @@ router.get(
           contentH += pdf.heightOfString(fileLine, lineOpts) + 10;
           
           let hasPages = false;
-          if (job.file?.pages) {
+          if (normalizedPages) {
             hasPages = true;
-            contentH += pdf.heightOfString(`Pages: ${job.file.pages}`, lineOpts) + 10;
+            contentH += pdf.heightOfString(`Pages: ${normalizedPages}`, lineOpts) + 10;
           }
           
           pdf.font("Times-Roman").fontSize(12);
@@ -477,7 +466,7 @@ router.get(
           pdf.moveDown(0.5);
 
           if (hasPages) {
-            pdf.font("Times-Roman").fontSize(14).text(`Pages: ${job.file!.pages}` , { align: "left" });
+            pdf.font("Times-Roman").fontSize(14).text(`Pages: ${normalizedPages}` , { align: "left" });
             pdf.moveDown(0.5);
           }
 
