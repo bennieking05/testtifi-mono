@@ -453,7 +453,11 @@ async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent): Promi
   const paymentIntentId = intent.id;
   const receiptUrl = extractReceiptUrl(enrichedIntent);
   const subtotalCents = computeSubtotalCents(credits);
-  const taxCents = deriveTaxCents({ totalCents: amountCents, subtotalCents });
+  const taxCents = deriveTaxCents({
+    totalCents: amountCents,
+    subtotalCents,
+    taxOverrideCents: parsePositiveInt(enrichedIntent.metadata?.taxCents),
+  });
   const metadataTaxLabel =
     typeof enrichedIntent.metadata?.taxLabel === "string" ? enrichedIntent.metadata.taxLabel : undefined;
 
