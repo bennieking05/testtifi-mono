@@ -190,7 +190,11 @@ async function sendPurchaseReceiptEmail({
   const noticeHeadingStyle = "margin:0 0 8px 0;color:#5c3d00;font-weight:600;";
   const noticeBodyStyle = "margin:0;color:#5c3d00;";
 
+  const stripeButtonInlineStyle =
+    "display:inline-block;padding:12px 24px;background-color:#5674BC;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;";
+
   const bodyHtml = `
+    <h1 style="margin:0 0 8px 0;font-size:28px;line-height:1.2;color:inherit;">Receipt</h1>
     <h2>Thank You for Your Purchase</h2>
     <p>Hi ${greetingName},</p>
     <p>We've added <strong>${creditsLabel} ${creditNoun}</strong> to your Testifi AI account.</p>
@@ -224,7 +228,7 @@ async function sendPurchaseReceiptEmail({
       ${
         resolvedReceiptUrl
           ? `<div class="cta-wrap">
-        <a href="${resolvedReceiptUrl}" class="btn">View Stripe Receipt</a>
+        <a href="${resolvedReceiptUrl}" class="btn" style="${stripeButtonInlineStyle}">View Stripe Receipt</a>
         <p style="margin-top:8px;font-size:13px;">
           If the button does not work, copy and paste this link:
           <a href="${resolvedReceiptUrl}">${resolvedReceiptUrl}</a>
@@ -240,7 +244,7 @@ async function sendPurchaseReceiptEmail({
   `;
 
   const html = renderEmailShell({
-    title: "Purchase Receipt",
+    title: "Receipt",
     bodyHtml,
     theme: emailTheme,
     logoCid,
