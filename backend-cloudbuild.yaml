@@ -59,10 +59,21 @@ steps:
         kubectl -n "$${TARGET_NAMESPACE}" rollout status deployment/backend --timeout=300s
 
         echo "Rolling summarize-worker with scale-to-zero to avoid CPU surge..."
-        kubectl -n "$${TARGET_NAMESPACE}" scale deployment summarize-worker --replicas=0
-        kubectl -n "$${TARGET_NAMESPACE}" set image deployment/summarize-worker summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
-        kubectl -n "$${TARGET_NAMESPACE}" scale deployment summarize-worker --replicas=1
-        kubectl -n "$${TARGET_NAMESPACE}" rollout status deployment/summarize-worker --timeout=600s
+        WORKER_DEPLOYMENT=""
+        if kubectl -n "$${TARGET_NAMESPACE}" get deployment summarize-worker >/dev/null 2>&1; then
+          WORKER_DEPLOYMENT="summarize-worker"
+        elif kubectl -n "$${TARGET_NAMESPACE}" get deployment summarize-worker-staging >/dev/null 2>&1; then
+          WORKER_DEPLOYMENT="summarize-worker-staging"
+        else
+          echo "ERROR: No summarize-worker deployment found in namespace $${TARGET_NAMESPACE}" >&2
+          kubectl -n "$${TARGET_NAMESPACE}" get deployments >&2 || true
+          exit 1
+        fi
+
+        kubectl -n "$${TARGET_NAMESPACE}" scale deployment "$${WORKER_DEPLOYMENT}" --replicas=0
+        kubectl -n "$${TARGET_NAMESPACE}" set image "deployment/$${WORKER_DEPLOYMENT}" summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
+        kubectl -n "$${TARGET_NAMESPACE}" scale deployment "$${WORKER_DEPLOYMENT}" --replicas=1
+        kubectl -n "$${TARGET_NAMESPACE}" rollout status "deployment/$${WORKER_DEPLOYMENT}" --timeout=600s
 
 images:
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
