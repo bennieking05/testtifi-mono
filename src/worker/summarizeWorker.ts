@@ -824,7 +824,47 @@ function sanitizeGeneratedMarkdown(md: string): string {
     /\bprovide further clarification\b/i,
     /\bcan continue summarizing\b/i,
   ];
-  const keep = lines.filter((l) => !banned.some((re) => re.test(l)));
+
+  const extractFirstPageNumber = (rawLine: string): number | null => {
+    // Support common row formats:
+    // - "p.66:2-25 | ..."
+    // - "66 | ..."
+    // - "| 66 | ... |"
+    // - "Page 66 | ..."
+    const line = rawLine.trim().replace(/^\|+/, "").trim();
+    const m = line.match(/^(?:p(?:age)?\.?\s*)?(\d{1,5})\b/i);
+    if (!m) return null;
+    const n = Number.parseInt(m[1], 10);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const keep: string[] = [];
+  const seen = new Set<string>();
+  let maxPageSeen = 0;
+  let sawSubstantialProgress = false;
+
+  for (const l of lines) {
+    if (banned.some((re) => re.test(l))) continue;
+
+    const pageNum = extractFirstPageNumber(l);
+    if (pageNum != null) {
+      // Once we've progressed into a meaningful page range, a big backward jump
+      // is almost always the model accidentally repeating earlier rows.
+      if (maxPageSeen >= 20) sawSubstantialProgress = true;
+      if (sawSubstantialProgress && pageNum <= maxPageSeen - 5) {
+        // Hard stop: drop the repeated tail.
+        break;
+      }
+      maxPageSeen = Math.max(maxPageSeen, pageNum);
+    }
+
+    const key = l.trim();
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keep.push(l);
+  }
+
   return keep.join("\n");
 }
 
