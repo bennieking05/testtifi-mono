@@ -312,8 +312,19 @@ function extractLegalMetadata(
   fileData?: { title?: string; deponent?: string }
 ): LegalMetadataFields {
   const lines = tr.split(/\r?\n/);
-  // Look at more lines to catch the Index page which often lists the Witness
-  const header = lines.slice(0, 300).join("\n");
+
+  const sliceFirstPages = (raw: string, maxPages: number) => {
+    // Prefer explicit page markers (we inject these for both pdf-parse and Vision OCR).
+    const parts = raw.split(/---PAGE\s+\d+---\s*\n/i);
+    if (parts.length > 1) {
+      return parts.slice(1, 1 + Math.max(1, maxPages)).join("\n");
+    }
+    // Fallback: just take a larger top slice than 300 lines
+    return raw.split(/\r?\n/).slice(0, 2500).join("\n");
+  };
+
+  // Look at more content: first several pages + a decent line budget catches most cover/index formats.
+  const header = sliceFirstPages(tr, 10);
 
   const civMatch = header.match(
     /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
@@ -348,36 +359,65 @@ function extractLegalMetadata(
   }
   const deponent = extractedDeponent || fileData?.deponent || "[Unknown]";
 
-  let extractedDate = null;
-  const datePatterns = [
-    /DATE:\s*([^\n\r]+)/i,
-    /DATE\s+([^\n\r]+)/i,
-    /DATE\s*:\s*([A-Z\s,]+)/i,
-    /DATE\s*:\s*([A-Z]+\s+\d{1,2},\s+\d{4})/i,
-    // Pattern for OCR format: "8/28/2015" on its own line
-    /^(\d{1,2}\/\d{1,2}\/\d{4})$/m,
-    // Pattern for date anywhere in header
-    /(\d{1,2}\/\d{1,2}\/\d{4})/,
-    // Pattern for "August 28, 2015" format
-    /([A-Z]+\s+\d{1,2},\s+\d{4})/,
-    // Very specific pattern for "8/28/2015" from OCR
-    /(8\/28\/2015)/i,
+  const normalizeUnknown = (v: string | null) => {
+    if (!v) return null;
+    const s = v.trim();
+    if (!s) return null;
+    if (/^\[?\s*unknown\s*\]?$/i.test(s)) return null;
+    if (/^\[?\s*n\/a\s*\]?$/i.test(s)) return null;
+    return s;
+  };
+
+  let extractedDate: string | null = null;
+
+  // Special-case: "commencing ... on the 7th day of July, A.D., 2022"
+  // Normalize to "July 7, 2022".
+  const ordinalDayOfMonth =
+    /\b(?:on\s+the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.D\.,?\s*)?(\d{4})\b/i;
+  const ordMatch = header.match(ordinalDayOfMonth);
+  if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
+    const day = Number.parseInt(ordMatch[1], 10);
+    const month = ordMatch[2];
+    const year = ordMatch[3];
+    if (Number.isFinite(day) && day >= 1 && day <= 31) {
+      extractedDate = `${month} ${day}, ${year}`;
+    }
+  }
+
+  // Prefer explicit "Date of Deposition" / "Deposition Date" patterns.
+  const explicitDatePatterns = extractedDate
+    ? []
+    : [
+    /\bDate\s+of\s+Deposition\s*[:\-]\s*([^\n\r]+)/i,
+    /\bDeposition\s+Date\s*[:\-]\s*([^\n\r]+)/i,
+    /\bDate\s*[:\-]\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
+    /\bDate\s*[:\-]\s*(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    /\bTaken\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
+    /\bTaken\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    /\bHeld\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
+    /\bHeld\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
   ];
-  
-  for (const pattern of datePatterns) {
+  for (const pattern of explicitDatePatterns) {
     const match = header.match(pattern);
-    if (match && match[1]) {
+    if (match?.[1]) {
       extractedDate = match[1].trim();
       break;
     }
   }
+
+  // Fallback: search for a plausible date near the top of the transcript.
   if (!extractedDate) {
     const dateRegex =
       /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i;
-    const top3 = lines.slice(0, 3).join("\n");
-    extractedDate = top3.match(dateRegex)?.[0] || header.match(dateRegex)?.[0] || null;
+    const topSlice = header;
+    extractedDate =
+      topSlice.match(dateRegex)?.[0] ||
+      topSlice.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/)?.[0] ||
+      topSlice.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0] ||
+      null;
   }
-  const date = extractedDate || "[Unknown]";
+
+  const date = normalizeUnknown(extractedDate) || "[Unknown]";
 
   return {
     caseCaption: caption,
@@ -619,9 +659,10 @@ async function work() {
       );
 
       const mergedRaw = parts.join("\n");
-      const rowsOnly = sanitizeGeneratedMarkdown(mergedRaw)
+      const rowsOnlyUnbounded = sanitizeGeneratedMarkdown(mergedRaw)
         .replace(/```[\s\S]*?```/g, "")
         .trim();
+      const rowsOnly = trimOutOfRangeRows(rowsOnlyUnbounded, pages.length);
       const merged = [metaMarkdown, "", rowsOnly].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
@@ -866,6 +907,41 @@ function sanitizeGeneratedMarkdown(md: string): string {
   }
 
   return keep.join("\n");
+}
+
+function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
+  if (!maxPage || maxPage <= 0) return mdRows;
+  const lines = mdRows.split(/\r?\n/);
+  const out: string[] = [];
+  let sawValid = false;
+
+  const extractAllPages = (rawLine: string): number[] => {
+    const label = rawLine.trim().replace(/^\|+/, "").trim();
+    const re = /(?:^|[,\s|])(?:p(?:age)?\.?)?\s*(\d{1,6})\b/gi;
+    const pages: number[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(label))) {
+      const n = Number.parseInt(m[1], 10);
+      if (Number.isFinite(n)) pages.push(n);
+    }
+    return pages;
+  };
+
+  for (const l of lines) {
+    const pages = extractAllPages(l);
+    if (!pages.length) {
+      out.push(l);
+      continue;
+    }
+    const invalid = pages.some((p) => p < 1 || p > maxPage);
+    if (invalid) {
+      if (!sawValid) continue; // drop leading p.0 etc
+      break; // truncate hallucinated tail
+    }
+    sawValid = true;
+    out.push(l);
+  }
+  return out.join("\n").trim();
 }
 
 work().catch((err) => {

@@ -19,7 +19,7 @@ import {
 import PDFDocument from "pdfkit";
 import stream from "stream";
 import { loadLogo } from "../utils/logo";
-import { resolveSummaryMetadata } from "../utils/summaryMetadata";
+import { normalizeUnknownString, resolveSummaryMetadata } from "../utils/summaryMetadata";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -115,6 +115,51 @@ export function parseMarkdown(md: string) {
   return { meta, rows: typedRows };
 }
 
+function extractAllPages(label: string): number[] {
+  const out: number[] = [];
+  const re = /(?:^|[,\s|])(?:p(?:age)?\.?)?\s*(\d{1,6})\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(label))) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isFinite(n)) out.push(n);
+  }
+  return out;
+}
+
+function enforcePageBounds(
+  rows: Array<[string, string]>,
+  opts: { maxPage?: number } = {}
+): Array<[string, string]> {
+  const maxPage = opts.maxPage && opts.maxPage > 0 ? opts.maxPage : null;
+  if (!maxPage) return rows;
+
+  const kept: Array<[string, string]> = [];
+  let sawValidRow = false;
+  for (const row of rows) {
+    const [label] = row;
+    const pages = extractAllPages(label);
+    // If we can't parse a page number, keep the row as-is.
+    if (!pages.length) {
+      kept.push(row);
+      continue;
+    }
+    // Reject page 0 and anything beyond known max.
+    const invalid = pages.some((p) => p < 1 || p > maxPage);
+    if (invalid) {
+      // Once the model starts hallucinating out-of-range pages (often at the end),
+      // truncate the tail to avoid downstream pollution in PDFs/DOCX/preview.
+      if (!sawValidRow) {
+        // If the very first rows are bad (e.g. "p.0:1-25"), drop them and keep going.
+        continue;
+      }
+      break;
+    }
+    sawValidRow = true;
+    kept.push(row);
+  }
+  return kept;
+}
+
 router.get(
   "/",
   authenticateToken,
@@ -157,13 +202,16 @@ router.get(
       let deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
       sourceFileName = metadata.sourceFileName || sourceFileName;
       coverTitle = metadata.caseTitle || coverTitle;
-      let depositionDate: string | null = metadata.depositionDate || null;
+      const depositionDate: string | null = normalizeUnknownString(metadata.depositionDate);
       const normalizedPages =
         metadata.totalPages && metadata.totalPages > 0
           ? metadata.totalPages
           : job.file?.pages
           ? Number(job.file.pages)
           : undefined;
+      const boundedRows = enforcePageBounds(rows, {
+        maxPage: normalizedPages || metadata.totalPages || undefined,
+      });
 
       // Extract company information from case caption
       let companyName = "";
@@ -215,7 +263,7 @@ router.get(
         
         const body = [
           ...titlePage,
-          ...rows.map(([p, s]) => `${p}\n${s}\n`),
+          ...boundedRows.map(([p, s]) => `${p}\n${s}\n`),
         ].join("\n");
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         setAttachmentFilename(res, uploadedTitle, "txt");
@@ -354,7 +402,7 @@ router.get(
                         }),
                       ],
                     }),
-                    ...rows.map(
+                    ...boundedRows.map(
                       ([p, s]) =>
                         new TableRow({
                           children: [
@@ -519,7 +567,7 @@ router.get(
         const pageHeight = pdf.page.height;
         const bottomMargin = 60; // Leave space at bottom
         
-        rows.forEach(([p, s]) => {
+        boundedRows.forEach(([p, s]) => {
           pdf.font("Times-Roman").fontSize(11);
           const h1 = pdf.heightOfString(p, { width: pageCol - 2 * pad });
           const h2 = pdf.heightOfString(s, { width: sumCol - 2 * pad });
@@ -567,7 +615,7 @@ router.get(
         setAttachmentFilename(res, uploadedTitle, "csv");
         const esc = (s: string) => '"' + s.replace(/"/g, '""') + '"';
         const header = '"Page(s)","Testimony"';
-        const lines = rows.map(([p, s]) => `${esc(p)},${esc(s)}`);
+        const lines = boundedRows.map(([p, s]) => `${esc(p)},${esc(s)}`);
         const csv = [header, ...lines].join("\n");
         res.send(csv);
         return;

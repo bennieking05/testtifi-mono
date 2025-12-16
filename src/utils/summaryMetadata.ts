@@ -15,11 +15,21 @@ export interface SummaryMetadata {
   uploadDate: string;
 }
 
+export function normalizeUnknownString(value?: string | null): string | null {
+  if (value == null) return null;
+  const v = String(value).trim();
+  if (!v) return null;
+  if (/^\[?\s*unknown\s*\]?$/i.test(v)) return null;
+  if (/^\[?\s*n\/a\s*\]?$/i.test(v)) return null;
+  return v;
+}
+
 export function renderMetadataMarkdown(meta: SummaryMetadata): string {
+  const depositionDate = normalizeUnknownString(meta.depositionDate);
   return [
     `Case Caption: ${meta.caseCaption}`,
     `Title of Document: Transcript Summary of ${meta.deponent}`,
-    `Date of Deposition: ${meta.depositionDate}`,
+    ...(depositionDate ? [`Date of Deposition: ${depositionDate}`] : []),
   ].join("\n");
 }
 
@@ -82,6 +92,7 @@ export async function resolveSummaryMetadata(
   if (existing) return existing;
   return fallbackSummaryMetadata(job);
 }
+
 
 
 

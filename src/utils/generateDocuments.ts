@@ -15,7 +15,7 @@ import {
 } from "docx";
 import PDFDocument from "pdfkit";
 import { loadLogo } from "./logo";
-import { SummaryMetadata } from "./summaryMetadata";
+import { normalizeUnknownString, SummaryMetadata } from "./summaryMetadata";
 
 interface JobData {
   id: string;
@@ -61,8 +61,7 @@ export async function generateDocxBuffer(
     metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
   const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
-  const depositionDate =
-    metadata.depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString();
+  const depositionDate = normalizeUnknownString(metadata.depositionDate);
   const titleOfDocument = `Transcript Summary of ${deponentName}`;
 
   const logo = loadLogo();
@@ -158,7 +157,12 @@ export async function generateDocxBuffer(
           new Paragraph({
             children: [
               new TextRun({ text: "Date:", bold: true }),
-              new TextRun(` ${depositionDate}`),
+              new TextRun(
+                ` ${
+                  depositionDate ||
+                  new Date(job.createdAt || new Date()).toLocaleDateString()
+                }`
+              ),
             ],
             alignment: "left",
           }),
@@ -181,9 +185,7 @@ export async function generateDocxBuffer(
           new Paragraph({ children: [], pageBreakBefore: true }),
           ...(() => {
             const paras: Paragraph[] = [];
-            if (depositionDate) {
-              paras.push(new Paragraph(`Date of Deposition: ${depositionDate}`));
-            }
+            if (depositionDate) paras.push(new Paragraph(`Date of Deposition: ${depositionDate}`));
             return paras;
           })(),
           new Paragraph({ children: [], spacing: { before: 160 } }),
@@ -253,8 +255,7 @@ export async function generatePdfBuffer(
     metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
   const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
-  const depositionDate =
-    metadata.depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString();
+  const depositionDate = normalizeUnknownString(metadata.depositionDate);
   const titleOfDocument = `Transcript Summary of ${deponentName}`;
 
   return new Promise((resolve, reject) => {
