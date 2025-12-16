@@ -35,6 +35,42 @@ function objectKey(url: string): string {
   }
 }
 
+function extractAllPages(label: string): number[] {
+  const out: number[] = [];
+  const re = /(?:^|[,\s|])(?:p(?:age)?\.?)?\s*(\d{1,6})\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(label))) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isFinite(n)) out.push(n);
+  }
+  return out;
+}
+
+function enforcePageBounds(
+  rows: Array<[string, string]>,
+  opts: { maxPage?: number } = {}
+): Array<[string, string]> {
+  const maxPage = opts.maxPage && opts.maxPage > 0 ? opts.maxPage : null;
+  if (!maxPage) return rows;
+  const kept: Array<[string, string]> = [];
+  let sawValid = false;
+  for (const row of rows) {
+    const pages = extractAllPages(row[0]);
+    if (!pages.length) {
+      kept.push(row);
+      continue;
+    }
+    const invalid = pages.some((p) => p < 1 || p > maxPage);
+    if (invalid) {
+      if (!sawValid) continue;
+      break;
+    }
+    sawValid = true;
+    kept.push(row);
+  }
+  return kept;
+}
+
 /**
  * POST /api/email-notifications
  * Body: { summaryId: string; notifyOnComplete: boolean }
@@ -119,6 +155,13 @@ router.post(
                 const { rows } = parseMarkdown(summaryContent);
                 const metadata = await resolveSummaryMetadata(bucket, job as any);
                 const metadataLines = renderMetadataMarkdown(metadata).split("\n");
+                const maxPage =
+                  (metadata.totalPages && metadata.totalPages > 0
+                    ? metadata.totalPages
+                    : job.file?.pages != null
+                    ? Number(job.file.pages)
+                    : undefined) || undefined;
+                const boundedRows = enforcePageBounds(rows, { maxPage });
 
                 // Convert job to match JobData interface (pages needs to be string)
                 const jobData = {
@@ -141,7 +184,7 @@ router.post(
                 const docxBuffer = await generateDocxBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows },
+                  { meta: metadataLines, rows: boundedRows },
                   summaryContent
                 );
                 const docxFilename = `${
@@ -160,7 +203,7 @@ router.post(
                 const pdfBuffer = await generatePdfBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows },
+                  { meta: metadataLines, rows: boundedRows },
                   summaryContent
                 );
                 const pdfFilename = `${

@@ -5,6 +5,7 @@ import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { getLogoDataUri } from "../utils/logo";
 import {
+  normalizeUnknownString,
   resolveSummaryMetadata,
   renderMetadataMarkdown,
 } from "../utils/summaryMetadata";
@@ -54,6 +55,16 @@ router.get(
       const { meta, rows } = parseToRows(cleaned);
       const metadata = await resolveSummaryMetadata(bucket, job as any);
       const metadataMarkdown = renderMetadataMarkdown(metadata);
+      const maxPage =
+        (metadata.totalPages && metadata.totalPages > 0
+          ? metadata.totalPages
+          : job.file?.pages
+          ? Number(job.file.pages)
+          : undefined) || undefined;
+      const boundedRows = enforcePageBounds(
+        rows.map(([p, s]) => [p, s] as [string, string]),
+        { maxPage }
+      );
       const suppressedPrefixes = [
         "Deponent:",
         "Case Title:",
@@ -78,7 +89,7 @@ router.get(
       const metaHtml = [...metadataParagraphs, ...filteredMeta]
         .map((m) => `<p>${escapeHtml(m)}</p>`)
         .join("\n");
-      const tableRowsHtml = rows
+      const tableRowsHtml = boundedRows
         .map(
           ([p, s]) =>
             `<tr><td>${escapeHtml(p)}</td><td>${escapeHtml(s).replace(/\n/g, '<br/>')}</td></tr>`
@@ -162,7 +173,7 @@ router.get(
       const logoHtml = logoDataUri ? `<img src="${logoDataUri}" alt="Testifi AI Logo" />` : "";
 
       // Extract deposition date from metadata
-      const depositionDate = metadata.depositionDate || null;
+      const depositionDate = normalizeUnknownString(metadata.depositionDate);
 
       // Extract deponent name
       const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
@@ -269,5 +280,42 @@ function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
   });
 
   return { meta, rows };
+}
+
+function extractAllPages(label: string): number[] {
+  const out: number[] = [];
+  const re = /(?:^|[,\s|])(?:p(?:age)?\.?)?\s*(\d{1,6})\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(label))) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isFinite(n)) out.push(n);
+  }
+  return out;
+}
+
+function enforcePageBounds(
+  rows: Array<[string, string]>,
+  opts: { maxPage?: number } = {}
+): Array<[string, string]> {
+  const maxPage = opts.maxPage && opts.maxPage > 0 ? opts.maxPage : null;
+  if (!maxPage) return rows;
+
+  const kept: Array<[string, string]> = [];
+  let sawValidRow = false;
+  for (const [p, s] of rows) {
+    const pages = extractAllPages(p);
+    if (!pages.length) {
+      kept.push([p, s]);
+      continue;
+    }
+    const invalid = pages.some((n) => n < 1 || n > maxPage);
+    if (invalid) {
+      if (!sawValidRow) continue;
+      break;
+    }
+    sawValidRow = true;
+    kept.push([p, s]);
+  }
+  return kept;
 }
 
