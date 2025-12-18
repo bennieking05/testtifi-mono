@@ -976,6 +976,11 @@ function detectTranscriptMaxPage(transcript: string): number {
     bump(Number.parseInt(m[1], 10));
   }
 
+  // "(Pages 2 - 5)" style (common when 4 transcript pages are printed per PDF page)
+  for (const m of text.matchAll(/\(\s*Pages?\s+(\d{1,6})\s*-\s*(\d{1,6})\s*\)/gi)) {
+    bump(Number.parseInt(m[2], 10));
+  }
+
   // "239:3" (page:line)
   for (const m of text.matchAll(/\b(\d{1,6})\s*:\s*(\d{1,3})\b/g)) {
     const page = Number.parseInt(m[1], 10);
