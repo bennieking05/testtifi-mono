@@ -907,8 +907,8 @@ function sanitizeGeneratedMarkdown(md: string): string {
       // is almost always the model accidentally repeating earlier rows.
       if (maxPageSeen >= 20) sawSubstantialProgress = true;
       if (sawSubstantialProgress && pageNum <= maxPageSeen - 5) {
-        // Hard stop: drop the repeated tail.
-        break;
+        // Skip likely repeated/hallucinated row but keep processing.
+        continue;
       }
       maxPageSeen = Math.max(maxPageSeen, pageNum);
     }
@@ -960,38 +960,42 @@ function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
 
 function detectTranscriptMaxPage(transcript: string): number {
   // We want the *transcript* page count, not the PDF scan page count.
-  // Heuristics:
-  // - Look for "Page 239" style
-  // - Look for citation-like tokens "239:3" (common in indices / word lists)
-  // - Ignore our injected markers like "---PAGE 12---"
+  // Many scanned depositions contain multiple transcript pages per PDF page and include markers like '(Pages 2 - 5)'.
+  // Heuristics (in priority order):
+  // - '(Pages X - Y)' ranges
+  // - 'Page X' tokens
+  // - 'X:Y' page:line tokens (strictly filtered: line <= 35, page <= 5000)
+  // - Ignore our injected markers like '---PAGE 12---'
   const text = transcript.replace(/^---PAGE\s+\d+---\s*$/gim, "\n");
 
-  let max = 0;
-  const bump = (n: number) => {
-    if (Number.isFinite(n) && n > max) max = n;
-  };
+  let maxFromRange = 0;
+  let maxFromPageWord = 0;
+  let maxFromPageLine = 0;
 
-  // "Page 239"
-  for (const m of text.matchAll(/\bPage\s+(\d{1,6})\b/gi)) {
-    bump(Number.parseInt(m[1], 10));
+  // '(Pages 2 - 5)'
+  for (const m of text.matchAll(/\(\s*Pages?\s+(\d{1,6})\s*[-–—]\s*(\d{1,6})\s*\)/gi)) {
+    const end = Number.parseInt(m[2], 10);
+    if (Number.isFinite(end)) maxFromRange = Math.max(maxFromRange, end);
   }
 
-  // "(Pages 2 - 5)" style (common when 4 transcript pages are printed per PDF page)
-  for (const m of text.matchAll(/\(\s*Pages?\s+(\d{1,6})\s*-\s*(\d{1,6})\s*\)/gi)) {
-    bump(Number.parseInt(m[2], 10));
+  // 'Page 239'
+  for (const m of text.matchAll(/Page\s+(\d{1,6})/gi)) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isFinite(n) && n <= 5000) maxFromPageWord = Math.max(maxFromPageWord, n);
   }
 
-  // "239:3" (page:line)
-  for (const m of text.matchAll(/\b(\d{1,6})\s*:\s*(\d{1,3})\b/g)) {
+  // '239:3' (page:line)
+  for (const m of text.matchAll(/(\d{1,6})\s*:\s*(\d{1,3})/g)) {
     const page = Number.parseInt(m[1], 10);
     const line = Number.parseInt(m[2], 10);
-    // basic sanity: line numbers are usually small
-    if (Number.isFinite(line) && line >= 0 && line <= 200) bump(page);
+    // Deposition transcripts are typically 25 lines per page; be strict to avoid false positives.
+    if (Number.isFinite(line) && line >= 0 && line <= 35 && Number.isFinite(page) && page >= 1 && page <= 5000) {
+      maxFromPageLine = Math.max(maxFromPageLine, page);
+    }
   }
 
-  // clamp obviously impossible values
-  if (max > 20000) return 0;
-  return max;
+  if (maxFromRange > 0) return maxFromRange;
+  return Math.max(maxFromPageWord, maxFromPageLine);
 }
 
 work().catch((err) => {
