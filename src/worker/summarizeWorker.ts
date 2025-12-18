@@ -594,6 +594,12 @@ async function work() {
       const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
+      const pdfPageCount = pages.length;
+      const transcriptMaxPage = detectTranscriptMaxPage(transcript);
+      const totalTranscriptPages = Math.max(
+        pdfPageCount,
+        transcriptMaxPage || 0
+      );
       const chunks = groupPagesToChunks(pages);
       const legalMeta = extractLegalMetadata(transcript, {
         title: job.file?.title,
@@ -607,7 +613,7 @@ async function work() {
         deponent: legalMeta.deponent,
         depositionDate: legalMeta.depositionDate,
         sourceFileName: job.fileName,
-        totalPages: pages.length,
+        totalPages: totalTranscriptPages,
         uploadDate: (job.createdAt || new Date()).toISOString(),
       };
       await saveSummaryMetadata(summaryBucket, metadata);
@@ -615,7 +621,7 @@ async function work() {
 
       // Persist totalPages early for better UI progress feedback
       try {
-        const pageCount = pages.length;
+        const pageCount = totalTranscriptPages;
         if (pageCount > 0) {
           await prisma.summaryJob.update({
             where: { id: job.id },
@@ -649,7 +655,15 @@ async function work() {
             );
             parts[i] = resp.choices[0].message.content.trim();
             // Best-effort progress update - cap at total pages
-            const cappedPage = Math.min(chunk.end, pages.length); // Cap at total pages to avoid showing huge numbers
+            const cappedPage = Math.min(
+              totalTranscriptPages,
+              Math.max(
+                1,
+                Math.round(
+                  (chunk.end / Math.max(1, pdfPageCount)) * totalTranscriptPages
+                )
+              )
+            );
             await prisma.summaryJob.update({
               where: { id: job.id },
               data: { lastPageProcessed: cappedPage },
@@ -662,7 +676,7 @@ async function work() {
       const rowsOnlyUnbounded = sanitizeGeneratedMarkdown(mergedRaw)
         .replace(/```[\s\S]*?```/g, "")
         .trim();
-      const rowsOnly = trimOutOfRangeRows(rowsOnlyUnbounded, pages.length);
+      const rowsOnly = trimOutOfRangeRows(rowsOnlyUnbounded, totalTranscriptPages);
       const merged = [metaMarkdown, "", rowsOnly].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
@@ -684,8 +698,8 @@ async function work() {
         data: {
           status: "complete",
           summaryCsvUrl: signedUrl,
-          lastPageProcessed: pages.length ? Math.min(pages[pages.length - 1].page, pages.length) : 0,
-          totalPages: pages.length,
+          lastPageProcessed: totalTranscriptPages,
+          totalPages: totalTranscriptPages,
           finishedAt: new Date(),
         },
       });
@@ -942,6 +956,37 @@ function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
     out.push(l);
   }
   return out.join("\n").trim();
+}
+
+function detectTranscriptMaxPage(transcript: string): number {
+  // We want the *transcript* page count, not the PDF scan page count.
+  // Heuristics:
+  // - Look for "Page 239" style
+  // - Look for citation-like tokens "239:3" (common in indices / word lists)
+  // - Ignore our injected markers like "---PAGE 12---"
+  const text = transcript.replace(/^---PAGE\s+\d+---\s*$/gim, "\n");
+
+  let max = 0;
+  const bump = (n: number) => {
+    if (Number.isFinite(n) && n > max) max = n;
+  };
+
+  // "Page 239"
+  for (const m of text.matchAll(/\bPage\s+(\d{1,6})\b/gi)) {
+    bump(Number.parseInt(m[1], 10));
+  }
+
+  // "239:3" (page:line)
+  for (const m of text.matchAll(/\b(\d{1,6})\s*:\s*(\d{1,3})\b/g)) {
+    const page = Number.parseInt(m[1], 10);
+    const line = Number.parseInt(m[2], 10);
+    // basic sanity: line numbers are usually small
+    if (Number.isFinite(line) && line >= 0 && line <= 200) bump(page);
+  }
+
+  // clamp obviously impossible values
+  if (max > 20000) return 0;
+  return max;
 }
 
 work().catch((err) => {
