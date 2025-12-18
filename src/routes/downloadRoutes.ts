@@ -138,13 +138,20 @@ function enforcePageBounds(
   for (const row of rows) {
     const [label] = row;
     const pages = extractAllPages(label);
+    // If we can't parse a page number, keep the row as-is.
     if (!pages.length) {
       kept.push(row);
       continue;
     }
+    // Reject page 0 and anything beyond known max.
     const invalid = pages.some((p) => p < 1 || p > maxPage);
     if (invalid) {
-      if (!sawValidRow) continue;
+      // Once the model starts hallucinating out-of-range pages (often at the end),
+      // truncate the tail to avoid downstream pollution in PDFs/DOCX/preview.
+      if (!sawValidRow) {
+        // If the very first rows are bad (e.g. "p.0:1-25"), drop them and keep going.
+        continue;
+      }
       break;
     }
     sawValidRow = true;
