@@ -75,6 +75,28 @@ export function parseMarkdown(md: string) {
   const rows: string[][] = [];
   let seenRow = false;
 
+  const splitMarkdownTableRow = (
+    line: string
+  ): { firstCell: string; restCells: string[] } | null => {
+    // Accept common markdown table row shapes:
+    // - "| p.6:1-25, p.7:1-25 | testimony |"
+    // - "| p.6:1-25 | testimony | extra |"
+    if (!line.includes("|")) return null;
+    const stripped = line.replace(/^\|+/, "").replace(/\|+$/, "").trim();
+    const parts = stripped.split("|").map((p) => clean(p));
+    if (parts.length < 2) return null;
+    const first = (parts[0] || "").trim();
+    const rest = parts.slice(1).map((p) => String(p || "").trim());
+    if (
+      /^page\s*\(s\)$/i.test(first) ||
+      (/^page\s*number$/i.test(first) && rest[0] && /^testimony$/i.test(rest[0]))
+    ) {
+      return null;
+    }
+    if (first && rest.join("").trim()) return { firstCell: first, restCells: rest };
+    return null;
+  };
+
   md.split(/\r?\n/).forEach((raw) => {
     let trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith("```")) return;
@@ -83,9 +105,32 @@ export function parseMarkdown(md: string) {
     trimmed = clean(trimmed);
     if (!trimmed) return;
 
+    // Handle markdown table rows with leading pipes.
+    const pipeRow = splitMarkdownTableRow(trimmed);
+    if (pipeRow) {
+      const labelCell = pipeRow.firstCell;
+      const testimonyCell = pipeRow.restCells.join(" | ").trim();
+
+      // Extract one or more page tokens from the label cell
+      const pages: string[] = [];
+      let rest = labelCell.replace(/^\|+/, "").trim();
+      let m = rest.match(pageToken);
+      while (m) {
+        pages.push(m[0].replace(/\s+/g, " ").trim());
+        rest = rest.slice(m[0].length).trim();
+        rest = rest.replace(/^\s*[,|]+\s*/, "");
+        m = rest.match(pageToken);
+      }
+      if (pages.length) {
+        seenRow = true;
+        rows.push([pages.join(", "), testimonyCell || ""]);
+        return;
+      }
+    }
+
     // Capture one or more page tokens at the beginning
     const pages: string[] = [];
-    let rest = trimmed;
+    let rest = trimmed.replace(/^\|+/, "").trim();
     let m = rest.match(pageToken);
     while (m) {
       pages.push(m[0].replace(/\s+/g, " ").trim());
@@ -103,7 +148,6 @@ export function parseMarkdown(md: string) {
 
     if (!seenRow) {
       // Skip obvious table header lines
-      if (/^\|/.test(trimmed)) return;
       if (/^page\s*\(s\)\s*\|\s*testimony/i.test(trimmed)) return;
       if (/^page\s*number\s*\|\s*testimony/i.test(trimmed)) return;
       meta.push(trimmed);

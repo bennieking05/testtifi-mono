@@ -256,6 +256,22 @@ function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
   const rows: string[][] = [];
   let seenRow = false;
 
+  const splitMarkdownTableRow = (
+    line: string
+  ): { firstCell: string; restCells: string[] } | null => {
+    if (!line.includes("|")) return null;
+    const stripped = line.replace(/^\|+/, "").replace(/\|+$/, "").trim();
+    const parts = stripped.split("|").map((p) => clean(p));
+    if (parts.length < 2) return null;
+    const first = (parts[0] || "").trim();
+    const rest = parts.slice(1).map((p) => String(p || "").trim());
+    // Skip header-ish rows
+    if (/^page\s*\(s\)$/i.test(first) && rest[0] && /^testimony$/i.test(rest[0])) return null;
+    if (/^page\s*number$/i.test(first) && rest[0] && /^testimony$/i.test(rest[0])) return null;
+    if (first && rest.join("").trim()) return { firstCell: first, restCells: rest };
+    return null;
+  };
+
   mdText.split(/\r?\n/).forEach((raw) => {
     let trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith("```")) return;
@@ -264,11 +280,22 @@ function parseToRows(mdText: string): { meta: string[]; rows: string[][] } {
     trimmed = clean(trimmed);
     if (!trimmed) return;
 
-    const rowMatch = trimmed.match(pageRegex);
+    // Prefer parsing markdown table rows like: "| p.6:1-25 | testimony |"
+    const pipeRow = splitMarkdownTableRow(trimmed);
+    if (pipeRow) {
+      seenRow = true;
+      const label = pipeRow.firstCell.replace(/\s+/g, " ").trim();
+      const remainder = pipeRow.restCells.join(" | ").trim();
+      rows.push([label || "", remainder || ""]);
+      return;
+    }
+
+    const normalized = trimmed.replace(/^\|+/, "").trim();
+    const rowMatch = normalized.match(pageRegex);
     if (rowMatch) {
       seenRow = true;
       const label = rowMatch[0].replace(/\s+/g, " ").trim();
-      let remainder = trimmed.slice(rowMatch[0].length).trim();
+      let remainder = normalized.slice(rowMatch[0].length).trim();
       remainder = remainder.replace(/^[-–:|]\s*/, "").trim();
       rows.push([label || "", remainder || ""]);
       return;
