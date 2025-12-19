@@ -48,7 +48,9 @@ steps:
         echo "Getting GKE credentials for ${_CLUSTER} in ${_CLUSTER_LOCATION}..."
         gcloud container clusters get-credentials "${_CLUSTER}" --zone "${_CLUSTER_LOCATION}"
 
-        TARGET_NAMESPACE="${_NAMESPACE:-default}"
+        # NOTE: Cloud Build substitutions must be referenced as ${_NAMESPACE} (no bash default syntax),
+        # otherwise Cloud Build rejects the build as having "unused substitutions".
+        TARGET_NAMESPACE="${_NAMESPACE}"
         if [[ "${TARGET_BRANCH:-}" == "staging" ]]; then
           TARGET_NAMESPACE="staging"
         fi
