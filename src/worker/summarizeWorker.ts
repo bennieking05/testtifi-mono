@@ -596,10 +596,10 @@ async function work() {
       const pages = splitPages(transcript);
       const pdfPageCount = pages.length;
       const transcriptMaxPage = detectTranscriptMaxPage(transcript);
-      const totalTranscriptPages = Math.max(
+      const totalTranscriptPages = chooseTotalTranscriptPages({
         pdfPageCount,
-        transcriptMaxPage || 0
-      );
+        transcriptMaxPage,
+      });
       const chunks = groupPagesToChunks(pages);
       const legalMeta = extractLegalMetadata(transcript, {
         title: job.file?.title,
@@ -978,14 +978,20 @@ function detectTranscriptMaxPage(transcript: string): number {
     if (Number.isFinite(end)) maxFromRange = Math.max(maxFromRange, end);
   }
 
+  // 'p.239' / 'p.239:1-25'
+  for (const m of text.matchAll(/\bp\.\s*(\d{1,6})\b/gi)) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isFinite(n) && n <= 5000) maxFromPageWord = Math.max(maxFromPageWord, n);
+  }
+
   // 'Page 239'
-  for (const m of text.matchAll(/Page\s+(\d{1,6})/gi)) {
+  for (const m of text.matchAll(/\bPage\s+(\d{1,6})\b/gi)) {
     const n = Number.parseInt(m[1], 10);
     if (Number.isFinite(n) && n <= 5000) maxFromPageWord = Math.max(maxFromPageWord, n);
   }
 
   // '239:3' (page:line)
-  for (const m of text.matchAll(/(\d{1,6})\s*:\s*(\d{1,3})/g)) {
+  for (const m of text.matchAll(/\b(\d{1,6})\s*:\s*(\d{1,3})\b/g)) {
     const page = Number.parseInt(m[1], 10);
     const line = Number.parseInt(m[2], 10);
     // Deposition transcripts are typically 25 lines per page; be strict to avoid false positives.
@@ -996,6 +1002,33 @@ function detectTranscriptMaxPage(transcript: string): number {
 
   if (maxFromRange > 0) return maxFromRange;
   return Math.max(maxFromPageWord, maxFromPageLine);
+}
+
+function chooseTotalTranscriptPages(opts: {
+  pdfPageCount: number;
+  transcriptMaxPage: number;
+}): number {
+  const pdf = Math.max(0, opts.pdfPageCount || 0);
+  const tr = Math.max(0, opts.transcriptMaxPage || 0);
+
+  if (pdf <= 0) return tr;
+  if (tr <= 0) return pdf;
+
+  // If it's a single-page PDF, just trust the PDF.
+  if (pdf === 1) return 1;
+
+  // If transcript numbering looks like a trivial "Page 1" match across a multi-page PDF, ignore it.
+  if (tr === 1 && pdf > 1) return pdf;
+
+  // If it's effectively 1:1, use the PDF count.
+  if (Math.abs(tr - pdf) <= 2) return pdf;
+
+  // If transcript numbering is implausibly small compared to the PDF, it's likely a false positive.
+  const ratio = tr / pdf;
+  if (ratio < 0.6) return pdf;
+
+  // Otherwise, prefer transcript page numbering (covers multi-per-page scans and PDFs with extra non-transcript pages).
+  return tr;
 }
 
 work().catch((err) => {
