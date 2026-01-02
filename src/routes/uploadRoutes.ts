@@ -22,52 +22,7 @@ const allowedMime = new Set<string>([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
-/** wraps the DB work in a single transaction (create File + create SummaryJob) */
-async function createJobTx(
-  userId: string,
-  originalFileName: string,
-  fileUrl: string,
-  summaryName: string,
-  deponent: string,
-  notifyOnComplete: boolean
-) {
-  const fileId = randomUUID();
-
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // 1) create file record
-    const file = await tx.file.create({
-      data: {
-        id: fileId,
-        userId,
-        fileName: originalFileName,
-        fileUrl,
-        summaryFileName: null,
-        summaryUrl: null,
-        pages: 0,
-        deponent: deponent || null,
-        title: summaryName || originalFileName,
-      },
-    });
-
-    // 2) create summary job
-    const job = await tx.summaryJob.create({
-      data: {
-        userId,
-        fileName: originalFileName,
-        fileUrl,
-        fileId: file.id,
-        status: "queued",
-        totalPages: 0,
-        lastPageProcessed: 0,
-        notifyOnComplete,
-      },
-    });
-
-    return job;
-  });
-}
-
-/** Same as createJobTx but allows specifying the job ID upfront (for credit reservation) */
+/** Wraps the DB work in a single transaction (create File + create SummaryJob) with specified job ID */
 async function createJobTxWithId(
   jobId: string,
   userId: string,

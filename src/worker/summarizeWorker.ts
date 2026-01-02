@@ -925,7 +925,7 @@ async function work() {
           `[${job.id}] ⚠️ Judge validation found issues:\n${formatInstructionsForAdmin(judgeResults)}`
         );
         // Send async admin notification (don't await to avoid blocking)
-        sendJudgeFailureAlert(job.id, formatJudgeResultsForStorage(judgeResults)).catch((e) =>
+        sendJudgeFailureAlert(job.id, formatJudgeResultsForStorage(judgeResults)).catch((e: any) =>
           console.warn(`[${job.id}] Failed to send admin alert: ${e?.message || e}`)
         );
       }
