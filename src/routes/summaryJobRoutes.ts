@@ -6,6 +6,7 @@ import pdf from "pdf-parse";
 import mammoth from "mammoth";
 import { Storage } from "@google-cloud/storage";
 import path from "path";
+import { randomUUID } from "crypto";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -77,9 +78,14 @@ router.post(
         res.status(400).json({ error: "missing file or auth" });
         return;
       }
-      // Save file to GCS
-      await depositionBucket.file(file.originalname).save(file.buffer);
-      const fileUrl = `https://storage.googleapis.com/${depositionBucket.name}/${file.originalname}`;
+      // Save file to GCS under a unique object key (avoid overwriting other users' uploads).
+      const originalFileName = path.basename(file.originalname || "upload");
+      const objectKey = `${userId}/${randomUUID()}-${originalFileName}`;
+      await depositionBucket.file(objectKey).save(file.buffer);
+      const fileUrl = `https://storage.googleapis.com/${depositionBucket.name}/${objectKey
+        .split("/")
+        .map((seg) => encodeURIComponent(seg))
+        .join("/")}`;
 
       // Page count for PDF/DOC/DOCX
       const ext = path.extname(file.originalname).toLowerCase();

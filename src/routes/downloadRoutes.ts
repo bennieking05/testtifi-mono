@@ -20,6 +20,7 @@ import PDFDocument from "pdfkit";
 import stream from "stream";
 import { loadLogo } from "../utils/logo";
 import { normalizeUnknownString, resolveSummaryMetadata } from "../utils/summaryMetadata";
+import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -179,6 +180,7 @@ function enforcePageBounds(
 
   const kept: Array<[string, string]> = [];
   let sawValidRow = false;
+  let invalidStreak = 0;
   for (const row of rows) {
     const [label] = row;
     const pages = extractAllPages(label);
@@ -190,15 +192,15 @@ function enforcePageBounds(
     // Reject page 0 and anything beyond known max.
     const invalid = pages.some((p) => p < 1 || p > maxPage);
     if (invalid) {
-      // Once the model starts hallucinating out-of-range pages (often at the end),
-      // truncate the tail to avoid downstream pollution in PDFs/DOCX/preview.
-      if (!sawValidRow) {
-        // If the very first rows are bad (e.g. "p.0:1-25"), drop them and keep going.
-        continue;
-      }
-      break;
+      if (!sawValidRow) continue; // drop leading p.0 etc
+      // Be tolerant: sometimes the model emits a few out-of-range rows in the middle.
+      // Only truncate if we see a sustained invalid tail.
+      invalidStreak++;
+      if (invalidStreak >= 10) break;
+      continue;
     }
     sawValidRow = true;
+    invalidStreak = 0;
     kept.push(row);
   }
   return kept;
@@ -246,10 +248,19 @@ router.get(
       let deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
       sourceFileName = metadata.sourceFileName || sourceFileName;
       coverTitle = metadata.caseTitle || coverTitle;
-      const depositionDate: string | null = normalizeUnknownString(metadata.depositionDate);
+      const depositionDateRaw: string | null = normalizeUnknownString(metadata.depositionDate);
+      // If already in human-readable format (e.g., "July 7, 2022"), use as-is to avoid timezone shift.
+      // Only reformat if it's a machine format like ISO date.
+      const isHumanReadable = depositionDateRaw && /^[A-Za-z]+\s+\d{1,2},?\s+\d{4}$/.test(depositionDateRaw.trim());
+      const depositionDateDisplay = isHumanReadable
+        ? depositionDateRaw
+        : (parseLooseDate(depositionDateRaw) ? formatDateInTimeZoneMDY(parseLooseDate(depositionDateRaw)!) : (depositionDateRaw || null));
+      // Fallback chain for page count: metadata.totalPages > job.totalPages > job.file.pages
       const normalizedPages =
         metadata.totalPages && metadata.totalPages > 0
           ? metadata.totalPages
+          : job.totalPages && job.totalPages > 0
+          ? job.totalPages
           : job.file?.pages
           ? Number(job.file.pages)
           : undefined;
@@ -281,14 +292,27 @@ router.get(
         coverTitle,
         sourceFileName,
         pages: job.file?.pages,
-        date: new Date(job.createdAt || new Date()).toLocaleDateString()
+        date: formatDateInTimeZoneMDY(job.createdAt || new Date())
       });
 
       // TXT — clean text format with consistent title page matching DOCX format
       if (format === "txt") {
-        const uploadDate = new Date(metadata.uploadDate || job.createdAt || new Date()).toLocaleDateString();
-        const downloadDate = new Date().toLocaleDateString();
-        const dateForCover = depositionDate || uploadDate;
+        const uploadDate = formatDateInTimeZoneMDY(metadata.uploadDate || job.createdAt || new Date());
+        const downloadDate = formatDateInTimeZoneMDY(new Date());
+
+        // Build warnings section if any judge failed
+        const warningsSection: string[] = [];
+        if (metadata.judgeResults && !metadata.judgeResults.allPassed) {
+          warningsSection.push("", "⚠️ VALIDATION WARNINGS:", "-".repeat(30));
+          for (const judge of metadata.judgeResults.judges) {
+            if (!judge.passed || judge.warnings.length > 0) {
+              for (const w of judge.warnings) {
+                warningsSection.push(`• [${judge.name}] ${w}`);
+              }
+            }
+          }
+          warningsSection.push("");
+        }
         
         const titlePage = [
           titleOfDocument || "DEPOSITION SUMMARY",
@@ -297,9 +321,10 @@ router.get(
           `Case Title: ${coverTitle}`,
           `Source File: ${sourceFileName}`,
           ...(normalizedPages ? [`Pages: ${normalizedPages}`] : []),
-          `Date: ${dateForCover}`,
+          `Date of Deposition: ${depositionDateDisplay || "[Unknown]"}`,
           `Upload Date: ${uploadDate}`,
           `Download Date: ${downloadDate}`,
+          ...warningsSection,
           "",
           "=".repeat(50),
           "",
@@ -396,26 +421,64 @@ router.get(
                   : []),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
-                  children: [new TextRun({ text: "Date:", bold: true }), new TextRun(` ${depositionDate || new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
+                  children: [
+                    new TextRun({ text: "Date of Deposition:", bold: true }),
+                    new TextRun(
+                      ` ${depositionDateDisplay || "[Unknown]"}`
+                    ),
+                  ],
                   alignment: "left",
                 }),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
-                  children: [new TextRun({ text: "Upload Date:", bold: true }), new TextRun(` ${new Date(job.createdAt || new Date()).toLocaleDateString()}`)],
+                  children: [
+                    new TextRun({ text: "Upload Date:", bold: true }),
+                    new TextRun(` ${formatDateInTimeZoneMDY(job.createdAt || new Date())}`),
+                  ],
                   alignment: "left",
                 }),
                 new Paragraph({ children: [], spacing: { before: 80 } }),
                 new Paragraph({
-                  children: [new TextRun({ text: "Download Date:", bold: true }), new TextRun(` ${new Date().toLocaleDateString()}`)],
+                  children: [
+                    new TextRun({ text: "Download Date:", bold: true }),
+                    new TextRun(` ${formatDateInTimeZoneMDY(new Date())}`),
+                  ],
                   alignment: "left",
                 }),
+                // Add validation warnings if any
+                ...(() => {
+                  if (!metadata.judgeResults || metadata.judgeResults.allPassed) return [];
+                  const warningParas: Paragraph[] = [
+                    new Paragraph({ children: [], spacing: { before: 200 } }),
+                    new Paragraph({
+                      children: [
+                        new TextRun({ text: "⚠️ Validation Warnings:", bold: true, color: "856404" }),
+                      ],
+                      alignment: "left",
+                    }),
+                  ];
+                  for (const judge of metadata.judgeResults.judges) {
+                    if (!judge.passed || judge.warnings.length > 0) {
+                      for (const w of judge.warnings) {
+                        warningParas.push(
+                          new Paragraph({
+                            children: [
+                              new TextRun({ text: `• [${judge.name}] ${w}`, color: "856404" }),
+                            ],
+                            alignment: "left",
+                            spacing: { before: 60 },
+                          })
+                        );
+                      }
+                    }
+                  }
+                  return warningParas;
+                })(),
                 new Paragraph({ children: [], pageBreakBefore: true }),
                 // Body metadata — show only curated items
                 ...(() => {
                   const paras: Paragraph[] = [];
-                  if (depositionDate) {
-                    paras.push(new Paragraph(`Date of Deposition: ${depositionDate}`));
-                  }
+                  if (depositionDateDisplay) paras.push(new Paragraph(`Date of Deposition: ${depositionDateDisplay}`));
                   return paras;
                 })(),
                 new Paragraph({ children: [], spacing: { before: 160 } }),
@@ -533,7 +596,7 @@ router.get(
           }
           
           pdf.font("Times-Roman").fontSize(12);
-          const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
+          const dateLine = `Date of Deposition: ${depositionDateDisplay || "[Unknown]"}`;
           contentH += pdf.heightOfString(dateLine, lineOpts) + 2;
 
           const startY = top + Math.max(0, (usableH - contentH) / 2);
@@ -562,15 +625,32 @@ router.get(
             pdf.moveDown(0.5);
           }
 
-          const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
-          const downloadDate = new Date().toLocaleDateString();
-          const dateForCover = depositionDate || uploadDate;
+          const uploadDate = formatDateInTimeZoneMDY(job.createdAt || new Date());
+          const downloadDate = formatDateInTimeZoneMDY(new Date());
           
-          pdf.font("Times-Roman").fontSize(14).text(`Date: ${dateForCover}` , { align: "left" });
+          pdf.font("Times-Roman")
+            .fontSize(14)
+            .text(`Date of Deposition: ${depositionDateDisplay || "[Unknown]"}` , { align: "left" });
           pdf.moveDown(0.5);
           pdf.font("Times-Roman").fontSize(14).text(`Upload Date: ${uploadDate}` , { align: "left" });
           pdf.moveDown(0.5);
           pdf.font("Times-Roman").fontSize(14).text(`Download Date: ${downloadDate}` , { align: "left" });
+
+          // Add validation warnings if any
+          if (metadata.judgeResults && !metadata.judgeResults.allPassed) {
+            pdf.moveDown(1);
+            pdf.font("Times-Bold").fontSize(12).fillColor("#856404").text("⚠️ Validation Warnings:", { align: "left" });
+            pdf.font("Times-Roman").fontSize(11).fillColor("#856404");
+            for (const judge of metadata.judgeResults.judges) {
+              if (!judge.passed || judge.warnings.length > 0) {
+                for (const w of judge.warnings) {
+                  pdf.moveDown(0.3);
+                  pdf.text(`• [${judge.name}] ${w}`, { align: "left" });
+                }
+              }
+            }
+            pdf.fillColor("black");
+          }
         } catch {}
 
         // New page for body
@@ -579,7 +659,7 @@ router.get(
         // Metadata — show only clean extracted items
         pdf.font("Times-Roman").fontSize(12);
         const details: string[] = [];
-        if (depositionDate) details.push(`Date of Deposition: ${depositionDate}`);
+        if (depositionDateDisplay) details.push(`Date of Deposition: ${depositionDateDisplay}`);
         details.forEach((l) => pdf.text(l));
         if (details.length) pdf.moveDown(0.5);
         

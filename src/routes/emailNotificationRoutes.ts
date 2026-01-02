@@ -54,6 +54,7 @@ function enforcePageBounds(
   if (!maxPage) return rows;
   const kept: Array<[string, string]> = [];
   let sawValid = false;
+  let invalidStreak = 0;
   for (const row of rows) {
     const pages = extractAllPages(row[0]);
     if (!pages.length) {
@@ -62,10 +63,13 @@ function enforcePageBounds(
     }
     const invalid = pages.some((p) => p < 1 || p > maxPage);
     if (invalid) {
-      if (!sawValid) continue;
-      break;
+      if (!sawValid) continue; // drop leading p.0 etc
+      invalidStreak++;
+      if (invalidStreak >= 10) break; // truncate hallucinated tail
+      continue;
     }
     sawValid = true;
+    invalidStreak = 0;
     kept.push(row);
   }
   return kept;

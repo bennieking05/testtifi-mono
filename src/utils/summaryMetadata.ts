@@ -3,6 +3,13 @@ import type { File as PrismaFile, SummaryJob } from "@prisma/client";
 
 const METADATA_PREFIX = "summary-metadata-";
 
+export interface JudgeResultSummary {
+  name: string;
+  passed: boolean;
+  warnings: string[];
+  instructions: string[];
+}
+
 export interface SummaryMetadata {
   jobId: string;
   caseCaption: string;
@@ -13,6 +20,11 @@ export interface SummaryMetadata {
   sourceFileName: string;
   totalPages: number;
   uploadDate: string;
+  // Judge validation results (optional for backwards compatibility)
+  judgeResults?: {
+    allPassed: boolean;
+    judges: JudgeResultSummary[];
+  };
 }
 
 export function normalizeUnknownString(value?: string | null): string | null {

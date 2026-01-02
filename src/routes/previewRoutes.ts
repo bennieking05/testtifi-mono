@@ -9,6 +9,7 @@ import {
   resolveSummaryMetadata,
   renderMetadataMarkdown,
 } from "../utils/summaryMetadata";
+import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -55,9 +56,12 @@ router.get(
       const { meta, rows } = parseToRows(cleaned);
       const metadata = await resolveSummaryMetadata(bucket, job as any);
       const metadataMarkdown = renderMetadataMarkdown(metadata);
+      // Fallback chain for page count: metadata.totalPages > job.totalPages > job.file.pages
       const maxPage =
         (metadata.totalPages && metadata.totalPages > 0
           ? metadata.totalPages
+          : job.totalPages && job.totalPages > 0
+          ? job.totalPages
           : job.file?.pages
           ? Number(job.file.pages)
           : undefined) || undefined;
@@ -165,15 +169,23 @@ router.get(
         metadata.caseTitle ||
         job.file?.title ||
         (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
+      // Fallback chain for cover page display: metadata.totalPages > job.totalPages > job.file.pages
       const coverPages =
         (metadata.totalPages && metadata.totalPages > 0
           ? String(metadata.totalPages)
+          : job.totalPages && job.totalPages > 0
+          ? String(job.totalPages)
           : job.file?.pages ?? "") || "";
       const logoDataUri = getLogoDataUri();
       const logoHtml = logoDataUri ? `<img src="${logoDataUri}" alt="Testifi AI Logo" />` : "";
 
       // Extract deposition date from metadata
-      const depositionDate = normalizeUnknownString(metadata.depositionDate);
+      const depositionDateRaw = normalizeUnknownString(metadata.depositionDate);
+      // If already in human-readable format (e.g., "July 7, 2022"), use as-is to avoid timezone shift.
+      const isHumanReadable = depositionDateRaw && /^[A-Za-z]+\s+\d{1,2},?\s+\d{4}$/.test(depositionDateRaw.trim());
+      const depositionDateDisplay = isHumanReadable
+        ? depositionDateRaw
+        : (parseLooseDate(depositionDateRaw) ? formatDateInTimeZoneMDY(parseLooseDate(depositionDateRaw)!) : (depositionDateRaw || ""));
 
       // Extract deponent name
       const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
@@ -181,9 +193,24 @@ router.get(
       // Construct enhanced title to match DOCX format
       let titleOfDocument = `Transcript Summary of ${deponentName}`;
       
-      const uploadDate = new Date(metadata.uploadDate || job.createdAt || new Date()).toLocaleDateString();
-      const downloadDate = new Date().toLocaleDateString();
-      const dateForCover = depositionDate || uploadDate;
+      const uploadDate = formatDateInTimeZoneMDY(metadata.uploadDate || job.createdAt || new Date());
+      const downloadDate = formatDateInTimeZoneMDY(new Date());
+
+      // Build judge warnings HTML if any
+      let warningsHtml = "";
+      if (metadata.judgeResults && !metadata.judgeResults.allPassed) {
+        const warningsList = metadata.judgeResults.judges
+          .filter((j) => !j.passed || j.warnings.length > 0)
+          .flatMap((j) => j.warnings.map((w) => `<li><strong>${escapeHtml(j.name)}:</strong> ${escapeHtml(w)}</li>`))
+          .join("");
+        if (warningsList) {
+          warningsHtml = `
+    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 12px; margin: 20px 0;">
+      <strong style="color: #856404;">⚠️ Validation Warnings:</strong>
+      <ul style="margin: 8px 0 0 0; padding-left: 20px; color: #856404;">${warningsList}</ul>
+    </div>`;
+        }
+      }
       
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`<!doctype html>
@@ -198,10 +225,10 @@ router.get(
       <p><strong>Case Title:</strong> ${coverTitle}</p>
       <p><strong>Source File:</strong> ${job.fileName || "Unknown"}</p>
       ${coverPages ? `<p><strong>Pages:</strong> ${coverPages}</p>` : ""}
-      <p><strong>Date:</strong> ${dateForCover}</p>
+      <p><strong>Date of Deposition:</strong> ${depositionDateDisplay || "[Unknown]"}</p>
       <p><strong>Upload Date:</strong> ${uploadDate}</p>
       <p><strong>Download Date:</strong> ${downloadDate}</p>
-    </div>
+    </div>${warningsHtml}
   </div>
   <div class="page">${htmlBody}</div>
 </body>
@@ -329,6 +356,7 @@ function enforcePageBounds(
 
   const kept: Array<[string, string]> = [];
   let sawValidRow = false;
+  let invalidStreak = 0;
   for (const [p, s] of rows) {
     const pages = extractAllPages(p);
     if (!pages.length) {
@@ -337,10 +365,13 @@ function enforcePageBounds(
     }
     const invalid = pages.some((n) => n < 1 || n > maxPage);
     if (invalid) {
-      if (!sawValidRow) continue;
-      break;
+      if (!sawValidRow) continue; // drop leading p.0 etc
+      invalidStreak++;
+      if (invalidStreak >= 10) break; // truncate hallucinated tail
+      continue;
     }
     sawValidRow = true;
+    invalidStreak = 0;
     kept.push([p, s]);
   }
   return kept;

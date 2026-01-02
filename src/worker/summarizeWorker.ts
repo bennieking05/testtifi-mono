@@ -27,6 +27,14 @@ import {
   renderMetadataMarkdown,
   saveSummaryMetadata,
 } from "../utils/summaryMetadata";
+import {
+  runAllJudges,
+  formatJudgeResultsForStorage,
+  formatInstructionsForAdmin,
+  JudgeContext,
+} from "./judges";
+import { sendJudgeFailureAlert } from "../utils/adminNotifications";
+import { refundCreditsForSummary } from "../routes/billingRoutes";
 
 const prisma = new PrismaClient();
 const storage = new Storage();
@@ -84,19 +92,47 @@ async function extractFullText(
 
     const parsed = await pdf(buffer, { pagerender: renderPage });
     const trimmed = parsed.text.trim();
-    // Check for meaningful text (not just whitespace/newlines)
+    // Check for meaningful text (not just whitespace/newlines).
+    // IMPORTANT: Some PDFs are "mixed": a few text pages + many scanned image pages.
+    // In those cases, total non-whitespace can exceed a naive threshold due to headers/footers,
+    // but most pages still have near-zero extractable text. Detect that and fall back to Vision.
     const nonWhitespace = trimmed.replace(/\s/g, "").length;
-    // Account for explicit markers in length check (approx 15 chars per page)
-    const markerOverhead = (parsed.numpages || 1) * 20;
-    
-    if (nonWhitespace > 100 + markerOverhead) {
+    const pageCount = parsed.numpages || 1;
+
+    // Per-page density check (requires our injected markers).
+    const parts = parsed.text.split(/---PAGE\s+\d+---\s*\r?\n/i);
+    const pageTexts = parts.length > 1 ? parts.slice(1) : [];
+    const pageNonWs = pageTexts.map((t: string) => t.replace(/\s/g, "").length);
+    const sparseThreshold = 40; // chars; headers-only pages will be far below this
+    const sparseCount = pageNonWs.filter((n: number) => n < sparseThreshold).length;
+    const sparseRatio = pageNonWs.length ? sparseCount / pageNonWs.length : 0;
+    const avgNonWsPerPage = pageNonWs.length
+      ? Math.round(
+          pageNonWs.reduce((a: number, b: number) => a + b, 0) / pageNonWs.length
+        )
+      : Math.round(nonWhitespace / Math.max(1, pageCount));
+
+    // Account for explicit markers in length check (approx overhead per page)
+    const markerOverhead = pageCount * 20;
+
+    const looksTextBased =
+      nonWhitespace > 100 + markerOverhead &&
+      // If most pages are sparse, treat as scanned/mixed.
+      !(pageCount >= 10 && (sparseRatio >= 0.6 || avgNonWsPerPage < 80));
+
+    if (looksTextBased) {
       console.log(
-        `[${jobId}] PDF text extraction successful: ${trimmed.length} chars (${nonWhitespace} non-whitespace)`
+        `[${jobId}] PDF text extraction successful: ${trimmed.length} chars (${nonWhitespace} non-whitespace), avg/page≈${avgNonWsPerPage}, sparseRatio=${sparseRatio.toFixed(
+          2
+        )}`
       );
       return parsed.text;
     }
+
     console.log(
-      `[${jobId}] PDF appears to be scanned/image-based (only ${nonWhitespace} chars), using Vision API...`
+      `[${jobId}] PDF appears scanned/mixed; using Vision OCR. nonWs=${nonWhitespace}, pages=${pageCount}, avg/page≈${avgNonWsPerPage}, sparseRatio=${sparseRatio.toFixed(
+        2
+      )}`
     );
     return extractTextWithVision(gcsUri, jobId);
   }
@@ -109,8 +145,17 @@ async function extractFullText(
   return buffer.toString("utf-8");
 }
 
-async function extractTextWithVision(gcsUri: string, jobId: string): Promise<string> {
-  const destinationUri = `gs://${summaryBucket.name}/vision-output/${jobId}/`;
+async function extractTextWithVision(
+  gcsUri: string,
+  jobId: string,
+  opts: { pages?: number[] } = {}
+): Promise<string> {
+  // Use a unique prefix per invocation so parallel retries or probes don't collide.
+  const invocationId = `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  const destinationUri = `gs://${summaryBucket.name}/vision-output/${jobId}/${invocationId}/`;
+  const pages = Array.isArray(opts.pages)
+    ? Array.from(new Set(opts.pages.filter((n) => Number.isFinite(n) && n >= 1))).sort((a, b) => a - b)
+    : undefined;
   const [operation] = await visionClient.asyncBatchAnnotateFiles({
     requests: [
       {
@@ -119,13 +164,14 @@ async function extractTextWithVision(gcsUri: string, jobId: string): Promise<str
           mimeType: "application/pdf",
         },
         features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+        ...(pages && pages.length ? { pages } : {}),
         outputConfig: { gcsDestination: { uri: destinationUri }, batchSize: 1 },
       },
     ],
   });
   await operation.promise();
   const [files] = await summaryBucket.getFiles({
-    prefix: `vision-output/${jobId}/`,
+    prefix: `vision-output/${jobId}/${invocationId}/`,
   });
   const jsonFiles = files.filter((f) => f.name.toLowerCase().endsWith(".json"));
   // Sort files to ensure page order (output-1-to-1.json, output-2-to-2.json, etc)
@@ -369,55 +415,94 @@ function extractLegalMetadata(
   };
 
   let extractedDate: string | null = null;
+  const extractDateToken = (raw: string): string | null => {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    // Prefer explicit month-name dates first
+    const m1 = s.match(
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?(?:,)?\s+\d{4}\b/i
+    );
+    if (m1) return m1[0].replace(/(\d)(st|nd|rd|th)\b/i, "$1");
+    // Numeric dates
+    const m2 = s.match(/\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/);
+    if (m2) return m2[0];
+    // ISO
+    const m3 = s.match(/\b\d{4}-\d{2}-\d{2}\b/);
+    if (m3) return m3[0];
+    return null;
+  };
 
   // Special-case: "commencing ... on the 7th day of July, A.D., 2022"
   // Normalize to "July 7, 2022".
+  // Handle line breaks and embedded line numbers in transcript text (e.g., "7th day of\n15July")
+  const cleanedHeaderForDate = header.replace(/\n\d{1,2}\s*/g, " ").replace(/\s+/g, " ");
+  
+  // Ordinal date patterns - match various formats:
+  // - "on the 7th day of July, A.D., 2022"
+  // - "the 7th day of July, 2022"
+  // - "7th day of July, A.D., 2022"
   const ordinalDayOfMonth =
-    /\b(?:on\s+the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.D\.,?\s*)?(\d{4})\b/i;
-  const ordMatch = header.match(ordinalDayOfMonth);
+    /\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.?\s*D\.?,?\s*)?(\d{4})\b/i;
+  const ordMatch = cleanedHeaderForDate.match(ordinalDayOfMonth);
   if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
     const day = Number.parseInt(ordMatch[1], 10);
     const month = ordMatch[2];
     const year = ordMatch[3];
     if (Number.isFinite(day) && day >= 1 && day <= 31) {
       extractedDate = `${month} ${day}, ${year}`;
+      console.log(`[DateExtraction] Found ordinal date: "${extractedDate}"`);
     }
   }
 
   // Prefer explicit "Date of Deposition" / "Deposition Date" patterns.
+  // Also check for "TAKEN" which appears on INDEX pages
   const explicitDatePatterns = extractedDate
     ? []
     : [
     /\bDate\s+of\s+Deposition\s*[:\-]\s*([^\n\r]+)/i,
     /\bDeposition\s+Date\s*[:\-]\s*([^\n\r]+)/i,
+    /\bDate\s+of\s+Examination\s*[:\-]\s*([^\n\r]+)/i,
     /\bDate\s*[:\-]\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
     /\bDate\s*[:\-]\s*(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    /\bDate\s*[:\-]\s*(\d{1,2}-\d{1,2}-\d{4})\b/i,
     /\bTaken\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
     /\bTaken\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    /\bTaken\s+on\s+(\d{1,2}-\d{1,2}-\d{4})\b/i,
     /\bHeld\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
     /\bHeld\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    /\bHeld\s+on\s+(\d{1,2}-\d{1,2}-\d{4})\b/i,
+    // INDEX page patterns: "TAKEN July 7, 2022" or "TAKEN: July 7, 2022"
+    /\bTAKEN[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i,
+    /\bTAKEN[:\s]+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    // Commencing patterns: "commencing July 7, 2022"
+    /\bcommencing\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i,
+    /\bcommencing\s+(?:on\s+)?(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
   ];
   for (const pattern of explicitDatePatterns) {
-    const match = header.match(pattern);
+    const match = cleanedHeaderForDate.match(pattern);
     if (match?.[1]) {
-      extractedDate = match[1].trim();
-      break;
+      const extracted = extractDateToken(match[1]) || match[1].trim();
+      if (extracted) {
+        extractedDate = extracted;
+        console.log(`[DateExtraction] Found explicit date pattern: "${extractedDate}"`);
+        break;
+      }
     }
   }
 
   // Fallback: search for a plausible date near the top of the transcript.
   if (!extractedDate) {
-    const dateRegex =
-      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i;
-    const topSlice = header;
-    extractedDate =
-      topSlice.match(dateRegex)?.[0] ||
-      topSlice.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/)?.[0] ||
-      topSlice.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0] ||
-      null;
+    const topSlice = cleanedHeaderForDate;
+    extractedDate = extractDateToken(topSlice);
+    if (extractedDate) {
+      console.log(`[DateExtraction] Found date via fallback: "${extractedDate}"`);
+    }
   }
 
   const date = normalizeUnknown(extractedDate) || "[Unknown]";
+  if (date === "[Unknown]") {
+    console.log(`[DateExtraction] No date found in header`);
+  }
 
   return {
     caseCaption: caption,
@@ -446,9 +531,16 @@ Produce a comprehensive PAGE-LINE deposition summary for pages ${chunk.start}–
 
 ${metaSection}
 
-Output ONLY Markdown table rows with EXACTLY two columns: Page Number | Testimony.
+CRITICAL COVERAGE REQUIREMENT:
+- You MUST cover the entire range from ${chunk.start} through ${chunk.end} with NO GAPS.
+- Your rows must progress forward through the range; do not jump around or cherry-pick.
+- The union of your page ranges must fully cover ${chunk.start}–${chunk.end}.
+
+OUTPUT FORMAT (STRICT):
+- Output ONLY Markdown table rows with EXACTLY two columns: Page(s) | Testimony
 - No header row, rows only
-- Use page ranges (e.g., "12", "12-13", "15-16") in the first column
+- First column MUST use transcript page-line format like: "p.12:1-25, p.13:1-25, p.14:1-10"
+- Each row should span 3-5 transcript pages when topics are related (compression), but you must still cover ALL pages in the chunk.
 - For each page/section, write 3-6 complete sentences capturing:
   * The main topic or subject matter
   * All specific names, titles, entities, dates, and figures mentioned
@@ -466,7 +558,8 @@ Continue the PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end
 
 Do NOT repeat metadata. Output ONLY additional Markdown table rows with two columns (Page Number | Testimony).
 - No header row, rows only
-- Use page ranges in the first column
+- You MUST cover the entire range from ${chunk.start} through ${chunk.end} with NO GAPS (collectively across your rows)
+- First column MUST use transcript page-line format like: "p.12:1-25, p.13:1-25"
 - Maintain the same comprehensive, detailed style:
   * 3-6 complete sentences per entry for substantive testimony
   * All specific names, dates, figures, entities
@@ -570,6 +663,7 @@ async function work() {
         userId: true,
         createdAt: true,
         fileName: true,
+        fileUrl: true,
         notifyOnComplete: true,
         file: { select: { title: true, deponent: true, pages: true } },
       },
@@ -590,21 +684,139 @@ async function work() {
     }
 
     try {
-      const [buf] = await depositionBucket.file(job.fileName).download();
-      const gcsUri = `gs://${depositionBucket.name}/${job.fileName}`;
+      const objectKeyFromUrl = (url: string | null | undefined): string | null => {
+        if (!url) return null;
+        try {
+          const u = new URL(url);
+          let key = decodeURIComponent(u.pathname.replace(/^\//, ""));
+          // Support both URL styles:
+          // - https://storage.googleapis.com/<bucket>/<object>
+          // - https://<bucket>.storage.googleapis.com/<object>
+          if (key.startsWith(`${depositionBucket.name}/`)) {
+            key = key.slice(depositionBucket.name.length + 1);
+          }
+          return key || null;
+        } catch {
+          return null;
+        }
+      };
+      const depositionObjectKey = objectKeyFromUrl(job.fileUrl) || job.fileName;
+      const [buf] = await depositionBucket.file(depositionObjectKey).download();
+      const gcsUri = `gs://${depositionBucket.name}/${depositionObjectKey}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
       const pdfPageCount = pages.length;
-      const transcriptMaxPage = detectTranscriptMaxPage(transcript);
-      const totalTranscriptPages = chooseTotalTranscriptPages({
-        pdfPageCount,
-        transcriptMaxPage,
-      });
+      let transcriptMaxPage = detectTranscriptMaxPage(transcript);
+      const filePagesHintRaw = job.file?.pages;
+      const filePagesHint =
+        typeof filePagesHintRaw === "number" && Number.isFinite(filePagesHintRaw) && filePagesHintRaw > 0
+          ? filePagesHintRaw
+          : null;
+
+      const debugJobId = process.env.DEBUG_SUMMARY_JOB_ID;
+      const debugThisJob = debugJobId && debugJobId === job.id;
+      // If we couldn't detect internal transcript page numbering from extracted text,
+      // run a cheap Vision OCR probe on the last few *PDF* pages to recover "Page X of Y"/page-line headers.
+      if (!transcriptMaxPage || transcriptMaxPage <= 0) {
+        try {
+          const tailPages = Array.from({ length: 8 }, (_, i) => pdfPageCount - i).filter((n) => n >= 1);
+          const ocrTail = await extractTextWithVision(gcsUri, `${job.id}-pagecount`, { pages: tailPages });
+
+          // Collect candidate page numbers from OCR and choose a robust max.
+          // Multi-up transcripts often have ~2 transcript pages per PDF page.
+          const candidates: number[] = [];
+          for (const m of ocrTail.matchAll(/\b(?:Page|Pg\.?)\s+(\d{1,6})\b/gi)) {
+            const n = Number.parseInt(m[1], 10);
+            if (Number.isFinite(n) && n >= 1 && n <= 5000) candidates.push(n);
+          }
+          // Also consider p.X tokens
+          for (const m of ocrTail.matchAll(/\bp\.\s*(\d{1,6})(?:\b|:)/gi)) {
+            const n = Number.parseInt(m[1], 10);
+            if (Number.isFinite(n) && n >= 1 && n <= 5000) candidates.push(n);
+          }
+
+          const pickRobustMax = (nums: number[]) => {
+            const filtered = nums.filter((n) => n >= 1 && n <= Math.max(5000, pdfPageCount * 6));
+            if (!filtered.length) return 0;
+            const counts = new Map<number, number>();
+            for (const n of filtered) counts.set(n, (counts.get(n) || 0) + 1);
+            const expected = pdfPageCount * 2; // multi-up heuristic
+            const frequent = Array.from(counts.entries())
+              .filter(([, c]) => c >= 2)
+              .map(([n]) => n);
+            const pool = frequent.length ? frequent : Array.from(counts.keys());
+            pool.sort((a, b) => {
+              const da = Math.abs(a - expected);
+              const db = Math.abs(b - expected);
+              if (da !== db) return da - db; // closer to expected first
+              return b - a; // then prefer larger
+            });
+            return pool[0] || 0;
+          };
+
+          const ocrGuess = pickRobustMax(candidates);
+          if (ocrGuess && ocrGuess > 0) transcriptMaxPage = ocrGuess;
+        } catch (e) {
+          console.warn(`[${job.id}] Vision page-count probe failed; continuing without it`);
+        }
+      }
+
+      const totalTranscriptPages =
+        // Only trust File.pages as a hint when it matches the PDF page count (single-page-per-page transcripts).
+        // This prevents poisoned DB values from forcing wrong totals.
+        filePagesHint && Math.abs(filePagesHint - pdfPageCount) <= 2
+          ? filePagesHint
+          : chooseTotalTranscriptPages({
+              pdfPageCount,
+              transcriptMaxPage,
+            });
+
+      if (debugThisJob) {
+        const lens = pages.map((p) => (p.text || "").replace(/\s/g, "").length);
+        const emptyCount = lens.filter((n) => n < 40).length;
+        const avg = lens.length
+          ? Math.round(lens.reduce((a, b) => a + b, 0) / lens.length)
+          : 0;
+        console.log(
+          `[${job.id}] DEBUG page stats: pdfPageCount=${pdfPageCount}, transcriptMaxPage=${transcriptMaxPage}, totalTranscriptPages=${totalTranscriptPages}, avgNonWsPerPage≈${avg}, emptyRatio=${(
+            emptyCount / Math.max(1, lens.length)
+          ).toFixed(2)}`
+        );
+      }
+
       const chunks = groupPagesToChunks(pages);
-      const legalMeta = extractLegalMetadata(transcript, {
+      let legalMeta = extractLegalMetadata(transcript, {
         title: job.file?.title,
         deponent: job.file?.deponent || undefined,
       });
+      // If deposition date wasn't extractable from text (common when cover page is an image),
+      // run a small Vision probe on the first few PDF pages to recover it.
+      if (!legalMeta.depositionDate || /^\[?\s*unknown\s*\]?$/i.test(legalMeta.depositionDate)) {
+        try {
+          const headPages = [1, 2, 3].filter((n) => n <= pdfPageCount);
+          const ocrHead = await extractTextWithVision(gcsUri, `${job.id}-metadata`, { pages: headPages });
+          const probed = extractLegalMetadata(`${ocrHead}\n${transcript}`, {
+            title: job.file?.title,
+            deponent: job.file?.deponent || undefined,
+          });
+          // Keep any already-good fields, but adopt probed depositionDate if it improves.
+          if (
+            probed.depositionDate &&
+            !/^\[?\s*unknown\s*\]?$/i.test(probed.depositionDate)
+          ) {
+            legalMeta = { ...legalMeta, depositionDate: probed.depositionDate };
+          }
+          if (
+            (!legalMeta.deponent || /^\[?\s*unknown\s*\]?$/i.test(legalMeta.deponent)) &&
+            probed.deponent &&
+            !/^\[?\s*unknown\s*\]?$/i.test(probed.deponent)
+          ) {
+            legalMeta = { ...legalMeta, deponent: probed.deponent };
+          }
+        } catch (e) {
+          console.warn(`[${job.id}] Vision metadata probe failed; continuing without it`);
+        }
+      }
       const metadata: SummaryMetadata = {
         jobId: job.id,
         caseCaption: legalMeta.caseCaption,
@@ -627,11 +839,8 @@ async function work() {
             where: { id: job.id },
             data: { totalPages: pageCount },
           });
-          // Also update File.pages for consistent display throughout UI
-          await prisma.file.updateMany({
-            where: { fileName: job.fileName, userId: job.userId },
-            data: { pages: pageCount },
-          });
+          // IMPORTANT: Do NOT overwrite File.pages here. File.pages is a file-level property (often PDF page count)
+          // and can be "poisoned" by false-positive transcript max-page detection. Only set it at upload time.
         }
       } catch {}
 
@@ -653,7 +862,15 @@ async function work() {
               },
               { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 } // Increased retries and delays for rate limits
             );
-            parts[i] = resp.choices[0].message.content.trim();
+            const content = String(resp?.choices?.[0]?.message?.content || "").trim();
+            parts[i] = content;
+            if (process.env.DEBUG_SUMMARY_JOB_ID === job.id) {
+              const lines = content.split(/\r?\n/);
+              const rowish = lines.filter((l) => /^\s*\|?\s*p\.\s*\d+/i.test(l)).length;
+              console.log(
+                `[${job.id}] DEBUG chunk ${i + 1}/${chunks.length} pdfPages ${chunk.start}-${chunk.end}: chars=${content.length}, rowishLines=${rowish}`
+              );
+            }
             // Best-effort progress update - cap at total pages
             const cappedPage = Math.min(
               totalTranscriptPages,
@@ -677,6 +894,42 @@ async function work() {
         .replace(/```[\s\S]*?```/g, "")
         .trim();
       const rowsOnly = trimOutOfRangeRows(rowsOnlyUnbounded, totalTranscriptPages);
+
+      // Parse summary rows for judge validation
+      const summaryRows = parseSummaryRows(rowsOnly);
+
+      // Run judge agents to validate output
+      const judgeContext: JudgeContext = {
+        jobId: job.id,
+        pdfPageCount,
+        transcriptMaxPage,
+        totalPages: totalTranscriptPages,
+        deponent: legalMeta.deponent,
+        depositionDate: legalMeta.depositionDate,
+        caseCaption: legalMeta.caseCaption,
+        summaryRows,
+      };
+
+      const judgeResults = await runAllJudges(judgeContext);
+
+      // Update metadata with judge results
+      const metadataWithJudges: SummaryMetadata = {
+        ...metadata,
+        judgeResults: formatJudgeResultsForStorage(judgeResults),
+      };
+      await saveSummaryMetadata(summaryBucket, metadataWithJudges);
+
+      // Log warnings and send admin alert if any judge failed
+      if (!judgeResults.allPassed) {
+        console.warn(
+          `[${job.id}] ⚠️ Judge validation found issues:\n${formatInstructionsForAdmin(judgeResults)}`
+        );
+        // Send async admin notification (don't await to avoid blocking)
+        sendJudgeFailureAlert(job.id, formatJudgeResultsForStorage(judgeResults)).catch((e) =>
+          console.warn(`[${job.id}] Failed to send admin alert: ${e?.message || e}`)
+        );
+      }
+
       const merged = [metaMarkdown, "", rowsOnly].join("\n\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
@@ -865,8 +1118,44 @@ You're receiving this because you have an account on Testifi AI.`;
         where: { id: job.id },
         data: { status: "error", error: e.message || "Unknown error" },
       });
+
+      // Refund credits for failed job
+      try {
+        await refundCreditsForSummary(job.userId, job.id);
+        console.log(`[${job.id}] 💰 Refunded credit for failed job`);
+      } catch (refundError: any) {
+        console.error(`[${job.id}] Failed to refund credit:`, refundError?.message || refundError);
+      }
     }
   }
+}
+
+// Parse summary markdown rows into structured format for judge validation
+function parseSummaryRows(md: string): Array<{ pageLabel: string; summary: string }> {
+  const rows: Array<{ pageLabel: string; summary: string }> = [];
+  const lines = md.split(/\r?\n/);
+
+  for (const line of lines) {
+    // Skip header/separator lines
+    if (/^\s*\|?\s*-+/.test(line)) continue;
+    if (/^\s*\|?\s*Page\s*\(?s?\)?\s*\|/i.test(line)) continue;
+
+    // Parse table row: | page | summary | or page | summary
+    const stripped = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+    const parts = stripped.split("|");
+
+    if (parts.length >= 2) {
+      const pageLabel = parts[0].trim();
+      const summary = parts.slice(1).join("|").trim();
+
+      // Validate page label looks like a page reference
+      if (/^(?:p(?:age)?\.?\s*)?\d{1,6}/i.test(pageLabel) && summary) {
+        rows.push({ pageLabel, summary });
+      }
+    }
+  }
+
+  return rows;
 }
 
 // Remove model filler like "To be continued..." or "Let me know if you'd like me to continue"
@@ -928,10 +1217,16 @@ function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
   const lines = mdRows.split(/\r?\n/);
   const out: string[] = [];
   let sawValid = false;
+  let invalidStreak = 0;
 
-  const extractAllPages = (rawLine: string): number[] => {
-    const label = rawLine.trim().replace(/^\|+/, "").trim();
-    const re = /(?:^|[,\s|])(?:p(?:age)?\.?)?\s*(\d{1,6})\b/gi;
+  const extractPagesFromLabel = (rawLine: string): number[] => {
+    // Only treat lines as "rows" if they *start* with a page label.
+    // This avoids accidentally parsing years, exhibit numbers, dollar amounts, etc. in testimony text.
+    const stripped = rawLine.trim().replace(/^\|+/, "").trim();
+    const label = stripped.split("|")[0]?.trim() || "";
+    if (!/^(?:p(?:age)?\.?\s*)?\d{1,6}\b/i.test(label)) return [];
+
+    const re = /(?:^|[,\s])(?:p(?:age)?\.?)?\s*(\d{1,6})\b/gi;
     const pages: number[] = [];
     let m: RegExpExecArray | null;
     while ((m = re.exec(label))) {
@@ -942,7 +1237,7 @@ function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
   };
 
   for (const l of lines) {
-    const pages = extractAllPages(l);
+    const pages = extractPagesFromLabel(l);
     if (!pages.length) {
       out.push(l);
       continue;
@@ -950,9 +1245,14 @@ function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
     const invalid = pages.some((p) => p < 1 || p > maxPage);
     if (invalid) {
       if (!sawValid) continue; // drop leading p.0 etc
-      break; // truncate hallucinated tail
+      // Be tolerant: a single hallucinated/out-of-range row shouldn't wipe the whole summary.
+      // Only truncate if we see a sustained run of invalid rows (typical hallucinated tail).
+      invalidStreak++;
+      if (invalidStreak >= 10) break;
+      continue;
     }
     sawValid = true;
+    invalidStreak = 0;
     out.push(l);
   }
   return out.join("\n").trim();
@@ -962,46 +1262,199 @@ function detectTranscriptMaxPage(transcript: string): number {
   // We want the *transcript* page count, not the PDF scan page count.
   // Many scanned depositions contain multiple transcript pages per PDF page and include markers like '(Pages 2 - 5)'.
   // Heuristics (in priority order):
-  // - '(Pages X - Y)' ranges
+  // - '(Pages X - Y)' ranges (HIGHEST priority - very reliable)
   // - 'Page X' tokens
   // - 'X:Y' page:line tokens (strictly filtered: line <= 35, page <= 5000)
   // - Ignore our injected markers like '---PAGE 12---'
   const text = transcript.replace(/^---PAGE\s+\d+---\s*$/gim, "\n");
 
   let maxFromRange = 0;
-  let maxFromPageWord = 0;
-  let maxFromPageLine = 0;
+  const pageWordCandidates: number[] = [];
+  const pDotCandidates: number[] = [];
+  const pageLineCandidates: number[] = [];
 
-  // '(Pages 2 - 5)'
-  for (const m of text.matchAll(/\(\s*Pages?\s+(\d{1,6})\s*[-–—]\s*(\d{1,6})\s*\)/gi)) {
-    const end = Number.parseInt(m[2], 10);
-    if (Number.isFinite(end)) maxFromRange = Math.max(maxFromRange, end);
-  }
+  const median = (nums: number[]) => {
+    if (!nums.length) return 0;
+    const sorted = [...nums].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
 
-  // 'p.239' / 'p.239:1-25'
-  for (const m of text.matchAll(/\bp\.\s*(\d{1,6})\b/gi)) {
-    const n = Number.parseInt(m[1], 10);
-    if (Number.isFinite(n) && n <= 5000) maxFromPageWord = Math.max(maxFromPageWord, n);
-  }
+  const filterOutliers = (nums: number[]) => {
+    if (!nums.length) return nums;
+    const med = Math.max(1, median(nums));
+    // Allow large transcripts but cut extreme OCR/ID noise.
+    const cap = Math.max(1000, Math.round(med * 10));
+    return nums.filter((n) => n >= 1 && n <= 5000 && n <= cap);
+  };
 
-  // 'Page 239'
-  for (const m of text.matchAll(/\bPage\s+(\d{1,6})\b/gi)) {
-    const n = Number.parseInt(m[1], 10);
-    if (Number.isFinite(n) && n <= 5000) maxFromPageWord = Math.max(maxFromPageWord, n);
-  }
+  // To reduce false positives (e.g. dollar amounts / years / exhibit numbers in body),
+  // scan line-by-line and only accept strong page markers that usually appear as standalone headers/footers.
+  const lines = text.split(/\r?\n/);
+  const totalLines = lines.length;
+  
+  // Detect if we're in a word index section (common at end of transcripts)
+  // Word indices have patterns like "word 265:3, 266:5" which are false positives
+  let inIndexSection = false;
+  const indexStartPatterns = [
+    /^\s*INDEX\s*$/i,
+    /^\s*WORD\s+INDEX\s*$/i,
+    /^\s*ALPHABETICAL\s+INDEX\s*$/i,
+  ];
+  
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const raw = lines[lineIdx];
+    const line = raw.trim();
+    if (!line) continue;
+    
+    // Check if we're entering an index section
+    if (indexStartPatterns.some((p) => p.test(line))) {
+      inIndexSection = true;
+      continue;
+    }
 
-  // '239:3' (page:line)
-  for (const m of text.matchAll(/\b(\d{1,6})\s*:\s*(\d{1,3})\b/g)) {
-    const page = Number.parseInt(m[1], 10);
-    const line = Number.parseInt(m[2], 10);
-    // Deposition transcripts are typically 25 lines per page; be strict to avoid false positives.
-    if (Number.isFinite(line) && line >= 0 && line <= 35 && Number.isFinite(page) && page >= 1 && page <= 5000) {
-      maxFromPageLine = Math.max(maxFromPageLine, page);
+    // '(Pages 2 - 5)' sometimes appears in certification/footer blocks.
+    // This is the MOST reliable indicator - use it exclusively if found.
+    const range = line.match(/^\(?\s*Pages?\s+(\d{1,6})\s*[-–—]\s*(\d{1,6})\s*\)?$/i);
+    if (range) {
+      const end = Number.parseInt(range[2], 10);
+      if (Number.isFinite(end)) maxFromRange = Math.max(maxFromRange, end);
+      continue;
+    }
+
+    // 'Page 239' as a standalone line
+    const pageWord = line.match(/^(?:Page|Pg\.?)\s+(\d{1,6})$/i);
+    if (pageWord) {
+      const n = Number.parseInt(pageWord[1], 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 5000) pageWordCandidates.push(n);
+      continue;
+    }
+    // Also accept common header/footer forms like "Page 239 of 239" or "Page 239/239"
+    const pageInline = line.match(/\b(?:Page|Pg\.?)\s+(\d{1,6})\b/i);
+    if (pageInline && (/\bof\b/i.test(line) || /\//.test(line) || line.length <= 32)) {
+      const n = Number.parseInt(pageInline[1], 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 5000) pageWordCandidates.push(n);
+      continue;
+    }
+
+    // 'p.239' or 'p.239:1-25' at the start of a line
+    const pDot = line.match(/^p\.\s*(\d{1,6})(?:\b|:)/i);
+    if (pDot) {
+      const n = Number.parseInt(pDot[1], 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 5000) pDotCandidates.push(n);
+      continue;
+    }
+    // Also accept inline "p.239" tokens when they look like headers/labels
+    const pDotInline = line.match(/\bp\.\s*(\d{1,6})(?:\b|:)/i);
+    if (pDotInline && line.length <= 40) {
+      const n = Number.parseInt(pDotInline[1], 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 5000) pDotCandidates.push(n);
+      continue;
+    }
+
+    // '239:3' at the start of a line (page:line)
+    // SKIP if we're in an index section (word indices have false positives)
+    // SKIP if we're in the last 20% of the transcript (likely index/appendix area)
+    const isInTailSection = lineIdx > totalLines * 0.8;
+    
+    if (!inIndexSection && !isInTailSection) {
+      const pl = line.match(/^(\d{1,6})\s*:\s*(\d{1,3})\b/);
+      if (pl) {
+        const page = Number.parseInt(pl[1], 10);
+        const lineNo = Number.parseInt(pl[2], 10);
+        if (
+          Number.isFinite(lineNo) &&
+          lineNo >= 0 &&
+          lineNo <= 35 &&
+          Number.isFinite(page) &&
+          page >= 1 &&
+          page <= 5000
+        ) {
+          pageLineCandidates.push(page);
+        }
+      }
     }
   }
 
-  if (maxFromRange > 0) return maxFromRange;
-  return Math.max(maxFromPageWord, maxFromPageLine);
+  // PRIORITY 0: If we found a (Pages X - Y) range, use it exclusively.
+  // This is the most reliable indicator of actual page count.
+  if (maxFromRange > 0 && maxFromRange <= 5000) {
+    console.log(`[PageCount] Using (Pages X-Y) range: ${maxFromRange}`);
+    return maxFromRange;
+  }
+
+  // PRIORITY 1: Explicit "Page X" or "Pg. X" markers are most reliable.
+  // These are unambiguous page markers found in headers/footers.
+  const pw = filterOutliers(pageWordCandidates);
+  if (pw.length >= 10) {
+    // Strong signal: many explicit Page markers
+    const result = Math.max(...pw);
+    console.log(`[PageCount] Using Page/Pg markers (${pw.length} found): ${result}`);
+    return result;
+  }
+
+  // PRIORITY 2: "p.X" notation (common in legal citations)
+  const pd = filterOutliers(pDotCandidates);
+  if (pd.length >= 5) {
+    const result = Math.max(...pd);
+    console.log(`[PageCount] Using p.X notation (${pd.length} found): ${result}`);
+    return result;
+  }
+
+  // PRIORITY 3: Page:line patterns (X:Y format) - use only as fallback
+  // These can match noise like phone numbers, times, etc., so require strong evidence
+  // and cross-check against explicit markers if any exist
+  // NOTE: Only collect from the first 80% of text to avoid index false positives
+  if (pageLineCandidates.length < 100) {
+    const textLines = text.split(/\r?\n/);
+    const cutoff = Math.floor(textLines.length * 0.8);
+    const mainBodyText = textLines.slice(0, cutoff).join("\n");
+    
+    for (const m of mainBodyText.matchAll(/\b(\d{1,6})\s*:\s*(\d{1,3})\b/g)) {
+      const page = Number.parseInt(m[1], 10);
+      const lineNo = Number.parseInt(m[2], 10);
+      if (
+        Number.isFinite(lineNo) &&
+        lineNo >= 0 &&
+        lineNo <= 35 &&
+        Number.isFinite(page) &&
+        page >= 1 &&
+        page <= 5000
+      ) {
+        pageLineCandidates.push(page);
+      }
+    }
+  }
+
+  const plFiltered = filterOutliers(pageLineCandidates);
+  if (plFiltered.length >= 100 && new Set(plFiltered).size >= 10) {
+    const plMax = Math.max(...plFiltered);
+    // If we have even a few explicit Page markers, use them to sanity-check
+    if (pw.length > 0) {
+      const pwMax = Math.max(...pw);
+      // If page:line max is wildly different from Page markers, prefer Page markers
+      if (plMax > pwMax * 3 || plMax < pwMax * 0.3) {
+        console.log(`[PageCount] Page:line max ${plMax} differs from Page markers ${pwMax}, using Page markers`);
+        return pwMax;
+      }
+    }
+    console.log(`[PageCount] Using page:line patterns (${plFiltered.length} found): ${plMax}`);
+    return plMax;
+  }
+
+  // Fallback: use whatever explicit markers we have
+  if (pd.length) {
+    const result = Math.max(...pd);
+    console.log(`[PageCount] Fallback to p.X notation: ${result}`);
+    return result;
+  }
+  if (pw.length) {
+    const result = Math.max(...pw);
+    console.log(`[PageCount] Fallback to Page markers: ${result}`);
+    return result;
+  }
+  console.log(`[PageCount] No reliable page count found`);
+  return 0;
 }
 
 function chooseTotalTranscriptPages(opts: {
@@ -1022,6 +1475,16 @@ function chooseTotalTranscriptPages(opts: {
 
   // If it's effectively 1:1, use the PDF count.
   if (Math.abs(tr - pdf) <= 2) return pdf;
+
+  // If transcript count is only modestly larger than the PDF (e.g. +10-20%),
+  // it's usually a false-positive rather than true multi-up transcript pages.
+  // Real multi-up transcripts are typically 2x–4x+.
+  if (tr > pdf && tr < pdf * 1.5) return pdf;
+
+  // Sanity cap: if "transcript max page" is wildly larger than the PDF page count,
+  // it's almost always a false positive from OCR noise (e.g. IDs like 606062:1).
+  // True multi-up transcripts are rarely >4x; allow up to 6x to be safe.
+  if (tr > pdf * 6) return pdf;
 
   // If transcript numbering is implausibly small compared to the PDF, it's likely a false positive.
   const ratio = tr / pdf;

@@ -16,6 +16,7 @@ import {
 import PDFDocument from "pdfkit";
 import { loadLogo } from "./logo";
 import { normalizeUnknownString, SummaryMetadata } from "./summaryMetadata";
+import { formatDateInTimeZoneMDY, parseLooseDate } from "./dateTime";
 
 interface JobData {
   id: string;
@@ -61,7 +62,10 @@ export async function generateDocxBuffer(
     metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
   const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
-  const depositionDate = normalizeUnknownString(metadata.depositionDate);
+  const depositionDateRaw = normalizeUnknownString(metadata.depositionDate);
+  const depositionDateParsed = parseLooseDate(depositionDateRaw);
+  const depositionDateDisplay =
+    depositionDateParsed ? formatDateInTimeZoneMDY(depositionDateParsed) : depositionDateRaw;
   const titleOfDocument = `Transcript Summary of ${deponentName}`;
 
   const logo = loadLogo();
@@ -159,8 +163,8 @@ export async function generateDocxBuffer(
               new TextRun({ text: "Date:", bold: true }),
               new TextRun(
                 ` ${
-                  depositionDate ||
-                  new Date(job.createdAt || new Date()).toLocaleDateString()
+                  depositionDateDisplay ||
+                  formatDateInTimeZoneMDY(job.createdAt || new Date())
                 }`
               ),
             ],
@@ -170,7 +174,7 @@ export async function generateDocxBuffer(
           new Paragraph({
             children: [
               new TextRun({ text: "Upload Date:", bold: true }),
-              new TextRun(` ${new Date(job.createdAt || new Date()).toLocaleDateString()}`),
+              new TextRun(` ${formatDateInTimeZoneMDY(job.createdAt || new Date())}`),
             ],
             alignment: "left",
           }),
@@ -178,14 +182,15 @@ export async function generateDocxBuffer(
           new Paragraph({
             children: [
               new TextRun({ text: "Download Date:", bold: true }),
-              new TextRun(` ${new Date().toLocaleDateString()}`),
+              new TextRun(` ${formatDateInTimeZoneMDY(new Date())}`),
             ],
             alignment: "left",
           }),
           new Paragraph({ children: [], pageBreakBefore: true }),
           ...(() => {
             const paras: Paragraph[] = [];
-            if (depositionDate) paras.push(new Paragraph(`Date of Deposition: ${depositionDate}`));
+            if (depositionDateDisplay)
+              paras.push(new Paragraph(`Date of Deposition: ${depositionDateDisplay}`));
             return paras;
           })(),
           new Paragraph({ children: [], spacing: { before: 160 } }),
@@ -255,7 +260,10 @@ export async function generatePdfBuffer(
     metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
   const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
-  const depositionDate = normalizeUnknownString(metadata.depositionDate);
+  const depositionDateRaw = normalizeUnknownString(metadata.depositionDate);
+  const depositionDateParsed = parseLooseDate(depositionDateRaw);
+  const depositionDateDisplay =
+    depositionDateParsed ? formatDateInTimeZoneMDY(depositionDateParsed) : depositionDateRaw;
   const titleOfDocument = `Transcript Summary of ${deponentName}`;
 
   return new Promise((resolve, reject) => {
@@ -317,7 +325,7 @@ export async function generatePdfBuffer(
       if (hasPages) contentH += pdf.heightOfString(`Pages: ${displayPages}`, lineOpts) + 10;
 
       pdf.font("Times-Roman").fontSize(12);
-      const dateLine = `Date: ${new Date(job.createdAt || new Date()).toLocaleDateString()}`;
+      const dateLine = `Date: ${formatDateInTimeZoneMDY(job.createdAt || new Date())}`;
       contentH += pdf.heightOfString(dateLine, lineOpts) + 2;
 
       const startY = top + Math.max(0, (usableH - contentH) / 2);
@@ -345,11 +353,12 @@ export async function generatePdfBuffer(
         pdf.moveDown(0.5);
       }
 
-      const uploadDate = new Date(job.createdAt || new Date()).toLocaleDateString();
-      const downloadDate = new Date().toLocaleDateString();
-      const dateForCover = depositionDate || uploadDate;
+      const uploadDate = formatDateInTimeZoneMDY(job.createdAt || new Date());
+      const downloadDate = formatDateInTimeZoneMDY(new Date());
 
-      pdf.font("Times-Roman").fontSize(14).text(`Date: ${dateForCover}`, { align: "left" });
+      pdf.font("Times-Roman")
+        .fontSize(14)
+        .text(`Date of Deposition: ${depositionDateDisplay || "[Unknown]"}`, { align: "left" });
       pdf.moveDown(0.5);
       pdf.font("Times-Roman").fontSize(14).text(`Upload Date: ${uploadDate}`, { align: "left" });
       pdf.moveDown(0.5);
@@ -361,7 +370,7 @@ export async function generatePdfBuffer(
 
     pdf.font("Times-Roman").fontSize(12);
     const details: string[] = [];
-    if (depositionDate) details.push(`Date of Deposition: ${depositionDate}`);
+    if (depositionDateDisplay) details.push(`Date of Deposition: ${depositionDateDisplay}`);
     details.forEach((l) => pdf.text(l));
     if (details.length) pdf.moveDown(0.5);
 

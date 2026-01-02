@@ -106,6 +106,92 @@ export async function debitCreditsForSummary(
   }
 }
 
+/**
+ * Refunds credits for a failed summary job. Returns the new balance.
+ * Safe to call multiple times - idempotent via refund idempotency key.
+ */
+export async function refundCreditsForSummary(
+  userId: string,
+  summaryId: string
+): Promise<number> {
+  const creditsPerSummary = Number(process.env.CREDITS_PER_SUMMARY ?? 1);
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Find the original debit entry
+      const debitEntry = await tx.ledgerEntry.findUnique({
+        where: { idempotencyKey: `summary:${summaryId}` },
+      });
+
+      if (!debitEntry) {
+        // No debit found, nothing to refund
+        const balanceAgg = await tx.ledgerEntry.aggregate({
+          _sum: { credits: true },
+          where: { userId },
+        });
+        return Number(balanceAgg._sum.credits ?? 0);
+      }
+
+      // Check if already refunded
+      const refundKey = `refund:${summaryId}`;
+      const existingRefund = await tx.ledgerEntry.findUnique({
+        where: { idempotencyKey: refundKey },
+      });
+
+      if (existingRefund) {
+        // Already refunded
+        const balanceAgg = await tx.ledgerEntry.aggregate({
+          _sum: { credits: true },
+          where: { userId },
+        });
+        return Number(balanceAgg._sum.credits ?? 0);
+      }
+
+      // Create refund entry (positive credits to reverse the debit)
+      const creditsToRefund = Math.abs(debitEntry.credits);
+      await tx.ledgerEntry.create({
+        data: {
+          userId,
+          type: "credit",
+          credits: creditsToRefund,
+          summaryId,
+          description: `Refund for failed summary`,
+          idempotencyKey: refundKey,
+        },
+      });
+
+      // Delete the credit allocations for the original debit
+      await tx.creditAllocation.deleteMany({
+        where: { debitLedgerId: debitEntry.id },
+      });
+
+      const balanceAgg = await tx.ledgerEntry.aggregate({
+        _sum: { credits: true },
+        where: { userId },
+      });
+      return Number(balanceAgg._sum.credits ?? 0);
+    });
+
+    console.log(`[Billing] Refunded ${creditsPerSummary} credit(s) for failed summary ${summaryId}`);
+    return result;
+  } catch (ledgerError: any) {
+    // Fallback to User.credits if LedgerEntry table doesn't exist
+    const code: string | undefined = ledgerError?.code || ledgerError?.meta?.code || ledgerError?.name;
+    if (code === "P2021") {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { credits: { increment: creditsPerSummary } },
+      });
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { credits: true },
+      });
+      return user?.credits ?? 0;
+    }
+    throw ledgerError;
+  }
+}
+
 export const __setPrismaClientForTests = (client: PrismaClient): void => {
   prisma = client;
 };
