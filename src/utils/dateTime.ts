@@ -7,10 +7,11 @@ export function formatDateInTimeZoneMDY(
   if (input == null) return "";
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return "";
+  // Use "Month Day, Year" format (e.g., "January 2, 2026") for consistency
   return new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
-    month: "numeric",
+    month: "long",
     day: "numeric",
   }).format(d);
 }
