@@ -1,0 +1,11 @@
+autodetect: true
+createTime: '2025-10-25T19:13:12.495348283Z'
+github:
+  name: testifi-backend
+  owner: bennieking05
+  push:
+    branch: ^staging$
+id: 02daa179-3207-4cb4-adff-8d82fa4b51ca
+name: staging-backend
+resourceName: projects/golden-cosmos-450417-i8/locations/us-central1/triggers/02daa179-3207-4cb4-adff-8d82fa4b51ca
+serviceAccount: null

@@ -381,27 +381,45 @@ function extractLegalMetadata(
     lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
   const caption = captionLine.trim() || `Civil Action No. ${civil}`;
 
-  const deponentMatchers = [
+  const deponentMatchers: Array<{ pattern: RegExp; name: string }> = [
     // explicit "Witness" in index
-    /WITNESS\s+PAGE\s+([A-Z\s\.]+)/i,
-    /WITNESS\s+([A-Z\s\.]+?)\s+PAGE/i,
-    /WITNESS\s*\n\s*([A-Z\s\.]+)/i,
+    { pattern: /WITNESS\s+PAGE\s+([A-Z\s\.]+)/i, name: "WITNESS PAGE" },
+    { pattern: /WITNESS\s+([A-Z\s\.]+?)\s+PAGE/i, name: "WITNESS...PAGE" },
+    { pattern: /WITNESS\s*\n\s*([A-Z\s\.]+)/i, name: "WITNESS newline" },
+    // Videotaped/oral deposition variations
+    { pattern: /\b(?:VIDEOTAPED|VIDEO)\s+DEPOSITION\s+OF\s+([^\n,]+)/i, name: "VIDEOTAPED DEPOSITION OF" },
+    { pattern: /\bORAL\s+DEPOSITION\s+OF\s+([^\n,]+)/i, name: "ORAL DEPOSITION OF" },
+    { pattern: /\bEXAMINATION\s+OF\s+([^\n,]+)/i, name: "EXAMINATION OF" },
+    // RE: and IN RE: patterns (common in cover pages)
+    { pattern: /\bRE:\s*(?:Deposition\s+of\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)/i, name: "RE:" },
+    { pattern: /\bIN\s+RE:\s*([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)/i, name: "IN RE:" },
     // standard headers
-    /continued\s+deposition\s+of\s+([^\n,]+)/i,
-    /deposition\s+of\s+([^\n,]+)/i,
-    /witness:\s*([^\n,]+)/i,
-    /deponent[:\s]+([^\n]+)/i,
+    { pattern: /continued\s+deposition\s+of\s+([^\n,]+)/i, name: "continued deposition of" },
+    { pattern: /deposition\s+of\s+([^\n,]+)/i, name: "deposition of" },
+    { pattern: /witness:\s*([^\n,]+)/i, name: "witness:" },
+    { pattern: /deponent[:\s]+([^\n]+)/i, name: "deponent:" },
+    // BEFORE/witness on same page
+    { pattern: /\bTHE\s+WITNESS[:\s]+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)/i, name: "THE WITNESS:" },
   ];
   let extractedDeponent: string | null = null;
-  for (const pattern of deponentMatchers) {
+  let matchedDeponentPattern: string | null = null;
+  for (const { pattern, name } of deponentMatchers) {
     const match = header.match(pattern);
     if (match && match[1]) {
       const candidate = cleanName(match[1]);
       if (candidate && looksLikePerson(candidate)) {
         extractedDeponent = candidate;
+        matchedDeponentPattern = name;
         break;
       }
     }
+  }
+  if (extractedDeponent) {
+    console.log(`[DeponentExtraction] Found via "${matchedDeponentPattern}": "${extractedDeponent}"`);
+  } else if (fileData?.deponent) {
+    console.log(`[DeponentExtraction] Using fileData.deponent: "${fileData.deponent}"`);
+  } else {
+    console.log(`[DeponentExtraction] No deponent found`);
   }
   const deponent = extractedDeponent || fileData?.deponent || "[Unknown]";
 
@@ -456,35 +474,50 @@ function extractLegalMetadata(
 
   // Prefer explicit "Date of Deposition" / "Deposition Date" patterns.
   // Also check for "TAKEN" which appears on INDEX pages
-  const explicitDatePatterns = extractedDate
+  const explicitDatePatterns: Array<{ pattern: RegExp; name: string }> = extractedDate
     ? []
     : [
-    /\bDate\s+of\s+Deposition\s*[:\-]\s*([^\n\r]+)/i,
-    /\bDeposition\s+Date\s*[:\-]\s*([^\n\r]+)/i,
-    /\bDate\s+of\s+Examination\s*[:\-]\s*([^\n\r]+)/i,
-    /\bDate\s*[:\-]\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
-    /\bDate\s*[:\-]\s*(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
-    /\bDate\s*[:\-]\s*(\d{1,2}-\d{1,2}-\d{4})\b/i,
-    /\bTaken\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
-    /\bTaken\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
-    /\bTaken\s+on\s+(\d{1,2}-\d{1,2}-\d{4})\b/i,
-    /\bHeld\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i,
-    /\bHeld\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
-    /\bHeld\s+on\s+(\d{1,2}-\d{1,2}-\d{4})\b/i,
+    // Primary explicit patterns
+    { pattern: /\bDate\s+of\s+Deposition\s*[:\-]\s*([^\n\r]+)/i, name: "Date of Deposition" },
+    { pattern: /\bDeposition\s+Date\s*[:\-]\s*([^\n\r]+)/i, name: "Deposition Date" },
+    { pattern: /\bDate\s+of\s+Examination\s*[:\-]\s*([^\n\r]+)/i, name: "Date of Examination" },
+    { pattern: /\bDATE\s+TAKEN\s*[:\-]\s*([^\n\r]+)/i, name: "DATE TAKEN" },
+    { pattern: /\bDATED\s*[:\-]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i, name: "DATED" },
+    { pattern: /\bRECORDED\s+(?:ON\s+)?([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i, name: "RECORDED ON" },
+    // Date: followed by various formats
+    { pattern: /\bDate\s*[:\-]\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i, name: "Date: Month Day, Year" },
+    { pattern: /\bDate\s*[:\-]\s*(\d{1,2}\/\d{1,2}\/\d{4})\b/i, name: "Date: MM/DD/YYYY" },
+    { pattern: /\bDate\s*[:\-]\s*(\d{1,2}-\d{1,2}-\d{4})\b/i, name: "Date: MM-DD-YYYY" },
+    // Taken on patterns
+    { pattern: /\bTaken\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i, name: "Taken on" },
+    { pattern: /\bTaken\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i, name: "Taken on MM/DD/YYYY" },
+    { pattern: /\bTaken\s+on\s+(\d{1,2}-\d{1,2}-\d{4})\b/i, name: "Taken on MM-DD-YYYY" },
+    // Held on patterns
+    { pattern: /\bHeld\s+on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/i, name: "Held on" },
+    { pattern: /\bHeld\s+on\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i, name: "Held on MM/DD/YYYY" },
+    { pattern: /\bHeld\s+on\s+(\d{1,2}-\d{1,2}-\d{4})\b/i, name: "Held on MM-DD-YYYY" },
     // INDEX page patterns: "TAKEN July 7, 2022" or "TAKEN: July 7, 2022"
-    /\bTAKEN[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i,
-    /\bTAKEN[:\s]+(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    { pattern: /\bTAKEN[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i, name: "TAKEN" },
+    { pattern: /\bTAKEN[:\s]+(\d{1,2}\/\d{1,2}\/\d{4})\b/i, name: "TAKEN MM/DD/YYYY" },
     // Commencing patterns: "commencing July 7, 2022"
-    /\bcommencing\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i,
-    /\bcommencing\s+(?:on\s+)?(\d{1,2}\/\d{1,2}\/\d{4})\b/i,
+    { pattern: /\bcommencing\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2},?\s+\d{4})\b/i, name: "commencing" },
+    { pattern: /\bcommencing\s+(?:on\s+)?(\d{1,2}\/\d{1,2}\/\d{4})\b/i, name: "commencing MM/DD/YYYY" },
+    // European format: "7 July 2022" (no comma)
+    { pattern: /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i, name: "European Day Month Year" },
   ];
-  for (const pattern of explicitDatePatterns) {
+  for (const { pattern, name } of explicitDatePatterns) {
     const match = cleanedHeaderForDate.match(pattern);
     if (match?.[1]) {
+      // Handle European format specially (returns 3 groups)
+      if (name === "European Day Month Year" && match[2] && match[3]) {
+        extractedDate = `${match[2]} ${match[1]}, ${match[3]}`;
+        console.log(`[DateExtraction] Found via "${name}": "${extractedDate}"`);
+        break;
+      }
       const extracted = extractDateToken(match[1]) || match[1].trim();
       if (extracted) {
         extractedDate = extracted;
-        console.log(`[DateExtraction] Found explicit date pattern: "${extractedDate}"`);
+        console.log(`[DateExtraction] Found via "${name}": "${extractedDate}"`);
         break;
       }
     }
@@ -1269,6 +1302,7 @@ function detectTranscriptMaxPage(transcript: string): number {
   const text = transcript.replace(/^---PAGE\s+\d+---\s*$/gim, "\n");
 
   let maxFromRange = 0;
+  let maxFromPageOfY = 0; // "Page X of Y" - captures Y (total)
   const pageWordCandidates: number[] = [];
   const pDotCandidates: number[] = [];
   const pageLineCandidates: number[] = [];
@@ -1319,6 +1353,17 @@ function detectTranscriptMaxPage(transcript: string): number {
     if (range) {
       const end = Number.parseInt(range[2], 10);
       if (Number.isFinite(end)) maxFromRange = Math.max(maxFromRange, end);
+      continue;
+    }
+
+    // 'Page X of Y' or 'Page X / Y' - extract Y (the total)
+    // This is very reliable when present (common in court reporter footers)
+    const pageOfY = line.match(/\b(?:Page|Pg\.?)\s+\d{1,6}\s+(?:of|\/)\s+(\d{1,6})\b/i);
+    if (pageOfY) {
+      const total = Number.parseInt(pageOfY[1], 10);
+      if (Number.isFinite(total) && total >= 1 && total <= 5000) {
+        maxFromPageOfY = Math.max(maxFromPageOfY, total);
+      }
       continue;
     }
 
@@ -1381,6 +1426,12 @@ function detectTranscriptMaxPage(transcript: string): number {
   if (maxFromRange > 0 && maxFromRange <= 5000) {
     console.log(`[PageCount] Using (Pages X-Y) range: ${maxFromRange}`);
     return maxFromRange;
+  }
+
+  // PRIORITY 0.5: "Page X of Y" format - Y is the total, very reliable
+  if (maxFromPageOfY > 0 && maxFromPageOfY <= 5000) {
+    console.log(`[PageCount] Using "Page X of Y" total: ${maxFromPageOfY}`);
+    return maxFromPageOfY;
   }
 
   // PRIORITY 1: Explicit "Page X" or "Pg. X" markers are most reliable.
