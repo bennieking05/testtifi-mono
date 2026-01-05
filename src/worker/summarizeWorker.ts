@@ -740,6 +740,7 @@ async function work() {
       const pages = splitPages(transcript);
       const pdfPageCount = pages.length;
       let transcriptMaxPage = detectTranscriptMaxPage(transcript);
+      console.log(`[${job.id}] Page count detection: pdfPageCount=${pdfPageCount}, transcriptMaxPage=${transcriptMaxPage}`);
       const filePagesHintRaw = job.file?.pages;
       const filePagesHint =
         typeof filePagesHintRaw === "number" && Number.isFinite(filePagesHintRaw) && filePagesHintRaw > 0
@@ -803,6 +804,8 @@ async function work() {
               pdfPageCount,
               transcriptMaxPage,
             });
+
+      console.log(`[${job.id}] Final page count: totalTranscriptPages=${totalTranscriptPages}, filePagesHint=${filePagesHint}`);
 
       if (debugThisJob) {
         const lens = pages.map((p) => (p.text || "").replace(/\s/g, "").length);
