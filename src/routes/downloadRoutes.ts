@@ -354,9 +354,11 @@ router.get(
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         setAttachmentFilename(res, uploadedTitle, "txt");
         
-        // Track download
-        if (req.user?.userId && job.file?.id) {
-          await trackDownload(req.user.userId, job.file.id, "txt");
+        // Track download - use job.fileId directly for reliability
+        if (req.user?.userId && job.fileId) {
+          await trackDownload(req.user.userId, job.fileId, "txt");
+        } else {
+          console.warn(`[Download] Skipping tracking: userId=${req.user?.userId}, fileId=${job.fileId}`);
         }
         
         res.send(body);
@@ -557,9 +559,11 @@ router.get(
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         setAttachmentFilename(res, uploadedTitle, "docx");
         
-        // Track download
-        if (req.user?.userId && job.file?.id) {
-          await trackDownload(req.user.userId, job.file.id, "docx");
+        // Track download - use job.fileId directly for reliability
+        if (req.user?.userId && job.fileId) {
+          await trackDownload(req.user.userId, job.fileId, "docx");
+        } else {
+          console.warn(`[Download] Skipping tracking: userId=${req.user?.userId}, fileId=${job.fileId}`);
         }
         
         res.send(docBuf);
@@ -568,9 +572,11 @@ router.get(
 
       // PDF — cover page (logo + title + date + case name/pages), then bordered table content
       if (format === "pdf") {
-        // Track download early for PDF (streamed)
-        if (req.user?.userId && job.file?.id) {
-          await trackDownload(req.user.userId, job.file.id, "pdf");
+        // Track download early for PDF (streamed) - use job.fileId directly for reliability
+        if (req.user?.userId && job.fileId) {
+          await trackDownload(req.user.userId, job.fileId, "pdf");
+        } else {
+          console.warn(`[Download] Skipping tracking: userId=${req.user?.userId}, fileId=${job.fileId}`);
         }
         
         const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
@@ -776,9 +782,11 @@ router.get(
         const lines = boundedRows.map(([p, s]) => `${esc(p)},${esc(s)}`);
         const csv = [header, ...lines].join("\n");
         
-        // Track download
-        if (req.user?.userId && job.file?.id) {
-          await trackDownload(req.user.userId, job.file.id, "csv");
+        // Track download - use job.fileId directly for reliability
+        if (req.user?.userId && job.fileId) {
+          await trackDownload(req.user.userId, job.fileId, "csv");
+        } else {
+          console.warn(`[Download] Skipping tracking: userId=${req.user?.userId}, fileId=${job.fileId}`);
         }
         
         res.send(csv);
