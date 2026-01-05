@@ -31,6 +31,22 @@ npm run test:api             # API tests only
 npm run test:frontend        # Frontend tests only
 ```
 
+## Pre-Commit Build Requirement
+
+Before every commit, the agent **MUST** run a build and watch the output:
+
+1. Run the build command:
+   ```bash
+   npm run build
+   ```
+2. **Wait for the build to complete** and carefully review the output
+3. If there are any build errors or warnings:
+   - Fix all errors before committing
+   - Address warnings if they indicate real issues
+4. Only proceed with the commit if the build succeeds with no errors
+
+This ensures no broken code is committed to the repository.
+
 ## File Structure Reference
 
 ```
