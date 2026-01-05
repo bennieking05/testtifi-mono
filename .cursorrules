@@ -1,0 +1,65 @@
+# TestifiAI Cursor Rules
+# These rules ensure consistent development practices across all AI sessions.
+
+## Regression Testing Requirements
+
+When adding, modifying, or removing **backend API routes** in `backend/src/routes/`:
+1. Update `scripts/api-regression.mjs` with corresponding test cases
+2. Update the API Endpoint Inventory table in `docs/REGRESSION-TESTING.md`
+3. Include expected status codes and authentication requirements
+
+When adding, modifying, or removing **frontend pages** in `loveable/src/pages/`:
+1. Update `tests/regression/pages.spec.ts` with page load tests
+2. Update the Frontend Page Inventory table in `docs/REGRESSION-TESTING.md`
+3. Add form interaction tests to `tests/regression/forms.spec.ts` if the page has forms
+
+When modifying **authentication flows**:
+1. Update `tests/regression/auth.spec.ts`
+2. Verify login/logout flows still work
+
+## Test Credentials
+
+- Test user credentials are in `test-login.json` (do not commit real passwords)
+- Admin test credentials are in `test-admin-login.json` (if exists)
+
+## Running Tests
+
+Before submitting changes that affect routes or pages:
+```bash
+npm run test:regression      # Full test suite
+npm run test:api             # API tests only
+npm run test:frontend        # Frontend tests only
+```
+
+## File Structure Reference
+
+```
+scripts/
+  api-regression.mjs          # API endpoint tests
+  run-regression.mjs          # Master test runner
+tests/
+  regression/
+    auth.spec.ts              # Auth flow tests
+    pages.spec.ts             # Page navigation tests
+    forms.spec.ts             # Form interaction tests
+docs/
+  REGRESSION-TESTING.md       # Living documentation
+test-results/                 # Test output (gitignored)
+```
+
+## Code Style
+
+- Use TypeScript for backend and frontend code
+- Follow existing patterns in the codebase
+- Backend uses Express.js with Prisma ORM
+- Frontend uses React with Vite, TailwindCSS, and shadcn/ui components
+
+## Important Paths
+
+- Backend routes: `backend/src/routes/`
+- Frontend pages: `loveable/src/pages/`
+- Frontend components: `loveable/src/components/`
+- Prisma schema: `prisma/schema.prisma`
+- API base URL (local): http://localhost:4000
+- Frontend URL (local): http://localhost:5173
+

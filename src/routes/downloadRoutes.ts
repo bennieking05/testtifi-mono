@@ -1,8 +1,8 @@
 // ─── src/routes/downloadRoutes.ts ────────────────────────────────────────────
 
-import express, { Request, Response } from "express";
+import express, { Response } from "express";
 import { PrismaClient } from "@prisma/client";
-import { authenticateToken } from "../middlewares/authMiddleware";
+import { authenticateToken, AuthRequest } from "../middlewares/authMiddleware";
 import { Storage } from "@google-cloud/storage";
 import {
   Document,
@@ -226,7 +226,7 @@ function enforcePageBounds(
 router.get(
   "/",
   authenticateToken,
-  async (req: Request, res: Response): Promise<void> => {
+  async (req: AuthRequest, res: Response): Promise<void> => {
     const { jobId, format } = req.query as { jobId?: string; format?: string };
     if (!jobId || !format) {
       res.status(400).json({ error: "Missing jobId or format" });
