@@ -680,10 +680,15 @@ async function work() {
       continue;
     }
 
+    console.log(`[WORKER] Found queued job: ${candidate.id}`);
+
     const claimed = await prisma.summaryJob.updateMany({
       where: { id: candidate.id, status: "queued" },
       data: { status: "processing" },
     });
+    
+    console.log(`[WORKER] Claimed job ${candidate.id}: count=${claimed.count}`);
+    
     if (claimed.count === 0) {
       // Raced with another worker; try again.
       continue;
@@ -741,7 +746,9 @@ async function work() {
       };
       const depositionObjectKey = objectKeyFromUrl(job.fileUrl) || job.fileName;
       console.log(`[${job.id}] Final depositionObjectKey=${depositionObjectKey}, fileUrl=${job.fileUrl}`);
+      console.log(`[${job.id}] Attempting to download from GCS...`);
       const [buf] = await depositionBucket.file(depositionObjectKey).download();
+      console.log(`[${job.id}] Downloaded file, size=${buf.length} bytes`);
       const gcsUri = `gs://${depositionBucket.name}/${depositionObjectKey}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
