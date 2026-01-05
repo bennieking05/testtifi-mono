@@ -667,7 +667,14 @@ async function withRetry<T>(
 }
 
 async function work() {
+  console.log("[WORKER] Entering main work loop...");
+  let pollCount = 0;
   while (true) {
+    pollCount++;
+    if (pollCount % 6 === 1) {
+      // Log every minute (every 6 polls at 10s interval)
+      console.log(`[WORKER] Polling for jobs... (poll #${pollCount})`);
+    }
     // 1) Find and atomically claim the next queued job
     const candidate = await prisma.summaryJob.findFirst({
       where: { status: "queued" },
