@@ -26,6 +26,23 @@ const router = express.Router();
 const prisma = new PrismaClient();
 const bucket = new Storage().bucket("deposition-summaries");
 
+// Helper to track download history
+async function trackDownload(userId: string, fileId: string, format: string) {
+  try {
+    await prisma.downloadHistory.create({
+      data: {
+        userId,
+        fileId,
+        format: format.toLowerCase(),
+      },
+    });
+    console.log(`[Download] Tracked download: user=${userId}, file=${fileId}, format=${format}`);
+  } catch (err) {
+    console.error("[Download] Failed to track download:", err);
+    // Don't throw - download tracking failure shouldn't block the download
+  }
+}
+
 export const sanitize = (s: string) =>
   s
     .replace(/[^a-z0-9_.-]+/gi, "-")
@@ -336,6 +353,12 @@ router.get(
         ].join("\n");
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         setAttachmentFilename(res, uploadedTitle, "txt");
+        
+        // Track download
+        if (req.user?.userId && job.file?.id) {
+          await trackDownload(req.user.userId, job.file.id, "txt");
+        }
+        
         res.send(body);
         return;
       }
@@ -533,13 +556,24 @@ router.get(
         const docBuf = await Packer.toBuffer(doc);
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         setAttachmentFilename(res, uploadedTitle, "docx");
+        
+        // Track download
+        if (req.user?.userId && job.file?.id) {
+          await trackDownload(req.user.userId, job.file.id, "docx");
+        }
+        
         res.send(docBuf);
         return;
       }
 
       // PDF — cover page (logo + title + date + case name/pages), then bordered table content
       if (format === "pdf") {
-      const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
+        // Track download early for PDF (streamed)
+        if (req.user?.userId && job.file?.id) {
+          await trackDownload(req.user.userId, job.file.id, "pdf");
+        }
+        
+        const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
         const pass = new stream.PassThrough();
         pdf.pipe(pass).pipe(res);
         res.setHeader("Content-Type", "application/pdf");
@@ -741,6 +775,12 @@ router.get(
         const header = '"Page(s)","Testimony"';
         const lines = boundedRows.map(([p, s]) => `${esc(p)},${esc(s)}`);
         const csv = [header, ...lines].join("\n");
+        
+        // Track download
+        if (req.user?.userId && job.file?.id) {
+          await trackDownload(req.user.userId, job.file.id, "csv");
+        }
+        
         res.send(csv);
         return;
       }

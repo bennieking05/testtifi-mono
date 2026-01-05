@@ -10,7 +10,15 @@
     "postinstall": "prisma generate",
     "test:ui": "playwright test -c playwright.config.ts",
     "test:uat:mock": "node scripts/uat-mock-tests.mjs",
-    "scrape:webcopy": "node scripts/scrape-webcopy.mjs"
+    "scrape:webcopy": "node scripts/scrape-webcopy.mjs",
+    "test:regression": "node scripts/run-regression.mjs",
+    "test:regression:local": "node scripts/run-regression.mjs local",
+    "test:regression:staging": "node scripts/run-regression.mjs staging",
+    "test:regression:prod": "node scripts/run-regression.mjs prod",
+    "test:api": "node scripts/api-regression.mjs",
+    "test:api:local": "node scripts/api-regression.mjs local",
+    "test:api:staging": "node scripts/api-regression.mjs staging",
+    "test:frontend": "npx playwright test tests/regression/"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.12.1",
