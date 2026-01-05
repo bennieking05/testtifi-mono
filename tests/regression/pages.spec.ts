@@ -206,6 +206,26 @@ test.describe('Protected Pages', () => {
     await snap(page, 'page-help');
   });
 
+  test('Help User Guide page loads', async ({ page }) => {
+    await page.goto('/help/user-guide');
+    await page.waitForLoadState('networkidle');
+    
+    await page.waitForTimeout(1000);
+    expect(page.url()).not.toContain('/login');
+    
+    await snap(page, 'page-help-user-guide');
+  });
+
+  test('Help Keyboard Shortcuts page loads', async ({ page }) => {
+    await page.goto('/help/keyboard-shortcuts');
+    await page.waitForLoadState('networkidle');
+    
+    await page.waitForTimeout(1000);
+    expect(page.url()).not.toContain('/login');
+    
+    await snap(page, 'page-help-keyboard-shortcuts');
+  });
+
   test('Support page loads', async ({ page }) => {
     await page.goto('/support');
     await page.waitForLoadState('networkidle');

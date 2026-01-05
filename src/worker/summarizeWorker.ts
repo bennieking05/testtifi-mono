@@ -667,7 +667,14 @@ async function withRetry<T>(
 }
 
 async function work() {
+  console.log("[WORKER] Entering main work loop...");
+  let pollCount = 0;
   while (true) {
+    pollCount++;
+    if (pollCount % 6 === 1) {
+      // Log every minute (every 6 polls at 10s interval)
+      console.log(`[WORKER] Polling for jobs... (poll #${pollCount})`);
+    }
     // 1) Find and atomically claim the next queued job
     const candidate = await prisma.summaryJob.findFirst({
       where: { status: "queued" },
@@ -680,10 +687,15 @@ async function work() {
       continue;
     }
 
+    console.log(`[WORKER] Found queued job: ${candidate.id}`);
+
     const claimed = await prisma.summaryJob.updateMany({
       where: { id: candidate.id, status: "queued" },
       data: { status: "processing" },
     });
+    
+    console.log(`[WORKER] Claimed job ${candidate.id}: count=${claimed.count}`);
+    
     if (claimed.count === 0) {
       // Raced with another worker; try again.
       continue;
@@ -718,23 +730,32 @@ async function work() {
 
     try {
       const objectKeyFromUrl = (url: string | null | undefined): string | null => {
-        if (!url) return null;
+        if (!url) {
+          console.log(`[${job.id}] objectKeyFromUrl: url is null/undefined`);
+          return null;
+        }
         try {
           const u = new URL(url);
           let key = decodeURIComponent(u.pathname.replace(/^\//, ""));
+          console.log(`[${job.id}] objectKeyFromUrl: pathname=${u.pathname}, decoded=${key}`);
           // Support both URL styles:
           // - https://storage.googleapis.com/<bucket>/<object>
           // - https://<bucket>.storage.googleapis.com/<object>
           if (key.startsWith(`${depositionBucket.name}/`)) {
             key = key.slice(depositionBucket.name.length + 1);
+            console.log(`[${job.id}] objectKeyFromUrl: after bucket strip=${key}`);
           }
           return key || null;
-        } catch {
+        } catch (err) {
+          console.log(`[${job.id}] objectKeyFromUrl: error parsing URL: ${err}`);
           return null;
         }
       };
       const depositionObjectKey = objectKeyFromUrl(job.fileUrl) || job.fileName;
+      console.log(`[${job.id}] Final depositionObjectKey=${depositionObjectKey}, fileUrl=${job.fileUrl}`);
+      console.log(`[${job.id}] Attempting to download from GCS...`);
       const [buf] = await depositionBucket.file(depositionObjectKey).download();
+      console.log(`[${job.id}] Downloaded file, size=${buf.length} bytes`);
       const gcsUri = `gs://${depositionBucket.name}/${depositionObjectKey}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);

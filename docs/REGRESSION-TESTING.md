@@ -189,7 +189,9 @@ timestamp,target,total_tests,passed,failed,pass_rate,api_passed,api_failed,front
 | `/checkout` | Checkout | Stripe checkout |
 | `/account/billing` | Billing | Billing history |
 | `/success` | Success | Payment success |
-| `/help` | Help | Help documentation |
+| `/help` | Help | Help center |
+| `/help/user-guide` | UserGuide | Step-by-step user guide |
+| `/help/keyboard-shortcuts` | KeyboardShortcuts | Keyboard shortcuts reference |
 | `/support` | Support | Submit support ticket |
 | `/automation` | Automation | Automation features |
 | `/case-preparation` | CasePreparation | Case prep tools |
