@@ -718,22 +718,29 @@ async function work() {
 
     try {
       const objectKeyFromUrl = (url: string | null | undefined): string | null => {
-        if (!url) return null;
+        if (!url) {
+          console.log(`[${job.id}] objectKeyFromUrl: url is null/undefined`);
+          return null;
+        }
         try {
           const u = new URL(url);
           let key = decodeURIComponent(u.pathname.replace(/^\//, ""));
+          console.log(`[${job.id}] objectKeyFromUrl: pathname=${u.pathname}, decoded=${key}`);
           // Support both URL styles:
           // - https://storage.googleapis.com/<bucket>/<object>
           // - https://<bucket>.storage.googleapis.com/<object>
           if (key.startsWith(`${depositionBucket.name}/`)) {
             key = key.slice(depositionBucket.name.length + 1);
+            console.log(`[${job.id}] objectKeyFromUrl: after bucket strip=${key}`);
           }
           return key || null;
-        } catch {
+        } catch (err) {
+          console.log(`[${job.id}] objectKeyFromUrl: error parsing URL: ${err}`);
           return null;
         }
       };
       const depositionObjectKey = objectKeyFromUrl(job.fileUrl) || job.fileName;
+      console.log(`[${job.id}] Final depositionObjectKey=${depositionObjectKey}, fileUrl=${job.fileUrl}`);
       const [buf] = await depositionBucket.file(depositionObjectKey).download();
       const gcsUri = `gs://${depositionBucket.name}/${depositionObjectKey}`;
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
