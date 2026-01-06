@@ -111,9 +111,22 @@ function groupPagesToChunks(
   for (let i = 0; i < pages.length; i += perChunk) {
     const slice = pages.slice(i, i + perChunk);
     // Add clear page headers so the LLM knows exactly where each page starts
-    // This helps prevent gaps in coverage
+    // This helps prevent gaps in coverage and allows proper page referencing
     const textWithPageHeaders = slice.map((p) => {
-      return `\n=== PAGE ${p.page} ===\n` + p.text;
+      // Check if the page text already has line numbers (e.g., "1  Q.  Hello")
+      const lines = p.text.split('\n');
+      const hasLineNumbers = lines.some(line => /^\s*\d{1,2}\s+[A-Z]/.test(line));
+      
+      // Format page header clearly for LLM
+      const header = `\n=== PAGE ${p.page} ===\n`;
+      
+      // If line numbers exist in text, preserve them; otherwise add placeholder
+      if (hasLineNumbers) {
+        return header + p.text;
+      } else {
+        // Add line number hints based on typical deposition format (25 lines per page)
+        return header + `[Lines 1-25]\n` + p.text;
+      }
     }).join("\n");
     
     out.push({
@@ -154,8 +167,8 @@ CRITICAL COVERAGE REQUIREMENT:
 OUTPUT FORMAT (STRICT):
 - Output ONLY Markdown table rows with EXACTLY two columns: Page(s) | Testimony
 - No header row, rows only
-- First column format: List all page numbers covered, e.g., "p.12, p.13, p.14" or "p.12-14" for consecutive pages
-- Each row should span 3-5 transcript pages when topics are related, but you must still cover ALL pages in the chunk.
+- First column MUST use page format: "p.12-15" or "p.12, p.13, p.14" (page numbers only, no line numbers)
+- Each row should span 3-5 transcript pages when topics are related (compression), but you must still cover ALL pages in the chunk.
 - The text is organized by "=== PAGE X ===" headers - you MUST summarize content from EVERY page.
 - For each page/section, write 3-6 complete sentences capturing:
   * The main topic or subject matter
@@ -170,13 +183,13 @@ Transcript:
 ${chunk.text}
         `.trim()
         : `
-Continue the PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end}.
+Continue the PAGE deposition summary for pages ${chunk.start}–${chunk.end}.
 
 Do NOT repeat metadata. Output ONLY additional Markdown table rows with two columns (Page Number | Testimony).
 - No header row, rows only
 - You MUST cover the entire range from ${chunk.start} through ${chunk.end} with NO GAPS (collectively across your rows)
 - The text is organized by "=== PAGE X ===" headers - you MUST summarize content from EVERY page
-- First column format: List all page numbers covered, e.g., "p.12, p.13, p.14" or "p.12-14"
+- First column MUST use page format: "p.12-15" or "p.12, p.13, p.14" (page numbers only, no line numbers)
 - Maintain the same comprehensive, detailed style:
   * 3-6 complete sentences per entry for substantive testimony
   * All specific names, dates, figures, entities
