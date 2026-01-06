@@ -579,22 +579,25 @@ function makePrompt(
       role: "user",
       content: isFirst
         ? `
-Produce a comprehensive PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end}.
+Produce a comprehensive deposition summary for pages ${chunk.start}–${chunk.end}.
 
 ${metaSection}
 
-CRITICAL COVERAGE REQUIREMENT:
-- You MUST cover the entire range from ${chunk.start} through ${chunk.end} with NO GAPS.
-- Your rows must progress forward through the range; do not jump around or cherry-pick.
-- The union of your page ranges must fully cover ${chunk.start}–${chunk.end}.
+MANDATORY COVERAGE - READ CAREFULLY:
+You are given transcript text for pages ${chunk.start} through ${chunk.end}.
+Each page is marked with "=== PAGE X ===" headers.
+You MUST produce summary rows that COLLECTIVELY cover EVERY SINGLE PAGE from ${chunk.start} to ${chunk.end}.
+DO NOT SKIP ANY PAGES. If you skip pages, the output is INVALID.
 
-OUTPUT FORMAT (STRICT):
-- Output ONLY Markdown table rows with EXACTLY two columns: Page(s) | Testimony
-- No header row, rows only
-- First column MUST use page format: "p.12-15" or "p.12, p.13, p.14" (page numbers only, no line numbers)
-- Each row should span 3-5 transcript pages when topics are related (compression), but you must still cover ALL pages in the chunk.
-- The text is organized by "=== PAGE X ===" headers - you MUST summarize content from EVERY page.
-- For each page/section, write 3-6 complete sentences capturing:
+REQUIRED OUTPUT:
+Create 1-3 table rows that together cover ALL pages ${chunk.start}-${chunk.end}:
+
+OUTPUT FORMAT:
+- Output ONLY Markdown table rows: | Page(s) | Testimony |
+- No header row, just data rows
+- First column: "p.${chunk.start}-${chunk.end}" or list each page like "p.${chunk.start}, p.${'' + (chunk.start + 1)}, ..."
+- Second column: 3-6 sentences summarizing the testimony
+- Cover:
   * The main topic or subject matter
   * All specific names, titles, entities, dates, and figures mentioned
   * Document references (exhibits, emails, declarations) with context
@@ -607,21 +610,15 @@ Transcript:
 ${chunk.text}
         `.trim()
         : `
-Continue the PAGE deposition summary for pages ${chunk.start}–${chunk.end}.
+Continue the deposition summary for pages ${chunk.start}–${chunk.end}.
 
-Do NOT repeat metadata. Output ONLY additional Markdown table rows with two columns (Page Number | Testimony).
-- No header row, rows only
-- You MUST cover the entire range from ${chunk.start} through ${chunk.end} with NO GAPS (collectively across your rows)
-- The text is organized by "=== PAGE X ===" headers - you MUST summarize content from EVERY page
-- First column MUST use page format: "p.12-15" or "p.12, p.13, p.14" (page numbers only, no line numbers)
-- Maintain the same comprehensive, detailed style:
-  * 3-6 complete sentences per entry for substantive testimony
-  * All specific names, dates, figures, entities
-  * Document references with context
-  * Key facts and admissions
-  * Objections and procedural matters
+MANDATORY: You MUST cover EVERY page from ${chunk.start} to ${chunk.end}. DO NOT SKIP ANY PAGES.
+
+Output 1-3 Markdown table rows (| Page(s) | Testimony |) that TOGETHER cover ALL pages in this range.
+- First column: "p.${chunk.start}-${chunk.end}" or list each page
+- Second column: 3-6 sentences summarizing the testimony
+- Include: names, dates, figures, exhibits, key facts, admissions
 - Be thorough and specific
-- Break into multiple rows when topics change
 
 Transcript:
 ${chunk.text}
