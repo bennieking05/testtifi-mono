@@ -303,6 +303,38 @@ export function splitPages(txt: string) {
     .sort((a, b) => a.page - b.page);
 }
 
+/**
+ * Detect transcript page numbers within text content.
+ * Deposition transcripts have internal page numbers (e.g., "Page 147" at top of each page).
+ * Returns the min and max transcript page numbers found.
+ */
+function detectTranscriptPagesInText(text: string): { min: number; max: number } | null {
+  const pageMatches: number[] = [];
+  
+  // Pattern 1: "Page X" standalone (most common in transcripts)
+  const pagePattern = /\bPage\s+(\d+)\b/gi;
+  let match;
+  while ((match = pagePattern.exec(text)) !== null) {
+    const num = parseInt(match[1], 10);
+    if (num > 0 && num < 10000) pageMatches.push(num);
+  }
+  
+  // Pattern 2: "PAGE X" in headers/footers
+  const headerPattern = /^\s*(\d{1,4})\s*$/gm;
+  while ((match = headerPattern.exec(text)) !== null) {
+    const num = parseInt(match[1], 10);
+    // Only consider if it looks like a page number (1-999) and appears on its own line
+    if (num > 0 && num < 1000) pageMatches.push(num);
+  }
+  
+  if (pageMatches.length === 0) return null;
+  
+  return {
+    min: Math.min(...pageMatches),
+    max: Math.max(...pageMatches),
+  };
+}
+
 function groupPagesToChunks(
   pages: { page: number; text: string }[],
   perChunk = PAGES_PER_CHUNK // smaller chunks to avoid token limits
@@ -310,28 +342,31 @@ function groupPagesToChunks(
   const out: { start: number; end: number; text: string }[] = [];
   for (let i = 0; i < pages.length; i += perChunk) {
     const slice = pages.slice(i, i + perChunk);
-    // Add clear page headers so the LLM knows exactly where each page starts
-    // This helps prevent gaps in coverage and allows proper page referencing
-    const textWithPageHeaders = slice.map((p) => {
-      // Check if the page text already has line numbers (e.g., "1  Q.  Hello")
-      const lines = p.text.split('\n');
-      const hasLineNumbers = lines.some(line => /^\s*\d{1,2}\s+[A-Z]/.test(line));
+    
+    // Combine text for this chunk
+    const combinedText = slice.map((p) => p.text).join("\n");
+    
+    // Detect internal transcript page numbers in this chunk
+    const transcriptPages = detectTranscriptPagesInText(combinedText);
+    
+    // Use transcript page numbers if detected, otherwise fall back to PDF page numbers
+    const startPage = transcriptPages?.min ?? slice[0].page;
+    const endPage = transcriptPages?.max ?? slice[slice.length - 1].page;
+    
+    // Add clear page headers with TRANSCRIPT page numbers
+    const textWithPageHeaders = slice.map((p, idx) => {
+      const pageText = p.text;
+      const pagesInThisSlice = detectTranscriptPagesInText(pageText);
+      const pageNum = pagesInThisSlice?.min ?? (startPage + idx);
       
-      // Format page header clearly for LLM
-      const header = `\n=== PAGE ${p.page} ===\n`;
-      
-      // If line numbers exist in text, preserve them; otherwise add placeholder
-      if (hasLineNumbers) {
-        return header + p.text;
-      } else {
-        // Add line number hints based on typical deposition format (25 lines per page)
-        return header + `[Lines 1-25]\n` + p.text;
-      }
+      // Format page header clearly for LLM using transcript page number
+      const header = `\n=== TRANSCRIPT PAGE ${pageNum} ===\n`;
+      return header + pageText;
     }).join("\n");
     
     out.push({
-      start: slice[0].page,
-      end: slice[slice.length - 1].page,
+      start: startPage,
+      end: endPage,
       text: textWithPageHeaders,
     });
   }
@@ -610,45 +645,35 @@ function makePrompt(
       role: "user",
       content: isFirst
         ? `
-Produce a comprehensive deposition summary for pages ${chunk.start}–${chunk.end}.
+Produce a comprehensive deposition summary for transcript pages ${chunk.start}–${chunk.end}.
 
 ${metaSection}
 
-MANDATORY COVERAGE - READ CAREFULLY:
-You are given transcript text for pages ${chunk.start} through ${chunk.end}.
-Each page is marked with "=== PAGE X ===" headers.
-You MUST produce summary rows that COLLECTIVELY cover EVERY SINGLE PAGE from ${chunk.start} to ${chunk.end}.
-DO NOT SKIP ANY PAGES. If you skip pages, the output is INVALID.
-
-REQUIRED OUTPUT:
-Create 1-3 table rows that together cover ALL pages ${chunk.start}-${chunk.end}:
+CRITICAL INSTRUCTIONS:
+1. The transcript text below contains pages ${chunk.start} through ${chunk.end}.
+2. Look for "=== TRANSCRIPT PAGE X ===" markers OR internal "Page X" headers to identify page numbers.
+3. You MUST summarize ALL content from page ${chunk.start} to page ${chunk.end}.
+4. Your page references in column 1 must use the TRANSCRIPT page numbers (${chunk.start}-${chunk.end}), not PDF page numbers.
 
 OUTPUT FORMAT:
 - Output ONLY Markdown table rows: | Page(s) | Testimony |
 - No header row, just data rows
-- First column: "p.${chunk.start}-${chunk.end}" or list each page like "p.${chunk.start}, p.${'' + (chunk.start + 1)}, ..."
+- First column: Use transcript page numbers, e.g., "p.${chunk.start}-${chunk.end}" or "p.${chunk.start}, p.${chunk.start + 1}, ..."
 - Second column: 3-6 sentences summarizing the testimony
-- Cover:
-  * The main topic or subject matter
-  * All specific names, titles, entities, dates, and figures mentioned
-  * Document references (exhibits, emails, declarations) with context
-  * Key facts, admissions, or statements by the witness
-  * Any objections or legal procedural matters
-- Be thorough and specific - the attorney should understand the testimony without reading the transcript
-- Break into multiple rows when topics change within a page range
+- Cover all names, dates, figures, exhibits, key facts, admissions, and objections
+- Be thorough and specific - the attorney should understand without reading the transcript
 
 Transcript:
 ${chunk.text}
         `.trim()
         : `
-Continue the deposition summary for pages ${chunk.start}–${chunk.end}.
+Continue summarizing transcript pages ${chunk.start}–${chunk.end}.
 
-MANDATORY: You MUST cover EVERY page from ${chunk.start} to ${chunk.end}. DO NOT SKIP ANY PAGES.
+MANDATORY: Cover ALL pages from ${chunk.start} to ${chunk.end}. Use TRANSCRIPT page numbers in your output.
 
-Output 1-3 Markdown table rows (| Page(s) | Testimony |) that TOGETHER cover ALL pages in this range.
-- First column: "p.${chunk.start}-${chunk.end}" or list each page
-- Second column: 3-6 sentences summarizing the testimony
-- Include: names, dates, figures, exhibits, key facts, admissions
+Output Markdown table rows (| Page(s) | Testimony |):
+- First column: transcript page numbers like "p.${chunk.start}-${chunk.end}"
+- Second column: 3-6 sentences with names, dates, figures, exhibits, key facts
 - Be thorough and specific
 
 Transcript:
