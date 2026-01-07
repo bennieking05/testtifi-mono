@@ -627,6 +627,45 @@ ${chunk.text}
   ];
 }
 
+/**
+ * Post-process LLM output to clean up page references.
+ * Removes line numbers (e.g., ":1-25") and normalizes page format.
+ */
+function cleanupPageReferences(content: string): string {
+  // Pattern: p.XX:YY-ZZ → p.XX (remove line numbers)
+  // Also handles p.XX:YY-ZZ, p.YY:AA-BB → p.XX, p.YY
+  let cleaned = content;
+  
+  // Remove line number suffixes like ":1-25" or ":5-20" from page references
+  // Match p.123:1-25 or p.123:5-20 and replace with just p.123
+  cleaned = cleaned.replace(/\bp\.(\d+):(\d+)-(\d+)/gi, 'p.$1');
+  
+  // Also handle comma-separated lists with line numbers
+  // e.g., "p.18:1-25, p.19:1-25" → "p.18, p.19"
+  
+  // Consolidate consecutive pages like "p.18, p.19, p.20, p.21" → "p.18-21"
+  // This is optional but makes output cleaner
+  cleaned = cleaned.replace(/\bp\.(\d+)(?:,\s*p\.(\d+))+/gi, (match) => {
+    const pages = match.match(/\d+/g);
+    if (!pages || pages.length < 2) return match;
+    const nums = pages.map(Number).sort((a, b) => a - b);
+    // Check if consecutive
+    let isConsecutive = true;
+    for (let i = 1; i < nums.length; i++) {
+      if (nums[i] !== nums[i-1] + 1) {
+        isConsecutive = false;
+        break;
+      }
+    }
+    if (isConsecutive && nums.length >= 3) {
+      return `p.${nums[0]}-${nums[nums.length - 1]}`;
+    }
+    return match;
+  });
+  
+  return cleaned;
+}
+
 async function azureChatCompletion(
   messages: any[],
   maxTokens: number = AZURE_MAX_TOKENS,
@@ -937,7 +976,9 @@ async function work() {
               },
               { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 } // Increased retries and delays for rate limits
             );
-            const content = String(resp?.choices?.[0]?.message?.content || "").trim();
+            const rawContent = String(resp?.choices?.[0]?.message?.content || "").trim();
+            // Post-process to remove line numbers and clean up page references
+            const content = cleanupPageReferences(rawContent);
             parts[i] = content;
             if (process.env.DEBUG_SUMMARY_JOB_ID === job.id) {
               const lines = content.split(/\r?\n/);

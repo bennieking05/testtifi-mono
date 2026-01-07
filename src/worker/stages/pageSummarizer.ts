@@ -6,6 +6,37 @@ import pLimit from "p-limit";
 import { loadPromptConfig } from "../../lib/promptConfig";
 import { splitPages } from "./pageCounter";
 
+/**
+ * Post-process LLM output to clean up page references.
+ * Removes line numbers (e.g., ":1-25") and normalizes page format.
+ */
+function cleanupPageReferences(content: string): string {
+  let cleaned = content;
+  
+  // Remove line number suffixes like ":1-25" from page references
+  cleaned = cleaned.replace(/\bp\.(\d+):(\d+)-(\d+)/gi, 'p.$1');
+  
+  // Consolidate consecutive pages like "p.18, p.19, p.20, p.21" → "p.18-21"
+  cleaned = cleaned.replace(/\bp\.(\d+)(?:,\s*p\.(\d+))+/gi, (match) => {
+    const pages = match.match(/\d+/g);
+    if (!pages || pages.length < 2) return match;
+    const nums = pages.map(Number).sort((a, b) => a - b);
+    let isConsecutive = true;
+    for (let i = 1; i < nums.length; i++) {
+      if (nums[i] !== nums[i-1] + 1) {
+        isConsecutive = false;
+        break;
+      }
+    }
+    if (isConsecutive && nums.length >= 3) {
+      return `p.${nums[0]}-${nums[nums.length - 1]}`;
+    }
+    return match;
+  });
+  
+  return cleaned;
+}
+
 // Tuning knobs (env-overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
 const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 5 : 6);
@@ -65,7 +96,9 @@ export async function summarizePages(input: SummarizerInput): Promise<Summarizer
           { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 }
         );
 
-        const content = String(resp?.choices?.[0]?.message?.content || "").trim();
+        const rawContent = String(resp?.choices?.[0]?.message?.content || "").trim();
+        // Post-process to remove line numbers and clean up page references
+        const content = cleanupPageReferences(rawContent);
         parts[i] = content;
         totalTokens += resp?.usage?.total_tokens || 0;
 
