@@ -51,8 +51,8 @@ const frontendUrl = resolveFrontendBaseUrl();
 
 // Tuning knobs (env‑overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
-// Reduced from 5 to 3 pages per chunk to force LLM to cover all pages (less content = harder to skip)
-const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 3 : 4);
+// Process 1 PDF page at a time to ensure complete coverage (each PDF page has ~4 transcript pages)
+const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || 1;
 const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1); // Reduced from 3 to 1 to avoid rate limits
 const WORKER_ID = process.env.WORKER_ID || os.hostname();
@@ -303,71 +303,19 @@ export function splitPages(txt: string) {
     .sort((a, b) => a.page - b.page);
 }
 
-/**
- * Detect transcript page numbers within text content.
- * Deposition transcripts have internal page numbers (e.g., "Page 147" at top of each page).
- * Returns the min and max transcript page numbers found.
- */
-function detectTranscriptPagesInText(text: string): { min: number; max: number } | null {
-  const pageMatches: number[] = [];
-  
-  // Pattern 1: "Page X" standalone (most common in transcripts)
-  const pagePattern = /\bPage\s+(\d+)\b/gi;
-  let match;
-  while ((match = pagePattern.exec(text)) !== null) {
-    const num = parseInt(match[1], 10);
-    if (num > 0 && num < 10000) pageMatches.push(num);
-  }
-  
-  // Pattern 2: "PAGE X" in headers/footers
-  const headerPattern = /^\s*(\d{1,4})\s*$/gm;
-  while ((match = headerPattern.exec(text)) !== null) {
-    const num = parseInt(match[1], 10);
-    // Only consider if it looks like a page number (1-999) and appears on its own line
-    if (num > 0 && num < 1000) pageMatches.push(num);
-  }
-  
-  if (pageMatches.length === 0) return null;
-  
-  return {
-    min: Math.min(...pageMatches),
-    max: Math.max(...pageMatches),
-  };
-}
-
 function groupPagesToChunks(
   pages: { page: number; text: string }[],
-  perChunk = PAGES_PER_CHUNK // smaller chunks to avoid token limits
+  perChunk = PAGES_PER_CHUNK
 ) {
   const out: { start: number; end: number; text: string }[] = [];
   for (let i = 0; i < pages.length; i += perChunk) {
     const slice = pages.slice(i, i + perChunk);
-    
-    // Combine text for this chunk
-    const combinedText = slice.map((p) => p.text).join("\n");
-    
-    // Detect internal transcript page numbers in this chunk
-    const transcriptPages = detectTranscriptPagesInText(combinedText);
-    
-    // Use transcript page numbers if detected, otherwise fall back to PDF page numbers
-    const startPage = transcriptPages?.min ?? slice[0].page;
-    const endPage = transcriptPages?.max ?? slice[slice.length - 1].page;
-    
-    // Add clear page headers with TRANSCRIPT page numbers
-    const textWithPageHeaders = slice.map((p, idx) => {
-      const pageText = p.text;
-      const pagesInThisSlice = detectTranscriptPagesInText(pageText);
-      const pageNum = pagesInThisSlice?.min ?? (startPage + idx);
-      
-      // Format page header clearly for LLM using transcript page number
-      const header = `\n=== TRANSCRIPT PAGE ${pageNum} ===\n`;
-      return header + pageText;
-    }).join("\n");
-    
+    // Simple: just combine the text, the transcript page numbers are already in the text
+    const text = slice.map((p) => p.text).join("\n");
     out.push({
-      start: startPage,
-      end: endPage,
-      text: textWithPageHeaders,
+      start: slice[0].page,
+      end: slice[slice.length - 1].page,
+      text,
     });
   }
   return out;
@@ -645,36 +593,27 @@ function makePrompt(
       role: "user",
       content: isFirst
         ? `
-Produce a comprehensive deposition summary for transcript pages ${chunk.start}–${chunk.end}.
+Summarize this deposition transcript section.
 
 ${metaSection}
 
-CRITICAL INSTRUCTIONS:
-1. The transcript text below contains pages ${chunk.start} through ${chunk.end}.
-2. Look for "=== TRANSCRIPT PAGE X ===" markers OR internal "Page X" headers to identify page numbers.
-3. You MUST summarize ALL content from page ${chunk.start} to page ${chunk.end}.
-4. Your page references in column 1 must use the TRANSCRIPT page numbers (${chunk.start}-${chunk.end}), not PDF page numbers.
-
-OUTPUT FORMAT:
-- Output ONLY Markdown table rows: | Page(s) | Testimony |
-- No header row, just data rows
-- First column: Use transcript page numbers, e.g., "p.${chunk.start}-${chunk.end}" or "p.${chunk.start}, p.${chunk.start + 1}, ..."
-- Second column: 3-6 sentences summarizing the testimony
-- Cover all names, dates, figures, exhibits, key facts, admissions, and objections
-- Be thorough and specific - the attorney should understand without reading the transcript
+INSTRUCTIONS:
+- Summarize ALL content in the text below
+- Use the page numbers exactly as they appear in the text (look for "Page X" or standalone numbers like "15")
+- Output Markdown table rows: | Page(s) | Testimony |
+- First column: page numbers like "p.5-8" or "p.5, p.6, p.7, p.8"
+- Second column: 3-6 sentences covering names, dates, exhibits, key facts
+- Be thorough - cover everything, don't skip any testimony
 
 Transcript:
 ${chunk.text}
         `.trim()
         : `
-Continue summarizing transcript pages ${chunk.start}–${chunk.end}.
+Continue summarizing. Cover ALL content below using page numbers as they appear in the text.
 
-MANDATORY: Cover ALL pages from ${chunk.start} to ${chunk.end}. Use TRANSCRIPT page numbers in your output.
-
-Output Markdown table rows (| Page(s) | Testimony |):
-- First column: transcript page numbers like "p.${chunk.start}-${chunk.end}"
-- Second column: 3-6 sentences with names, dates, figures, exhibits, key facts
-- Be thorough and specific
+Output: | Page(s) | Testimony |
+- Use page numbers from the text (e.g., "p.18-21")
+- 3-6 sentences per entry with names, dates, facts
 
 Transcript:
 ${chunk.text}
