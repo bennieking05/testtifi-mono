@@ -469,25 +469,55 @@ function extractLegalMetadata(
     return null;
   };
 
-  // Special-case: "commencing ... on the 7th day of July, A.D., 2022"
-  // Normalize to "July 7, 2022".
+  // Clean header for date extraction
   // Handle line breaks and embedded line numbers in transcript text (e.g., "7th day of\n15July")
   const cleanedHeaderForDate = header.replace(/\n\d{1,2}\s*/g, " ").replace(/\s+/g, " ");
+  
+  // HIGHEST PRIORITY: Look for explicit deposition date indicators first
+  // These patterns directly indicate when the deposition was held
+  const highPriorityDatePatterns: Array<{ pattern: RegExp; name: string }> = [
+    // "was convened on July 7, 2022" - common in deposition openings
+    { pattern: /\bconvened\s+(?:remotely\s+)?on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "convened on" },
+    // "commenced on July 7, 2022" or "commencing on July 7, 2022"
+    { pattern: /\bcommenc(?:ed|ing)\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "commenced/commencing" },
+    // "was held on July 7, 2022"
+    { pattern: /\bwas\s+held\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "was held on" },
+    // "was taken on July 7, 2022"
+    { pattern: /\bwas\s+taken\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "was taken on" },
+    // "at 10:05 a.m. on July 7, 2022"
+    { pattern: /\bat\s+\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "at time on date" },
+    // TAKEN: July 7, 2022 (INDEX page)
+    { pattern: /\bTAKEN\s*[:\-]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "TAKEN:" },
+  ];
+  
+  for (const { pattern, name } of highPriorityDatePatterns) {
+    const match = cleanedHeaderForDate.match(pattern);
+    if (match?.[1]) {
+      const extracted = extractDateToken(match[1]) || match[1].trim();
+      if (extracted) {
+        extractedDate = extracted;
+        console.log(`[DateExtraction] Found via HIGH PRIORITY "${name}": "${extractedDate}"`);
+        break;
+      }
+    }
+  }
   
   // Ordinal date patterns - match various formats:
   // - "on the 7th day of July, A.D., 2022"
   // - "the 7th day of July, 2022"
   // - "7th day of July, A.D., 2022"
-  const ordinalDayOfMonth =
-    /\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.?\s*D\.?,?\s*)?(\d{4})\b/i;
-  const ordMatch = cleanedHeaderForDate.match(ordinalDayOfMonth);
-  if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
-    const day = Number.parseInt(ordMatch[1], 10);
-    const month = ordMatch[2];
-    const year = ordMatch[3];
-    if (Number.isFinite(day) && day >= 1 && day <= 31) {
-      extractedDate = `${month} ${day}, ${year}`;
-      console.log(`[DateExtraction] Found ordinal date: "${extractedDate}"`);
+  if (!extractedDate) {
+    const ordinalDayOfMonth =
+      /\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.?\s*D\.?,?\s*)?(\d{4})\b/i;
+    const ordMatch = cleanedHeaderForDate.match(ordinalDayOfMonth);
+    if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
+      const day = Number.parseInt(ordMatch[1], 10);
+      const month = ordMatch[2];
+      const year = ordMatch[3];
+      if (Number.isFinite(day) && day >= 1 && day <= 31) {
+        extractedDate = `${month} ${day}, ${year}`;
+        console.log(`[DateExtraction] Found ordinal date: "${extractedDate}"`);
+      }
     }
   }
 
