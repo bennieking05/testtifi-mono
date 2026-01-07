@@ -39,7 +39,8 @@ function cleanupPageReferences(content: string): string {
 
 // Tuning knobs (env-overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
-const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 5 : 6);
+// Reduced from 5 to 3 pages per chunk to force LLM to cover all pages (less content = harder to skip)
+const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 3 : 4);
 const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1);
 
