@@ -848,6 +848,22 @@ async function work() {
       const transcript = await extractFullText(buf, job.fileName, gcsUri, job.id);
       const pages = splitPages(transcript);
       const pdfPageCount = pages.length;
+      
+      // Log page extraction details for debugging gaps
+      const pageNumbers = pages.map(p => p.page).sort((a, b) => a - b);
+      console.log(`[${job.id}] splitPages extracted ${pages.length} pages: [${pageNumbers.slice(0, 10).join(', ')}${pageNumbers.length > 10 ? '...' + pageNumbers.slice(-3).join(', ') : ''}]`);
+      
+      // Check for gaps in page sequence
+      const pageGaps: string[] = [];
+      for (let i = 1; i < pageNumbers.length; i++) {
+        if (pageNumbers[i] - pageNumbers[i-1] > 1) {
+          pageGaps.push(`${pageNumbers[i-1]+1}-${pageNumbers[i]-1}`);
+        }
+      }
+      if (pageGaps.length > 0) {
+        console.log(`[${job.id}] WARNING: Found gaps in extracted pages: ${pageGaps.join(', ')}`);
+      }
+      
       let transcriptMaxPage = detectTranscriptMaxPage(transcript);
       console.log(`[${job.id}] Page count detection: pdfPageCount=${pdfPageCount}, transcriptMaxPage=${transcriptMaxPage}`);
       const filePagesHintRaw = job.file?.pages;
@@ -992,10 +1008,17 @@ async function work() {
       // 2) Summarize chunks with bounded parallelism and retries
       const limit = pLimit(WORKER_CONCURRENCY);
       const parts: string[] = new Array(chunks.length).fill("");
+      
+      // Log chunk coverage for debugging
+      console.log(`[${job.id}] Created ${chunks.length} chunks from ${pdfPageCount} PDF pages:`);
+      chunks.forEach((c, i) => {
+        console.log(`[${job.id}]   Chunk ${i + 1}: pages ${c.start}-${c.end}, textLen=${c.text.length}`);
+      });
 
       await Promise.all(
         chunks.map((chunk, i) =>
           limit(async () => {
+            console.log(`[${job.id}] Processing chunk ${i + 1}/${chunks.length} (pages ${chunk.start}-${chunk.end})...`);
             const resp = await withRetry(
               () => {
                 const cfg = loadPromptConfig();
@@ -1011,13 +1034,13 @@ async function work() {
             // Post-process to remove line numbers and clean up page references
             const content = cleanupPageReferences(rawContent);
             parts[i] = content;
-            if (process.env.DEBUG_SUMMARY_JOB_ID === job.id) {
-              const lines = content.split(/\r?\n/);
-              const rowish = lines.filter((l) => /^\s*\|?\s*p\.\s*\d+/i.test(l)).length;
-              console.log(
-                `[${job.id}] DEBUG chunk ${i + 1}/${chunks.length} pdfPages ${chunk.start}-${chunk.end}: chars=${content.length}, rowishLines=${rowish}`
-              );
-            }
+            
+            // Always log chunk results for debugging page gaps
+            const lines = content.split(/\r?\n/);
+            const rowish = lines.filter((l) => /^\s*\|?\s*p\.\s*\d+/i.test(l)).length;
+            console.log(
+              `[${job.id}] Chunk ${i + 1} (pages ${chunk.start}-${chunk.end}) result: chars=${content.length}, rowishLines=${rowish}${content.length < 100 ? ', content=' + JSON.stringify(content.slice(0, 200)) : ''}`
+            );
             // Best-effort progress update - cap at total pages
             const cappedPage = Math.min(
               totalTranscriptPages,
