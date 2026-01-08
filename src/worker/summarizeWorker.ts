@@ -303,19 +303,54 @@ export function splitPages(txt: string) {
     .sort((a, b) => a.page - b.page);
 }
 
+/**
+ * Detect all transcript page numbers within text content.
+ * Deposition transcripts have internal page numbers (e.g., "Page 18" or standalone "18" at line start).
+ * Returns an array of detected page numbers, sorted ascending.
+ */
+function detectTranscriptPagesInText(text: string): number[] {
+  const pageSet = new Set<number>();
+  
+  // Pattern 1: "Page X" (most common in transcripts)
+  const pagePattern = /\bPage\s+(\d+)\b/gi;
+  let match;
+  while ((match = pagePattern.exec(text)) !== null) {
+    const num = parseInt(match[1], 10);
+    if (num > 0 && num < 10000) pageSet.add(num);
+  }
+  
+  // Pattern 2: Standalone page number at start of line (common header format)
+  // e.g., "    18" or "18" on its own line
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Match standalone numbers 1-999 that appear alone on a line
+    if (/^\d{1,3}$/.test(trimmed)) {
+      const num = parseInt(trimmed, 10);
+      if (num > 0 && num < 1000) pageSet.add(num);
+    }
+  }
+  
+  return Array.from(pageSet).sort((a, b) => a - b);
+}
+
 function groupPagesToChunks(
   pages: { page: number; text: string }[],
   perChunk = PAGES_PER_CHUNK
 ) {
-  const out: { start: number; end: number; text: string }[] = [];
+  const out: { start: number; end: number; text: string; transcriptPages: number[] }[] = [];
   for (let i = 0; i < pages.length; i += perChunk) {
     const slice = pages.slice(i, i + perChunk);
-    // Simple: just combine the text, the transcript page numbers are already in the text
     const text = slice.map((p) => p.text).join("\n");
+    
+    // Detect transcript page numbers within this chunk
+    const transcriptPages = detectTranscriptPagesInText(text);
+    
     out.push({
-      start: slice[0].page,
-      end: slice[slice.length - 1].page,
+      start: transcriptPages.length > 0 ? transcriptPages[0] : slice[0].page,
+      end: transcriptPages.length > 0 ? transcriptPages[transcriptPages.length - 1] : slice[slice.length - 1].page,
       text,
+      transcriptPages,
     });
   }
   return out;
@@ -579,11 +614,19 @@ function extractLegalMetadata(
 }
 
 function makePrompt(
-  chunk: { start: number; end: number; text: string },
+  chunk: { start: number; end: number; text: string; transcriptPages: number[] },
   isFirst: boolean,
   metaSection: string,
   systemInstruction: string
 ) {
+  // Format the detected pages for the prompt
+  const pagesListStr = chunk.transcriptPages.length > 0
+    ? chunk.transcriptPages.join(", ")
+    : `${chunk.start}-${chunk.end}`;
+  const pagesRangeStr = chunk.transcriptPages.length > 0
+    ? `${chunk.transcriptPages[0]}-${chunk.transcriptPages[chunk.transcriptPages.length - 1]}`
+    : `${chunk.start}-${chunk.end}`;
+    
   return [
     {
       role: "system",
@@ -597,23 +640,29 @@ Summarize this deposition transcript section.
 
 ${metaSection}
 
+THIS CHUNK CONTAINS TRANSCRIPT PAGES: ${pagesListStr}
+You MUST summarize content from EACH of these pages. Do not skip any.
+
 INSTRUCTIONS:
-- Summarize ALL content in the text below
-- Use the page numbers exactly as they appear in the text (look for "Page X" or standalone numbers like "15")
 - Output Markdown table rows: | Page(s) | Testimony |
-- First column: page numbers like "p.5-8" or "p.5, p.6, p.7, p.8"
+- First column: use page numbers like "p.${pagesRangeStr}" or list each page
 - Second column: 3-6 sentences covering names, dates, exhibits, key facts
-- Be thorough - cover everything, don't skip any testimony
+- SKIP any Index, Errata, Concordance, or Certificate sections - only summarize actual testimony
+- Be thorough - cover testimony from EVERY page listed above
 
 Transcript:
 ${chunk.text}
         `.trim()
         : `
-Continue summarizing. Cover ALL content below using page numbers as they appear in the text.
+Continue summarizing.
+
+THIS CHUNK CONTAINS TRANSCRIPT PAGES: ${pagesListStr}
+You MUST summarize content from EACH of these pages.
 
 Output: | Page(s) | Testimony |
-- Use page numbers from the text (e.g., "p.18-21")
+- Use page numbers like "p.${pagesRangeStr}"
 - 3-6 sentences per entry with names, dates, facts
+- SKIP Index, Errata, Concordance, or Certificate sections
 
 Transcript:
 ${chunk.text}
@@ -624,22 +673,21 @@ ${chunk.text}
 
 /**
  * Post-process LLM output to clean up page references.
- * Removes line numbers (e.g., ":1-25") and normalizes page format.
+ * Removes ALL line number variants and normalizes page format.
  */
 function cleanupPageReferences(content: string): string {
-  // Pattern: p.XX:YY-ZZ → p.XX (remove line numbers)
-  // Also handles p.XX:YY-ZZ, p.YY:AA-BB → p.XX, p.YY
   let cleaned = content;
   
-  // Remove line number suffixes like ":1-25" or ":5-20" from page references
-  // Match p.123:1-25 or p.123:5-20 and replace with just p.123
-  cleaned = cleaned.replace(/\bp\.(\d+):(\d+)-(\d+)/gi, 'p.$1');
+  // Remove ALL line number suffixes from page references:
+  // p.123:1-25 → p.123 (range format)
+  // p.123:11 → p.123 (single line format)
+  // p.123:5 → p.123
+  cleaned = cleaned.replace(/\bp\.(\d+):\d+(?:-\d+)?/gi, 'p.$1');
   
-  // Also handle comma-separated lists with line numbers
-  // e.g., "p.18:1-25, p.19:1-25" → "p.18, p.19"
+  // Also handle "p.236:11" format (single line number after colon)
+  cleaned = cleaned.replace(/\bp\.(\d+):\d+/gi, 'p.$1');
   
   // Consolidate consecutive pages like "p.18, p.19, p.20, p.21" → "p.18-21"
-  // This is optional but makes output cleaner
   cleaned = cleaned.replace(/\bp\.(\d+)(?:,\s*p\.(\d+))+/gi, (match) => {
     const pages = match.match(/\d+/g);
     if (!pages || pages.length < 2) return match;
@@ -659,6 +707,69 @@ function cleanupPageReferences(content: string): string {
   });
   
   return cleaned;
+}
+
+/**
+ * Parse page reference like "p.18-21" or "p.18, p.19" and extract the first (start) page number.
+ */
+function extractStartPage(pageRef: string): number {
+  // Match "p.X" or "p.X-Y" or "p.X, p.Y"
+  const match = pageRef.match(/p\.(\d+)/i);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+/**
+ * Sort and deduplicate summary rows by page number.
+ * Parses the Markdown table rows, sorts by start page, removes duplicates.
+ */
+function sortAndDeduplicateRows(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const rows: { pageRef: string; startPage: number; testimony: string; originalLine: string }[] = [];
+  
+  for (const line of lines) {
+    // Match table row format: | p.X-Y | Testimony... | or just p.X-Y | Testimony
+    const tableMatch = line.match(/^\s*\|?\s*(p\.[\d,\s\-p.]+)\s*\|\s*(.+?)\s*\|?\s*$/i);
+    if (tableMatch) {
+      const pageRef = tableMatch[1].trim();
+      const testimony = tableMatch[2].trim();
+      const startPage = extractStartPage(pageRef);
+      if (startPage > 0) {
+        rows.push({ pageRef, startPage, testimony, originalLine: line });
+      }
+      continue;
+    }
+    
+    // Also match simpler format: p.X-Y  Testimony (tab or multiple spaces)
+    const simpleMatch = line.match(/^\s*(p\.[\d,\s\-p.]+)\s{2,}(.+)$/i);
+    if (simpleMatch) {
+      const pageRef = simpleMatch[1].trim();
+      const testimony = simpleMatch[2].trim();
+      const startPage = extractStartPage(pageRef);
+      if (startPage > 0) {
+        rows.push({ pageRef, startPage, testimony, originalLine: line });
+      }
+    }
+  }
+  
+  if (rows.length === 0) {
+    return markdown; // No rows found, return as-is
+  }
+  
+  // Sort by start page number
+  rows.sort((a, b) => a.startPage - b.startPage);
+  
+  // Deduplicate: if same start page appears multiple times, keep the one with longer testimony
+  const seen = new Map<number, typeof rows[0]>();
+  for (const row of rows) {
+    const existing = seen.get(row.startPage);
+    if (!existing || row.testimony.length > existing.testimony.length) {
+      seen.set(row.startPage, row);
+    }
+  }
+  
+  // Rebuild the markdown with sorted, deduplicated rows
+  const sortedRows = Array.from(seen.values()).sort((a, b) => a.startPage - b.startPage);
+  return sortedRows.map(r => `| ${r.pageRef} | ${r.testimony} |`).join("\n");
 }
 
 async function azureChatCompletion(
@@ -1027,7 +1138,10 @@ async function work() {
       const rowsOnlyUnbounded = sanitizeGeneratedMarkdown(mergedRaw)
         .replace(/```[\s\S]*?```/g, "")
         .trim();
-      const rowsOnly = trimOutOfRangeRows(rowsOnlyUnbounded, totalTranscriptPages);
+      const rowsTrimmed = trimOutOfRangeRows(rowsOnlyUnbounded, totalTranscriptPages);
+      
+      // Sort rows by page number and deduplicate (fixes out-of-order artifacts like p.236 at end)
+      const rowsOnly = sortAndDeduplicateRows(rowsTrimmed);
 
       // Parse summary rows for judge validation
       const summaryRows = parseSummaryRows(rowsOnly);
