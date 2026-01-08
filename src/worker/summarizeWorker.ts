@@ -305,13 +305,16 @@ export function splitPages(txt: string) {
 
 /**
  * Detect all transcript page numbers within text content.
- * Deposition transcripts have internal page numbers (e.g., "Page 18" or standalone "18" at line start).
+ * Deposition transcripts have internal page numbers (e.g., "Page 18").
  * Returns an array of detected page numbers, sorted ascending.
+ * 
+ * IMPORTANT: Only use explicit "Page X" patterns to avoid picking up
+ * line numbers, exhibit numbers, or other numeric data.
  */
 function detectTranscriptPagesInText(text: string): number[] {
   const pageSet = new Set<number>();
   
-  // Pattern 1: "Page X" (most common in transcripts)
+  // Pattern 1: "Page X" (most reliable - explicit page markers)
   const pagePattern = /\bPage\s+(\d+)\b/gi;
   let match;
   while ((match = pagePattern.exec(text)) !== null) {
@@ -319,17 +322,14 @@ function detectTranscriptPagesInText(text: string): number[] {
     if (num > 0 && num < 10000) pageSet.add(num);
   }
   
-  // Pattern 2: Standalone page number at start of line (common header format)
-  // e.g., "    18" or "18" on its own line
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    // Match standalone numbers 1-999 that appear alone on a line
-    if (/^\d{1,3}$/.test(trimmed)) {
-      const num = parseInt(trimmed, 10);
-      if (num > 0 && num < 1000) pageSet.add(num);
-    }
+  // Pattern 2: Header format "--- X ---" or "=== X ===" (our injected markers)
+  const markerPattern = /(?:---|\=\=\=)\s*(?:PAGE\s+)?(\d+)\s*(?:---|\=\=\=)/gi;
+  while ((match = markerPattern.exec(text)) !== null) {
+    const num = parseInt(match[1], 10);
+    if (num > 0 && num < 10000) pageSet.add(num);
   }
+  
+  // DO NOT match standalone numbers - they are usually line numbers, not page numbers
   
   return Array.from(pageSet).sort((a, b) => a - b);
 }
