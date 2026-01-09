@@ -951,8 +951,9 @@ RULES:
 1. Output EXACTLY one row per page - do NOT combine or skip pages
 2. Each row starts with "| p.X |" where X is the transcript page number
 3. Include: names, dates, exhibits, key facts, objections mentioned on that page
-4. SKIP Index/Errata/Concordance/Certificate pages - output "| p.X | [Index/administrative content] |" for these
-5. Text sections are clearly marked with "=== TRANSCRIPT PAGE X ===" headers
+4. For cover pages, appearances, or index pages: still describe the content (case caption, parties, attorneys, date, court, exhibits listed, etc.) - do NOT just write "Index/administrative content"
+5. For certification/notary pages at the end: describe what is being certified and by whom
+6. Text sections are clearly marked with "=== TRANSCRIPT PAGE X ===" headers
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -964,6 +965,12 @@ PAGES IN THIS BATCH: ${pagesList}
 You MUST output EXACTLY ${pagesCount} rows, one for each page.
 
 FORMAT: | p.X | [Summary of page X] |
+
+RULES:
+- For EVERY page, describe the actual content - names, dates, exhibits, key facts
+- For cover/appearances/index pages: describe case caption, parties, attorneys, court, date
+- For certification pages: describe what is being certified and by whom
+- Do NOT output generic placeholders like "[Index/administrative content]"
 
 TRANSCRIPT TEXT:
 ${batch.text}
