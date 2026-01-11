@@ -531,15 +531,14 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
     // Extract the text for this page
     const pageText = fullText.slice(startPos, endPos).trim();
     
-    // Store if there's any content (lowered threshold for scanned PDFs where
-    // page markers may be close together in Vision OCR output)
+    // Store ALL pages - never skip any page to ensure full coverage
     const nonWhitespace = pageText.replace(/\s/g, '').length;
     if (nonWhitespace > 5) {
       pageMap.set(current.pageNum, pageText);
-    } else if (pageText.length > 0) {
-      // For very thin content, still include the page but mark it
+    } else {
+      // For thin or empty content, ALWAYS include the page with a placeholder
       // This ensures we don't create gaps in page coverage
-      pageMap.set(current.pageNum, `[Page ${current.pageNum} - minimal content detected]`);
+      pageMap.set(current.pageNum, `[Page ${current.pageNum} - minimal/empty content in OCR]`);
       thinContentCount++;
     }
   }
