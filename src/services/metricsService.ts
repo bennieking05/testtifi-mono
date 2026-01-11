@@ -523,7 +523,7 @@ export class MetricsService {
   async getDownloadMetrics(): Promise<DownloadMetrics> {
     const startOfMonth = this.getStartOfMonth();
 
-    const [totalDownloads, downloads, downloadsThisMonth, summaries, recentDownloads] = await Promise.all([
+    const [totalDownloads, downloads, downloadsThisMonth, summaries] = await Promise.all([
       prisma.downloadHistory.count(),
       prisma.downloadHistory.findMany({
         select: {
@@ -538,19 +538,6 @@ export class MetricsService {
       }),
       prisma.file.findMany({
         select: { id: true, title: true },
-      }),
-      // Fetch recent downloads with user info
-      prisma.downloadHistory.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 100,
-        select: {
-          id: true,
-          fileId: true,
-          format: true,
-          createdAt: true,
-          file: { select: { title: true } },
-          user: { select: { name: true, email: true, companyName: true } },
-        },
       }),
     ]);
 
@@ -597,18 +584,6 @@ export class MetricsService {
       return acc;
     }, {} as Record<string, { date: string; count: number }>);
 
-    // Format recent downloads for the frontend
-    const formattedRecentDownloads = recentDownloads.map((d) => ({
-      id: d.id,
-      summaryId: d.fileId,
-      title: d.file?.title || "Unknown",
-      format: d.format,
-      downloadedAt: d.createdAt.toISOString(),
-      userName: d.user?.name || null,
-      userEmail: d.user?.email || null,
-      companyName: d.user?.companyName || null,
-    }));
-
     return {
       totalDownloads,
       byFormat: formatCounts,
@@ -616,7 +591,6 @@ export class MetricsService {
       avgDownloadsPerSummary: Math.round(avgDownloadsPerSummary * 10) / 10,
       topDownloaded,
       downloadsByDay: Object.values(downloadsByDay),
-      recentDownloads: formattedRecentDownloads,
     };
   }
 
