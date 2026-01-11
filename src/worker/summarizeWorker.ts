@@ -435,13 +435,29 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
   // Sort anchors by position in text
   anchors.sort((a, b) => a.position - b.position);
   
-  // Remove duplicate page numbers - keep the FIRST occurrence of each page
-  const seenPages = new Set<number>();
-  let uniqueAnchors = anchors.filter(a => {
-    if (seenPages.has(a.pageNum)) return false;
-    seenPages.add(a.pageNum);
-    return true;
-  });
+  // Remove duplicate page numbers - but KEEP the occurrence with the LONGEST following text
+  // This helps when a page number is falsely detected early (e.g., in exhibit refs)
+  const pageOccurrences = new Map<number, PageAnchor[]>();
+  for (const a of anchors) {
+    if (!pageOccurrences.has(a.pageNum)) {
+      pageOccurrences.set(a.pageNum, []);
+    }
+    pageOccurrences.get(a.pageNum)!.push(a);
+  }
+  
+  // For each page, pick the best anchor (the one most likely to have real content after it)
+  let uniqueAnchors: PageAnchor[] = [];
+  for (const [pageNum, occurrences] of pageOccurrences) {
+    if (occurrences.length === 1) {
+      uniqueAnchors.push(occurrences[0]);
+    } else {
+      // Multiple detections - pick the one that's closest to where we'd expect it
+      // based on nearby pages (linear interpolation)
+      // For now, use the LAST occurrence which is often more reliable
+      // (early occurrences might be exhibit/index references)
+      uniqueAnchors.push(occurrences[occurrences.length - 1]);
+    }
+  }
   
   // Re-sort by page number to check for gaps
   uniqueAnchors.sort((a, b) => a.pageNum - b.pageNum);
@@ -502,13 +518,18 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
   // Sort interpolated anchors by position
   interpolatedAnchors.sort((a, b) => a.position - b.position);
   
-  // Remove duplicates again after interpolation
-  const finalSeenPages = new Set<number>();
-  const finalAnchors = interpolatedAnchors.filter(a => {
-    if (finalSeenPages.has(a.pageNum)) return false;
-    finalSeenPages.add(a.pageNum);
-    return true;
-  });
+  // Remove duplicates again after interpolation - prefer non-synthetic anchors
+  const finalPageMap = new Map<number, PageAnchor>();
+  for (const a of interpolatedAnchors) {
+    const existing = finalPageMap.get(a.pageNum);
+    if (!existing) {
+      finalPageMap.set(a.pageNum, a);
+    } else if (existing.isSynthetic && !a.isSynthetic) {
+      // Prefer real anchors over synthetic ones
+      finalPageMap.set(a.pageNum, a);
+    }
+  }
+  const finalAnchors = Array.from(finalPageMap.values());
   
   // Sort by position for text extraction
   finalAnchors.sort((a, b) => a.position - b.position);
