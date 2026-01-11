@@ -308,22 +308,34 @@ export function splitPages(txt: string) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Anchor type for page marker detection
+ */
+interface PageAnchor {
+  position: number;
+  pageNum: number;
+  matchLength: number;
+  isSynthetic?: boolean;
+}
+
+/**
  * Extract transcript pages by segmenting text based on "Page X" anchors found ANYWHERE in the text.
  * Returns a Map where key = transcript page number, value = text content for that page.
  * 
- * This is the "Anchor Strategy" - we find every "Page X" marker in the text (not just at line start)
- * and slice content between them to get per-page segments.
+ * This is the "Anchor Strategy" with Gap Interpolation:
+ * 1. Find every "Page X" marker we CAN detect (anchor pages)
+ * 2. For gaps between anchors (e.g., found 10 and 15 but not 11-14), interpolate based on position
+ * 3. Slice content between anchors to get per-page segments
  */
 export function extractTranscriptPagesFromText(fullText: string): Map<number, string> {
   const pageMap = new Map<number, string>();
   
   // Find ALL page markers with their positions in the text
-  // Multiple patterns to catch different transcript formats
-  const anchors: { position: number; pageNum: number; matchLength: number }[] = [];
+  // Multiple OCR-tolerant patterns to catch different transcript formats
+  const anchors: PageAnchor[] = [];
+  let match;
   
   // Pattern 1: "Page X" anywhere in text (most common)
   const pagePattern = /\bPage\s+(\d{1,5})\b/gi;
-  let match;
   while ((match = pagePattern.exec(fullText)) !== null) {
     const pageNum = parseInt(match[1], 10);
     if (pageNum >= 1 && pageNum <= 5000) {
@@ -340,63 +352,84 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
   while ((match = pgPattern.exec(fullText)) !== null) {
     const pageNum = parseInt(match[1], 10);
     if (pageNum >= 1 && pageNum <= 5000) {
-      // Only add if not already found at this position
       const exists = anchors.some(a => Math.abs(a.position - match!.index) < 10 && a.pageNum === pageNum);
       if (!exists) {
-        anchors.push({
-          position: match.index,
-          pageNum,
-          matchLength: match[0].length,
-        });
+        anchors.push({ position: match.index, pageNum, matchLength: match[0].length });
       }
     }
   }
   
-  // Pattern 3: Standalone page numbers on their own line (common in transcript headers)
-  // Match lines that are just a number like "18" or "  18  " 
+  // Pattern 3: OCR variant "Poge X" or "Paqe X" (common OCR errors)
+  const ocrVariantPattern = /\b(?:Poge|Paqe|P[a@]ge)\s+(\d{1,5})\b/gi;
+  while ((match = ocrVariantPattern.exec(fullText)) !== null) {
+    const pageNum = parseInt(match[1], 10);
+    if (pageNum >= 1 && pageNum <= 5000) {
+      const exists = anchors.some(a => Math.abs(a.position - match!.index) < 10 && a.pageNum === pageNum);
+      if (!exists) {
+        anchors.push({ position: match.index, pageNum, matchLength: match[0].length });
+      }
+    }
+  }
+  
+  // Pattern 4: Page numbers between dashes "- X -" or "— X —" (common footer format)
+  // Must have spaces around the number to avoid matching phone numbers like 888-391-3376
+  const dashPattern = /[-–—]\s+(\d{1,3})\s+[-–—]/g;
+  while ((match = dashPattern.exec(fullText)) !== null) {
+    const pageNum = parseInt(match[1], 10);
+    if (pageNum >= 1 && pageNum <= 500) {
+      const exists = anchors.some(a => Math.abs(a.position - match!.index) < 20 && a.pageNum === pageNum);
+      if (!exists) {
+        anchors.push({ position: match.index, pageNum, matchLength: match[0].length });
+      }
+    }
+  }
+  
+  // Pattern 5: Veritext footer pattern "Veritext Legal Solutions\n...\nX" or similar vendors
+  const veritextPattern = /(?:Veritext|U\.?S\.?\s*Legal)[^\n]*\n[^\n]*?(\d{1,4})\s*$/gim;
+  while ((match = veritextPattern.exec(fullText)) !== null) {
+    const pageNum = parseInt(match[1], 10);
+    if (pageNum >= 1 && pageNum <= 500) {
+      const exists = anchors.some(a => Math.abs(a.position - match!.index) < 50 && a.pageNum === pageNum);
+      if (!exists) {
+        anchors.push({ position: match.index, pageNum, matchLength: match[0].length });
+      }
+    }
+  }
+  
+  // Pattern 6: Standalone page numbers on their own line (common in transcript headers)
   const standalonePattern = /(?:^|\n)\s*(\d{1,5})\s*(?:\n|$)/g;
   while ((match = standalonePattern.exec(fullText)) !== null) {
     const pageNum = parseInt(match[1], 10);
-    // Only accept reasonable page numbers and avoid picking up line numbers
     if (pageNum >= 1 && pageNum <= 500) {
-      // Check if this looks like a sequential page number (not a year, exhibit, etc.)
-      // by seeing if nearby pages exist
+      // Only add if we already have nearby pages (to avoid false positives)
       const nearbyExists = anchors.some(a => Math.abs(a.pageNum - pageNum) <= 5);
-      if (nearbyExists || anchors.length === 0) {
+      if (nearbyExists) {
         const exists = anchors.some(a => Math.abs(a.position - match!.index) < 5 && a.pageNum === pageNum);
         if (!exists) {
-          anchors.push({
-            position: match.index,
-            pageNum,
-            matchLength: match[0].length,
-          });
+          anchors.push({ position: match.index, pageNum, matchLength: match[0].length });
         }
       }
     }
   }
   
-  // Also find page:line patterns like "18:1" at start of lines (indicates new page)
+  // Pattern 7: Page:line patterns like "18:1" at start of lines (indicates new page)
+  // Must start with page:1 and be followed by space and text (actual testimony)
   const lines = fullText.split(/\r?\n/);
   let charPos = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    // Pattern: "X:1" at start of line where X is page number
-    const pageLineMatch = line.match(/^(\d{1,5}):1(?:\s|$)/);
+    const pageLineMatch = line.match(/^(\d{1,3}):1\s+[A-Z]/);
     if (pageLineMatch) {
       const pageNum = parseInt(pageLineMatch[1], 10);
-      if (pageNum >= 1 && pageNum <= 5000) {
-        // Check if we already found this page via "Page X" pattern
+      // Only accept reasonable page numbers (most depositions < 500 pages)
+      if (pageNum >= 1 && pageNum <= 500) {
         const alreadyFound = anchors.some(a => a.pageNum === pageNum);
         if (!alreadyFound) {
-          anchors.push({
-            position: charPos,
-            pageNum,
-            matchLength: pageLineMatch[0].length,
-          });
+          anchors.push({ position: charPos, pageNum, matchLength: pageLineMatch[0].length });
         }
       }
     }
-    charPos += lines[i].length + 1; // +1 for newline
+    charPos += lines[i].length + 1;
   }
   
   // Sort anchors by position in text
@@ -404,38 +437,115 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
   
   // Remove duplicate page numbers - keep the FIRST occurrence of each page
   const seenPages = new Set<number>();
-  const uniqueAnchors = anchors.filter(a => {
+  let uniqueAnchors = anchors.filter(a => {
     if (seenPages.has(a.pageNum)) return false;
     seenPages.add(a.pageNum);
     return true;
   });
   
-  // Re-sort after deduplication to ensure order by position
-  uniqueAnchors.sort((a, b) => a.position - b.position);
+  // Re-sort by page number to check for gaps
+  uniqueAnchors.sort((a, b) => a.pageNum - b.pageNum);
   
-  console.log(`[extractTranscriptPagesFromText] Found ${uniqueAnchors.length} unique page markers`);
-  if (uniqueAnchors.length > 0) {
+  // Filter out outliers - pages that are way outside the expected sequence
+  // (e.g., phone numbers like 888-391-3376 being picked up as page 391)
+  if (uniqueAnchors.length > 5) {
     const pageNums = uniqueAnchors.map(a => a.pageNum);
-    console.log(`[extractTranscriptPagesFromText] Pages: ${pageNums.slice(0, 10).join(', ')}${pageNums.length > 10 ? '...' + pageNums.slice(-3).join(', ') : ''}`);
+    const sortedNums = [...pageNums].sort((a, b) => a - b);
+    const median = sortedNums[Math.floor(sortedNums.length / 2)];
+    
+    // Keep only pages within reasonable range (most depositions < 500 pages)
+    const maxReasonable = Math.max(median + 300, 500);
+    uniqueAnchors = uniqueAnchors.filter(a => a.pageNum >= 1 && a.pageNum <= maxReasonable);
   }
   
-  // Extract text between anchors
-  for (let i = 0; i < uniqueAnchors.length; i++) {
-    const current = uniqueAnchors[i];
-    const next = uniqueAnchors[i + 1];
+  console.log(`[extractTranscriptPagesFromText] Found ${uniqueAnchors.length} unique page markers (before interpolation)`);
+  if (uniqueAnchors.length > 0) {
+    const pageNums = uniqueAnchors.map(a => a.pageNum);
+    console.log(`[extractTranscriptPagesFromText] Anchor pages: ${pageNums.slice(0, 10).join(', ')}${pageNums.length > 10 ? '...' + pageNums.slice(-3).join(', ') : ''}`);
+  }
+  
+  // === GAP INTERPOLATION ===
+  // If we have gaps between detected pages, interpolate the missing ones
+  const interpolatedAnchors: PageAnchor[] = [...uniqueAnchors];
+  
+  if (uniqueAnchors.length >= 2) {
+    // Sort by page number for gap detection
+    uniqueAnchors.sort((a, b) => a.pageNum - b.pageNum);
     
-    // Start from after the "Page X" marker
-    const startPos = current.position + current.matchLength;
-    const endPos = next ? next.position : fullText.length;
+    for (let i = 0; i < uniqueAnchors.length - 1; i++) {
+      const current = uniqueAnchors[i];
+      const next = uniqueAnchors[i + 1];
+      
+      const gap = next.pageNum - current.pageNum;
+      
+      // If there's a gap > 1, interpolate intermediate pages
+      if (gap > 1 && gap <= 20) { // Cap at 20 to avoid huge interpolations from OCR errors
+        // Calculate positions for interpolated pages
+        const startPos = current.position + current.matchLength;
+        const endPos = next.position;
+        const totalChars = endPos - startPos;
+        const charsPerPage = totalChars / gap;
+        
+        for (let p = current.pageNum + 1; p < next.pageNum; p++) {
+          const offset = (p - current.pageNum) * charsPerPage;
+          interpolatedAnchors.push({
+            position: Math.floor(startPos + offset),
+            pageNum: p,
+            matchLength: 0, // Synthetic anchor
+            isSynthetic: true,
+          });
+        }
+      }
+    }
+  }
+  
+  // Sort interpolated anchors by position
+  interpolatedAnchors.sort((a, b) => a.position - b.position);
+  
+  // Remove duplicates again after interpolation
+  const finalSeenPages = new Set<number>();
+  const finalAnchors = interpolatedAnchors.filter(a => {
+    if (finalSeenPages.has(a.pageNum)) return false;
+    finalSeenPages.add(a.pageNum);
+    return true;
+  });
+  
+  // Sort by position for text extraction
+  finalAnchors.sort((a, b) => a.position - b.position);
+  
+  const syntheticCount = finalAnchors.filter(a => a.isSynthetic).length;
+  console.log(`[extractTranscriptPagesFromText] After interpolation: ${finalAnchors.length} pages (${syntheticCount} interpolated)`);
+  
+  // Track pages with thin content for debugging
+  let thinContentCount = 0;
+  
+  // Extract text between anchors
+  for (let i = 0; i < finalAnchors.length; i++) {
+    const current = finalAnchors[i];
+    const next = finalAnchors[i + 1];
+    
+    // Start from after the page marker (or at position for synthetic anchors)
+    const startPos = current.isSynthetic ? current.position : current.position + current.matchLength;
+    const endPos = next ? (next.isSynthetic ? next.position : next.position) : fullText.length;
     
     // Extract the text for this page
     const pageText = fullText.slice(startPos, endPos).trim();
     
-    // Only store if there's meaningful content (more than just whitespace/numbers)
+    // Store if there's any content (lowered threshold for scanned PDFs where
+    // page markers may be close together in Vision OCR output)
     const nonWhitespace = pageText.replace(/\s/g, '').length;
-    if (nonWhitespace > 20) {
+    if (nonWhitespace > 5) {
       pageMap.set(current.pageNum, pageText);
+    } else if (pageText.length > 0) {
+      // For very thin content, still include the page but mark it
+      // This ensures we don't create gaps in page coverage
+      pageMap.set(current.pageNum, `[Page ${current.pageNum} - minimal content detected]`);
+      thinContentCount++;
     }
+  }
+  
+  if (thinContentCount > 0) {
+    console.log(`[extractTranscriptPagesFromText] ${thinContentCount} pages had minimal content`);
   }
   
   return pageMap;
@@ -932,15 +1042,13 @@ Summarize this deposition transcript section.
 
 ${metaSection}
 
-=== STRICT PAGE-KEYED OUTPUT REQUIRED ===
+=== STRICT PAGE-BY-PAGE OUTPUT REQUIRED ===
 This batch contains EXACTLY ${pagesCount} transcript pages: ${pagesList}
 
-You MUST output EXACTLY ${pagesCount} summary entries, ONE for each page listed above.
-Each entry MUST start with the page number it summarizes.
+You MUST output EXACTLY ${pagesCount} rows, one for EACH page listed above. NO EXCEPTIONS.
 
 OUTPUT FORMAT (MANDATORY):
-For EACH page in [${pagesList}], output:
-| p.X | [3-6 sentences summarizing page X's testimony] |
+| p.X | [3-6 sentences summarizing page X] |
 
 EXAMPLE for pages 18, 19, 20:
 | p.18 | [Summary of page 18 content...] |
@@ -948,29 +1056,32 @@ EXAMPLE for pages 18, 19, 20:
 | p.20 | [Summary of page 20 content...] |
 
 RULES:
-1. Output EXACTLY one row per page - do NOT combine or skip pages
-2. Each row starts with "| p.X |" where X is the transcript page number
-3. Include: names, dates, exhibits, key facts, objections mentioned on that page
-4. For cover pages, appearances, or index pages: still describe the content (case caption, parties, attorneys, date, court, exhibits listed, etc.) - do NOT just write "Index/administrative content"
-5. For certification/notary pages at the end: describe what is being certified and by whom
-6. Text sections are clearly marked with "=== TRANSCRIPT PAGE X ===" headers
+1. Output EXACTLY ${pagesCount} rows - one for EACH of these pages: ${pagesList}
+2. DO NOT skip any pages - every page MUST have its own row
+3. DO NOT combine pages into ranges - output individual rows
+4. Each row starts with "| p.X |" where X is the exact page number
+5. Include: names, dates, exhibits, key facts, objections
+6. For cover/appearances: describe case caption, parties, attorneys, court, date
+7. For exhibit index: list specific exhibits mentioned
+8. For certification pages: describe what is being certified and by whom
 
 TRANSCRIPT TEXT:
 ${batch.text}
         `.trim()
         : `
-Continue summarizing. Output one row per page.
+Continue summarizing. STRICT page-by-page output required.
 
 PAGES IN THIS BATCH: ${pagesList}
-You MUST output EXACTLY ${pagesCount} rows, one for each page.
+You MUST output EXACTLY ${pagesCount} rows, one per page.
 
 FORMAT: | p.X | [Summary of page X] |
 
 RULES:
-- For EVERY page, describe the actual content - names, dates, exhibits, key facts
-- For cover/appearances/index pages: describe case caption, parties, attorneys, court, date
-- For certification pages: describe what is being certified and by whom
-- Do NOT output generic placeholders like "[Index/administrative content]"
+- Output one row for EACH page: ${pagesList}
+- DO NOT skip pages
+- DO NOT combine pages
+- Include names, dates, exhibits, key facts
+- 3-6 sentences per row
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1144,88 +1255,126 @@ function sortAndDeduplicateRows(markdown: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Parse LLM output and extract page-keyed summaries into a Map.
- * Returns Map<pageNumber, summaryText>
+ * Represents a page range entry from LLM output (for smart topic grouping)
  */
-function parseLLMOutputToPageMap(llmOutput: string): Map<number, string> {
-  const pageMap = new Map<number, string>();
+interface PageRangeEntry {
+  startPage: number;
+  endPage: number;
+  summary: string;
+}
+
+/**
+ * Parse LLM output into page range entries, preserving grouped pages.
+ * Handles both single pages (p.10) and ranges (p.10-12).
+ */
+function parseToRangeEntries(llmOutput: string): PageRangeEntry[] {
+  const entries: PageRangeEntry[] = [];
   const lines = llmOutput.split(/\r?\n/);
   
   for (const line of lines) {
-    // Match formats:
-    // | p.18 | Summary text... |
-    // | p.18-20 | Summary text... |  (treat as entry for page 18)
-    // p.18 | Summary text
-    const match = line.match(/^\s*\|?\s*p\.(\d+)(?:[-–]\d+)?\s*\|\s*(.+?)\s*\|?\s*$/i);
+    // Match: | p.18 | Summary | or | p.18-20 | Summary |
+    const match = line.match(/^\s*\|?\s*p\.(\d+)(?:[-–](\d+))?\s*\|\s*(.+?)\s*\|?\s*$/i);
     if (match) {
-      const pageNum = parseInt(match[1], 10);
-      const summary = match[2].trim();
-      if (pageNum > 0 && summary.length > 0) {
-        // If we already have this page, append (in case LLM split it)
-        const existing = pageMap.get(pageNum);
-        if (existing) {
-          pageMap.set(pageNum, existing + " " + summary);
-        } else {
-          pageMap.set(pageNum, summary);
-        }
+      const startPage = parseInt(match[1], 10);
+      const endPage = match[2] ? parseInt(match[2], 10) : startPage;
+      const summary = match[3].trim();
+      
+      if (startPage > 0 && summary.length > 0 && endPage >= startPage) {
+        // Cap range at 10 pages to prevent runaway ranges
+        const cappedEnd = Math.min(endPage, startPage + 10);
+        entries.push({ startPage, endPage: cappedEnd, summary });
       }
     }
   }
   
-  return pageMap;
+  return entries;
 }
 
 /**
  * Assemble final sorted summary from all LLM outputs.
- * Iterates from minPage to maxPage to guarantee correct order.
+ * Preserves page range groupings from smart topic merging.
  * 
  * @param llmOutputs - Array of raw LLM output strings
  * @param expectedPages - Array of expected page numbers (from pageMap keys)
- * @returns Markdown table rows sorted by page number
+ * @returns Markdown table rows sorted by page number, with ranges preserved
  */
 function assembleSortedSummary(
   llmOutputs: string[],
   expectedPages: number[]
 ): { markdown: string; coveredPages: number[]; missingPages: number[] } {
-  // Parse all LLM outputs into a single page map
-  const combinedPageMap = new Map<number, string>();
+  // Collect all range entries from all outputs
+  const allEntries: PageRangeEntry[] = [];
   
   for (const output of llmOutputs) {
     const cleaned = cleanupPageReferences(output);
-    const pageEntries = parseLLMOutputToPageMap(cleaned);
-    
-    for (const [pageNum, summary] of pageEntries) {
-      const existing = combinedPageMap.get(pageNum);
-      if (!existing || summary.length > existing.length) {
-        combinedPageMap.set(pageNum, summary);
+    allEntries.push(...parseToRangeEntries(cleaned));
+  }
+  
+  // Sort by start page
+  allEntries.sort((a, b) => a.startPage - b.startPage);
+  
+  // Deduplicate overlapping entries: for each start page, keep the entry with longest summary
+  const dedupedEntries: PageRangeEntry[] = [];
+  const coveredByEntry = new Map<number, PageRangeEntry>(); // Track which entry covers each page
+  
+  for (const entry of allEntries) {
+    // Check if this entry's start page is already covered by a previous entry
+    const existingEntry = coveredByEntry.get(entry.startPage);
+    if (existingEntry) {
+      // Only replace if new entry has longer summary
+      if (entry.summary.length > existingEntry.summary.length) {
+        // Remove old entry and add new one
+        const idx = dedupedEntries.indexOf(existingEntry);
+        if (idx !== -1) dedupedEntries.splice(idx, 1);
+        dedupedEntries.push(entry);
+        // Update coverage
+        for (let p = entry.startPage; p <= entry.endPage; p++) {
+          coveredByEntry.set(p, entry);
+        }
+      }
+    } else {
+      // Check if this entry overlaps with existing entries
+      let hasOverlap = false;
+      for (let p = entry.startPage; p <= entry.endPage; p++) {
+        if (coveredByEntry.has(p)) {
+          hasOverlap = true;
+          break;
+        }
+      }
+      
+      if (!hasOverlap) {
+        dedupedEntries.push(entry);
+        for (let p = entry.startPage; p <= entry.endPage; p++) {
+          coveredByEntry.set(p, entry);
+        }
       }
     }
   }
   
-  // Sort expected pages
-  const sortedExpected = [...expectedPages].sort((a, b) => a - b);
-  const minPage = sortedExpected[0] || 1;
-  const maxPage = sortedExpected[sortedExpected.length - 1] || 1;
+  // Re-sort after deduplication
+  dedupedEntries.sort((a, b) => a.startPage - b.startPage);
   
-  // Build output by iterating through expected page range
-  const outputRows: string[] = [];
-  const coveredPages: number[] = [];
-  const missingPages: number[] = [];
-  
-  for (let p = minPage; p <= maxPage; p++) {
-    const summary = combinedPageMap.get(p);
-    if (summary) {
-      outputRows.push(`| p.${p} | ${summary} |`);
-      coveredPages.push(p);
-    } else if (expectedPages.includes(p)) {
-      // Page was expected but not summarized
-      missingPages.push(p);
+  // Track which pages are covered
+  const coveredPages = new Set<number>();
+  for (const entry of dedupedEntries) {
+    for (let p = entry.startPage; p <= entry.endPage; p++) {
+      coveredPages.add(p);
     }
   }
   
+  // Build output with range notation preserved
+  const outputRows = dedupedEntries.map(e => 
+    e.startPage === e.endPage 
+      ? `| p.${e.startPage} | ${e.summary} |`
+      : `| p.${e.startPage}-${e.endPage} | ${e.summary} |`
+  );
+  
+  // Find missing pages from expected set
+  const missingPages = expectedPages.filter(p => !coveredPages.has(p));
+  
   return {
     markdown: outputRows.join("\n"),
-    coveredPages,
+    coveredPages: Array.from(coveredPages).sort((a, b) => a - b),
     missingPages,
   };
 }
