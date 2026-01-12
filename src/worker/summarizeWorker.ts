@@ -447,7 +447,7 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
   
   // For each page, pick the best anchor (the one most likely to have real content after it)
   let uniqueAnchors: PageAnchor[] = [];
-  for (const [pageNum, occurrences] of pageOccurrences) {
+  for (const [, occurrences] of pageOccurrences) {
     if (occurrences.length === 1) {
       uniqueAnchors.push(occurrences[0]);
     } else {
