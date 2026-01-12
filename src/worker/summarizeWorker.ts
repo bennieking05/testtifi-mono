@@ -1297,8 +1297,12 @@ function parseToRangeEntries(llmOutput: string): PageRangeEntry[] {
   const lines = llmOutput.split(/\r?\n/);
   
   for (const line of lines) {
-    // Match: | p.18 | Summary | or | p.18-20 | Summary |
-    const match = line.match(/^\s*\|?\s*p\.(\d+)(?:[-–](\d+))?\s*\|\s*(.+?)\s*\|?\s*$/i);
+    // Match various formats:
+    // | p.18 | Summary |
+    // | p.18-20 | Summary |
+    // | p.18:1-25 | Summary |  (with line numbers)
+    // | p.18:3-15 | Summary |  (with specific line range)
+    const match = line.match(/^\s*\|?\s*p\.(\d+)(?::\d+(?:-\d+)?)?(?:[-–](\d+)(?::\d+(?:-\d+)?)?)?\s*\|\s*(.+?)\s*\|?\s*$/i);
     if (match) {
       const startPage = parseInt(match[1], 10);
       const endPage = match[2] ? parseInt(match[2], 10) : startPage;
