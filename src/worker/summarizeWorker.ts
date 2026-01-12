@@ -1068,22 +1068,26 @@ This batch contains EXACTLY ${pagesCount} transcript pages: ${pagesList}
 You MUST output EXACTLY ${pagesCount} rows, one for EACH page listed above. NO EXCEPTIONS.
 
 OUTPUT FORMAT (MANDATORY):
-| p.X | [3-6 sentences summarizing page X] |
+| p.X:Y-Z | [3-6 sentences summarizing lines Y through Z on page X] |
+
+Where X is the page number and Y-Z is the line range containing the summarized content.
+Depositions typically have lines 1-25 per page.
 
 EXAMPLE for pages 18, 19, 20:
-| p.18 | [Summary of page 18 content...] |
-| p.19 | [Summary of page 19 content...] |
-| p.20 | [Summary of page 20 content...] |
+| p.18:1-25 | [Full page summary when testimony spans entire page] |
+| p.19:3-18 | [Partial page - testimony starts at line 3 and ends at line 18] |
+| p.20:1-25 | [Summary of page 20 content...] |
 
 RULES:
 1. Output EXACTLY ${pagesCount} rows - one for EACH of these pages: ${pagesList}
 2. DO NOT skip any pages - every page MUST have its own row
 3. DO NOT combine pages into ranges - output individual rows
-4. Each row starts with "| p.X |" where X is the exact page number
-5. Include: names, dates, exhibits, key facts, objections
-6. For cover/appearances: describe case caption, parties, attorneys, court, date
-7. For exhibit index: list specific exhibits mentioned
-8. For certification pages: describe what is being certified and by whom
+4. Each row starts with "| p.X:Y-Z |" where X is page number, Y-Z is line range
+5. Use the LINE NUMBERS visible in the transcript (usually 1-25 per page)
+6. Include: names, dates, exhibits, key facts, objections
+7. For cover/appearances: describe case caption, parties, attorneys, court, date
+8. For exhibit index: list specific exhibits mentioned
+9. For certification pages: describe what is being certified and by whom
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1094,10 +1098,12 @@ Continue summarizing. STRICT page-by-page output required.
 PAGES IN THIS BATCH: ${pagesList}
 You MUST output EXACTLY ${pagesCount} rows, one per page.
 
-FORMAT: | p.X | [Summary of page X] |
+FORMAT: | p.X:Y-Z | [Summary of lines Y-Z on page X] |
+(X = page number, Y-Z = line range, typically 1-25 per page)
 
 RULES:
 - Output one row for EACH page: ${pagesList}
+- Include LINE NUMBERS in format p.X:Y-Z
 - DO NOT skip pages
 - DO NOT combine pages
 - Include names, dates, exhibits, key facts
@@ -1171,22 +1177,25 @@ ${chunk.text}
 
 /**
  * Post-process LLM output to clean up page references.
- * Removes ALL line number variants and normalizes page format.
+ * Keeps meaningful line number ranges but removes generic ":1-25" (full page).
+ * Normalizes page format for grouping.
  */
 function cleanupPageReferences(content: string): string {
   let cleaned = content;
   
-  // Remove ALL line number suffixes from page references:
-  // p.123:1-25 → p.123 (range format)
-  // p.123:11 → p.123 (single line format)
-  // p.123:5 → p.123
-  cleaned = cleaned.replace(/\bp\.(\d+):\d+(?:-\d+)?/gi, 'p.$1');
+  // Only remove the generic ":1-25" that covers the whole page (uninformative)
+  // But KEEP specific ranges like ":8-15" that indicate where testimony occurs
+  cleaned = cleaned.replace(/\bp\.(\d+):1-25\b/gi, 'p.$1');
   
-  // Also handle "p.236:11" format (single line number after colon)
-  cleaned = cleaned.replace(/\bp\.(\d+):\d+/gi, 'p.$1');
+  // Also remove other "full page" variants: :1-24, :1-26, :2-25 (minor variations)
+  cleaned = cleaned.replace(/\bp\.(\d+):[12]-2[456]\b/gi, 'p.$1');
   
   // Consolidate consecutive pages like "p.18, p.19, p.20, p.21" → "p.18-21"
+  // But only for pages WITHOUT line numbers
   cleaned = cleaned.replace(/\bp\.(\d+)(?:,\s*p\.(\d+))+/gi, (match) => {
+    // Don't consolidate if any page has line numbers
+    if (match.includes(':')) return match;
+    
     const pages = match.match(/\d+/g);
     if (!pages || pages.length < 2) return match;
     const nums = pages.map(Number).sort((a, b) => a - b);

@@ -8,16 +8,22 @@ import { splitPages } from "./pageCounter";
 
 /**
  * Post-process LLM output to clean up page references.
- * Removes line numbers (e.g., ":1-25") and normalizes page format.
+ * Keeps meaningful line number ranges but removes uninformative full-page references.
  */
 function cleanupPageReferences(content: string): string {
   let cleaned = content;
   
-  // Remove line number suffixes like ":1-25" from page references
-  cleaned = cleaned.replace(/\bp\.(\d+):(\d+)-(\d+)/gi, 'p.$1');
+  // Only remove the generic ":1-25" that covers the whole page (uninformative)
+  // But KEEP specific ranges like ":8-15" that indicate where testimony occurs
+  cleaned = cleaned.replace(/\bp\.(\d+):1-25\b/gi, 'p.$1');
+  
+  // Also remove other "full page" variants: :1-24, :1-26, :2-25 (minor variations)
+  cleaned = cleaned.replace(/\bp\.(\d+):[12]-2[456]\b/gi, 'p.$1');
   
   // Consolidate consecutive pages like "p.18, p.19, p.20, p.21" → "p.18-21"
+  // Only for pages WITHOUT line numbers
   cleaned = cleaned.replace(/\bp\.(\d+)(?:,\s*p\.(\d+))+/gi, (match) => {
+    if (match.includes(':')) return match; // Don't consolidate if has line numbers
     const pages = match.match(/\d+/g);
     if (!pages || pages.length < 2) return match;
     const nums = pages.map(Number).sort((a, b) => a - b);
