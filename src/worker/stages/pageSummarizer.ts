@@ -8,17 +8,13 @@ import { splitPages } from "./pageCounter";
 
 /**
  * Post-process LLM output to clean up page references.
- * Keeps meaningful line number ranges but removes uninformative full-page references.
+ * KEEPS all line number references (including :1-25).
  */
 function cleanupPageReferences(content: string): string {
   let cleaned = content;
   
-  // Only remove the generic ":1-25" that covers the whole page (uninformative)
-  // But KEEP specific ranges like ":8-15" that indicate where testimony occurs
-  cleaned = cleaned.replace(/\bp\.(\d+):1-25\b/gi, 'p.$1');
-  
-  // Also remove other "full page" variants: :1-24, :1-26, :2-25 (minor variations)
-  cleaned = cleaned.replace(/\bp\.(\d+):[12]-2[456]\b/gi, 'p.$1');
+  // DO NOT strip line numbers - keep them all, including :1-25
+  // The user wants line number references preserved
   
   // Consolidate consecutive pages like "p.18, p.19, p.20, p.21" → "p.18-21"
   // Only for pages WITHOUT line numbers
