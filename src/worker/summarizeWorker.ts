@@ -1068,26 +1068,25 @@ This batch contains EXACTLY ${pagesCount} transcript pages: ${pagesList}
 You MUST output EXACTLY ${pagesCount} rows, one for EACH page listed above. NO EXCEPTIONS.
 
 OUTPUT FORMAT (MANDATORY):
-| p.X:Y-Z | [3-6 sentences summarizing lines Y through Z on page X] |
+| p.X:1-25 | [3-6 sentences summarizing page X] |
 
-Where X is the page number and Y-Z is the line range containing the summarized content.
-Depositions typically have lines 1-25 per page.
+CRITICAL: Every row MUST include ":1-25" after the page number.
+Standard deposition transcripts have 25 lines per page.
 
 EXAMPLE for pages 18, 19, 20:
-| p.18:1-25 | [Full page summary when testimony spans entire page] |
-| p.19:3-18 | [Partial page - testimony starts at line 3 and ends at line 18] |
-| p.20:1-25 | [Summary of page 20 content...] |
+| p.18:1-25 | The witness testified about commission structures... |
+| p.19:1-25 | Counsel introduced Exhibit 24, a spreadsheet showing... |
+| p.20:1-25 | The deposition recessed at 12:30 p.m. for lunch... |
 
 RULES:
 1. Output EXACTLY ${pagesCount} rows - one for EACH of these pages: ${pagesList}
-2. DO NOT skip any pages - every page MUST have its own row
-3. DO NOT combine pages into ranges - output individual rows
-4. Each row starts with "| p.X:Y-Z |" where X is page number, Y-Z is line range
-5. Use the LINE NUMBERS visible in the transcript (usually 1-25 per page)
-6. Include: names, dates, exhibits, key facts, objections
-7. For cover/appearances: describe case caption, parties, attorneys, court, date
-8. For exhibit index: list specific exhibits mentioned
-9. For certification pages: describe what is being certified and by whom
+2. ALWAYS use format "p.X:1-25" with the line numbers included
+3. DO NOT skip any pages - every page MUST have its own row
+4. DO NOT combine pages into ranges - output individual rows
+5. Include: names, dates, exhibits, key facts, objections
+6. For cover/appearances: describe case caption, parties, attorneys, court, date
+7. For exhibit index: list specific exhibits mentioned
+8. For certification pages: describe what is being certified and by whom
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1098,12 +1097,12 @@ Continue summarizing. STRICT page-by-page output required.
 PAGES IN THIS BATCH: ${pagesList}
 You MUST output EXACTLY ${pagesCount} rows, one per page.
 
-FORMAT: | p.X:Y-Z | [Summary of lines Y-Z on page X] |
-(X = page number, Y-Z = line range, typically 1-25 per page)
+FORMAT: | p.X:1-25 | [Summary of page X] |
+CRITICAL: Always include ":1-25" after the page number.
 
 RULES:
 - Output one row for EACH page: ${pagesList}
-- Include LINE NUMBERS in format p.X:Y-Z
+- ALWAYS use format "p.X:1-25" with line numbers
 - DO NOT skip pages
 - DO NOT combine pages
 - Include names, dates, exhibits, key facts
@@ -1285,12 +1284,14 @@ function sortAndDeduplicateRows(markdown: string): string {
 interface PageRangeEntry {
   startPage: number;
   endPage: number;
+  lineNumbers: string; // e.g., ":1-25" or empty string
   summary: string;
 }
 
 /**
  * Parse LLM output into page range entries, preserving grouped pages.
  * Handles both single pages (p.10) and ranges (p.10-12).
+ * Preserves line number references like :1-25.
  */
 function parseToRangeEntries(llmOutput: string): PageRangeEntry[] {
   const entries: PageRangeEntry[] = [];
@@ -1302,16 +1303,17 @@ function parseToRangeEntries(llmOutput: string): PageRangeEntry[] {
     // | p.18-20 | Summary |
     // | p.18:1-25 | Summary |  (with line numbers)
     // | p.18:3-15 | Summary |  (with specific line range)
-    const match = line.match(/^\s*\|?\s*p\.(\d+)(?::\d+(?:-\d+)?)?(?:[-–](\d+)(?::\d+(?:-\d+)?)?)?\s*\|\s*(.+?)\s*\|?\s*$/i);
+    const match = line.match(/^\s*\|?\s*p\.(\d+)(:\d+(?:-\d+)?)?(?:[-–](\d+)(?::\d+(?:-\d+)?)?)?\s*\|\s*(.+?)\s*\|?\s*$/i);
     if (match) {
       const startPage = parseInt(match[1], 10);
-      const endPage = match[2] ? parseInt(match[2], 10) : startPage;
-      const summary = match[3].trim();
+      const lineNumbers = match[2] || ':1-25'; // Default to :1-25 if not specified
+      const endPage = match[3] ? parseInt(match[3], 10) : startPage;
+      const summary = match[4].trim();
       
       if (startPage > 0 && summary.length > 0 && endPage >= startPage) {
         // Cap range at 10 pages to prevent runaway ranges
         const cappedEnd = Math.min(endPage, startPage + 10);
-        entries.push({ startPage, endPage: cappedEnd, summary });
+        entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
       }
     }
   }
@@ -1391,12 +1393,13 @@ function assembleSortedSummary(
     }
   }
   
-  // Build output with range notation preserved
-  const outputRows = dedupedEntries.map(e => 
-    e.startPage === e.endPage 
-      ? `| p.${e.startPage} | ${e.summary} |`
-      : `| p.${e.startPage}-${e.endPage} | ${e.summary} |`
-  );
+  // Build output with range notation and line numbers preserved
+  const outputRows = dedupedEntries.map(e => {
+    const lineNum = e.lineNumbers || ':1-25'; // Always include line numbers
+    return e.startPage === e.endPage 
+      ? `| p.${e.startPage}${lineNum} | ${e.summary} |`
+      : `| p.${e.startPage}-${e.endPage}${lineNum} | ${e.summary} |`;
+  });
   
   // Find missing pages from expected set
   const missingPages = expectedPages.filter(p => !coveredPages.has(p));
