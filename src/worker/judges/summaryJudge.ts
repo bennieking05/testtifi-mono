@@ -20,9 +20,13 @@ function extractAllPagesFromLabel(pageLabel: string, _maxPage: number): number[]
   const pages: number[] = [];
   const seen = new Set<number>();
   
+  // IMPORTANT: First, strip line number suffixes like :1-25 or :3-22
+  // These should NOT be interpreted as page ranges
+  let withoutLineNumbers = pageLabel.replace(/:\d+(?:-\d+)?/g, '');
+  
   // Normalize: remove "page", "p.", "p" prefixes and extra spaces
   // Convert to just numbers and separators
-  let normalized = pageLabel
+  let normalized = withoutLineNumbers
     .replace(/page\s*/gi, '')
     .replace(/p\.\s*/gi, '')
     .replace(/p\s+/gi, '')
@@ -142,14 +146,14 @@ export function summaryJudge(context: JudgeContext): JudgeResult {
 
   for (const row of summaryRows) {
     const { pageLabel } = row;
-    
+
     // Simple approach: extract all pages mentioned, expanding any ranges
     const extractedPages = extractAllPagesFromLabel(pageLabel, totalPages);
     
     for (const pageNum of extractedPages) {
-      allPages.push(pageNum);
-      if (pageNum < 1 || pageNum > totalPages) {
-        invalidPages.push(pageNum);
+        allPages.push(pageNum);
+        if (pageNum < 1 || pageNum > totalPages) {
+          invalidPages.push(pageNum);
       }
     }
 
