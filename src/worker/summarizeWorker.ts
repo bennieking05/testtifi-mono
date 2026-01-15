@@ -1057,19 +1057,8 @@ function makePromptForBatch(
 ) {
   const pagesList = batch.pageNumbers.join(", ");
   const pagesCount = batch.pageNumbers.length;
-  
-  // Build page list with their actual line ranges
-  const pagesWithLines = batch.pageNumbers.map(p => {
-    const range = batch.lineRanges.get(p) || { start: 1, end: 25 };
-    return `p.${p}:${range.start}-${range.end}`;
-  }).join(", ");
-  
-  // Build example rows using actual line ranges from first 3 pages
-  const examplePages = batch.pageNumbers.slice(0, 3);
-  const exampleRows = examplePages.map(p => {
-    const range = batch.lineRanges.get(p) || { start: 1, end: 25 };
-    return `| p.${p}:${range.start}-${range.end} | [Summary of page ${p} content...] |`;
-  }).join("\n");
+  const firstPage = batch.pageNumbers[0];
+  const lastPage = batch.pageNumbers[batch.pageNumbers.length - 1];
   
   return [
     {
@@ -1084,51 +1073,52 @@ Summarize this deposition transcript section.
 
 ${metaSection}
 
-=== STRICT PAGE-BY-PAGE OUTPUT REQUIRED ===
-This batch contains EXACTLY ${pagesCount} transcript pages: ${pagesList}
+=== TESTIMONY SUMMARY REQUIREMENTS ===
+This batch contains ${pagesCount} transcript pages: ${pagesList}
 
-You MUST output EXACTLY ${pagesCount} rows, one for EACH page listed above. NO EXCEPTIONS.
+TONE - FACTUAL SUMMARY ONLY:
+- Write a FACTUAL SUMMARY of what the witness testified, NOT analysis
+- Report what the witness SAID, not what it implies or suggests
+- Use objective language: "The witness testified that...", "stated", "confirmed", "denied", "explained"
+- DO NOT use interpretive language: "suggested", "implied", "appeared to", "seemed"
+- DO NOT add commentary, conclusions, or analysis
+- Report facts: names, dates, dollar amounts, exhibits, specific statements
 
-OUTPUT FORMAT (MANDATORY):
-| p.X:Y-Z | [3-6 sentences summarizing lines Y through Z on page X] |
+PAGE GROUPING BY TOPIC:
+- Group consecutive pages discussing the SAME topic into ONE row (up to 5 pages max)
+- Start a NEW row when the topic changes
+- Format for grouped pages: | p.X-Y:1-25 | [Combined summary of pages X through Y] |
+- Format for single page: | p.X:1-25 | [Summary of page X] |
+- CRITICAL: Every page number from ${firstPage} to ${lastPage} MUST appear in your output
 
-Each page has specific line ranges detected from the transcript:
-${pagesWithLines}
-
-Use the EXACT line ranges shown above for each page.
-
-EXAMPLE OUTPUT:
-${exampleRows}
+EXAMPLE OUTPUT for pages 18-22:
+| p.18-20:1-25 | The witness testified that commission rates were 2% for base sales and 4% for Alex products. He stated he received quarterly reports from McNeff showing sales figures. He confirmed his base salary was $80,000. |
+| p.21:1-25 | The examination turned to employment records. The witness stated he signed his offer letter in New York in April 2017. |
+| p.22:1-25 | Counsel introduced Exhibit 24. The witness confirmed he had reviewed the document prior to the deposition. |
 
 RULES:
-1. Output EXACTLY ${pagesCount} rows - one for EACH of these pages: ${pagesList}
-2. Use the EXACT line ranges provided: ${pagesWithLines}
-3. DO NOT skip any pages - every page MUST have its own row
-4. DO NOT combine pages into ranges - output individual rows
-5. Include: names, dates, exhibits, key facts, objections
-6. For cover/appearances: describe case caption, parties, attorneys, court, date
-7. For exhibit index: list specific exhibits mentioned
-8. For certification pages: describe what is being certified and by whom
+1. EVERY page (${pagesList}) must appear in your output - no skipping
+2. Group pages by topic continuity (up to 5 pages per group)
+3. Include: names, dates, dollar amounts, exhibits, specific testimony
+4. For cover/appearances: state case caption, parties, attorneys, court, date
+5. For certification pages: state what is being certified and by whom
+6. 4-8 sentences per row when grouping multiple pages
 
 TRANSCRIPT TEXT:
 ${batch.text}
         `.trim()
         : `
-Continue summarizing. STRICT page-by-page output required.
+Continue summarizing. Same format and rules.
 
-PAGES IN THIS BATCH (with line ranges): ${pagesWithLines}
-You MUST output EXACTLY ${pagesCount} rows, one per page.
+PAGES IN THIS BATCH: ${pagesList}
 
-FORMAT: | p.X:Y-Z | [Summary of lines Y-Z on page X] |
-Use the EXACT line ranges provided above.
+TONE: Factual summary only - report what witness testified, no analysis.
+GROUPING: Combine consecutive pages on same topic (up to 5 pages per row).
+CRITICAL: Every page (${pagesList}) must appear in output.
 
-RULES:
-- Output one row for EACH page: ${pagesList}
-- Use the exact line ranges: ${pagesWithLines}
-- DO NOT skip pages
-- DO NOT combine pages
-- Include names, dates, exhibits, key facts
-- 3-6 sentences per row
+FORMAT:
+- Grouped: | p.X-Y:1-25 | [Combined summary] |
+- Single: | p.X:1-25 | [Summary] |
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1872,8 +1862,8 @@ async function work() {
         // ─────────────────────────────────────────────────────────────────────
         console.log(`[${job.id}] Using NEW page-keyed pipeline (${transcriptPageMap.size} transcript pages)`);
         
-        // Create batches of 3 transcript pages each
-        const batches = createTranscriptBatches(transcriptPageMap, 3);
+        // Create batches of 5 transcript pages each (allows topic-based grouping)
+        const batches = createTranscriptBatches(transcriptPageMap, 5);
         const batchOutputs: string[] = new Array(batches.length).fill("");
         
         // Collect all detected line ranges from all batches
