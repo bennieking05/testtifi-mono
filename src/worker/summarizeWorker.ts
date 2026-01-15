@@ -1345,63 +1345,57 @@ interface PageRangeEntry {
 
 /**
  * Parse LLM output into page range entries, preserving grouped pages.
- * Handles both single pages (p.10) and ranges (p.10-12).
- * Preserves line number references like :1-25.
+ * Handles formats like:
+ * - p.18:1-25 (single page with lines)
+ * - p.18-22:1-25 (page range with lines)  
+ * - p.18-22 (page range without lines)
+ * - p.18 (single page)
  */
 function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRangeEntry[] {
   const entries: PageRangeEntry[] = [];
   const lines = llmOutput.split(/\r?\n/);
   
-  // Multiple regex patterns to catch various LLM output formats
-  const patterns = [
-    // Standard table format: | p.18:1-25 | Summary |
-    /^\s*\|?\s*p\.(\d+)(?::(\d+)-(\d+))?\s*(?:[-–]\s*(?:p\.)?(\d+)(?::\d+-\d+)?)?\s*\|(.+?)\|?\s*$/i,
-    // Without trailing pipe: | p.18:1-25 | Summary
-    /^\s*\|\s*p\.(\d+)(?::(\d+)-(\d+))?\s*(?:[-–]\s*(?:p\.)?(\d+)(?::\d+-\d+)?)?\s*\|\s*(.+)$/i,
-    // Loose format: p.18:1-25 Summary (no pipes)
-    /^\s*p\.(\d+)(?::(\d+)-(\d+))?\s*(?:[-–]\s*(?:p\.)?(\d+)(?::\d+-\d+)?)?\s+(.+)$/i,
-    // Original format without line numbers: | p.18 | Summary |
-    /^\s*\|?\s*p\.(\d+)\s*(?:[-–]\s*(?:p\.)?(\d+))?\s*\|(.+?)\|?\s*$/i,
-  ];
-  
   for (const line of lines) {
-    let matched = false;
+    // Skip lines that don't look like page entries
+    if (!line.includes('p.') && !/^\s*\|/.test(line)) continue;
     
-    for (let patternIdx = 0; patternIdx < patterns.length; patternIdx++) {
-      const match = line.match(patterns[patternIdx]);
-      if (match) {
-        let startPage: number, endPage: number, lineStart: number, lineEnd: number, summary: string;
-        
-        if (patternIdx < 3) {
-          // Patterns 0-2: have line number capture groups
-          startPage = parseInt(match[1], 10);
-          lineStart = match[2] ? parseInt(match[2], 10) : 1;
-          lineEnd = match[3] ? parseInt(match[3], 10) : 25;
-          endPage = match[4] ? parseInt(match[4], 10) : startPage;
-          summary = match[5]?.trim() || '';
+    // Try to extract page info using a flexible approach
+    // Pattern: p.START[-END][:LINESTART-LINEEND]
+    const pageMatch = line.match(/p\.(\d+)(?:\s*[-–]\s*(\d+))?(?::(\d+)[-–](\d+))?/i);
+    
+    if (pageMatch) {
+      const startPage = parseInt(pageMatch[1], 10);
+      const endPage = pageMatch[2] ? parseInt(pageMatch[2], 10) : startPage;
+      const lineStart = pageMatch[3] ? parseInt(pageMatch[3], 10) : 1;
+      const lineEnd = pageMatch[4] ? parseInt(pageMatch[4], 10) : 25;
+      
+      // Extract summary: everything after the page reference and a pipe/separator
+      let summary = '';
+      const pipeIdx = line.indexOf('|', line.indexOf('p.'));
+      if (pipeIdx !== -1) {
+        // Find the summary between pipes
+        const afterFirstPipe = line.substring(pipeIdx + 1);
+        const secondPipeIdx = afterFirstPipe.lastIndexOf('|');
+        if (secondPipeIdx > 0) {
+          summary = afterFirstPipe.substring(0, secondPipeIdx).trim();
         } else {
-          // Pattern 3: no line numbers
-          startPage = parseInt(match[1], 10);
-          lineStart = 1;
-          lineEnd = 25;
-          endPage = match[2] ? parseInt(match[2], 10) : startPage;
-          summary = match[3]?.trim() || '';
-        }
-        
-        const lineNumbers = `:${lineStart}-${lineEnd}`;
-        
-        if (startPage > 0 && summary.length > 0 && endPage >= startPage) {
-          // Cap range at 10 pages to prevent runaway ranges
-          const cappedEnd = Math.min(endPage, startPage + 10);
-          entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
-          matched = true;
-          break;
+          summary = afterFirstPipe.trim();
         }
       }
-    }
-    
-    if (debug && !matched && line.includes('p.') && line.trim().length > 20) {
-      console.log(`[parseToRangeEntries] No match for line: "${line.substring(0, 100)}..."`);
+      
+      // Clean up summary - remove trailing pipe if present
+      summary = summary.replace(/\|\s*$/, '').trim();
+      
+      if (startPage > 0 && summary.length > 10 && endPage >= startPage) {
+        // Cap range at 10 pages to prevent runaway ranges
+        const cappedEnd = Math.min(endPage, startPage + 10);
+        const lineNumbers = `:${lineStart}-${lineEnd}`;
+        entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
+        
+        if (debug) {
+          console.log(`[parseToRangeEntries] Matched p.${startPage}-${cappedEnd}:${lineStart}-${lineEnd}`);
+        }
+      }
     }
   }
   
