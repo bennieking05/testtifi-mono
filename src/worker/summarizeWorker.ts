@@ -1073,52 +1073,52 @@ Summarize this deposition transcript section.
 
 ${metaSection}
 
-=== TESTIMONY SUMMARY REQUIREMENTS ===
+=== COMPLETE COVERAGE REQUIRED - NO GAPS ALLOWED ===
 This batch contains ${pagesCount} transcript pages: ${pagesList}
 
+*** MANDATORY: Your output MUST cover ALL of these pages: ${pagesList} ***
+*** NO GAPS - if you output p.1-3, then p.7, you have FAILED (missing 4,5,6) ***
+
 TONE - FACTUAL SUMMARY ONLY:
-- Write a FACTUAL SUMMARY of what the witness testified, NOT analysis
-- Report what the witness SAID, not what it implies or suggests
-- Use objective language: "The witness testified that...", "stated", "confirmed", "denied", "explained"
-- DO NOT use interpretive language: "suggested", "implied", "appeared to", "seemed"
-- DO NOT add commentary, conclusions, or analysis
-- Report facts: names, dates, dollar amounts, exhibits, specific statements
+- Report what the witness SAID using: "testified", "stated", "confirmed", "denied"
+- NO analysis, interpretation, or commentary
+- Include: names, dates, dollar amounts, exhibits, specific statements
 
-PAGE GROUPING BY TOPIC:
-- Group consecutive pages discussing the SAME topic into ONE row (up to 5 pages max)
-- Start a NEW row when the topic changes
-- Format for grouped pages: | p.X-Y:1-25 | [Combined summary of pages X through Y] |
-- Format for single page: | p.X:1-25 | [Summary of page X] |
-- CRITICAL: Every page number from ${firstPage} to ${lastPage} MUST appear in your output
+PAGE GROUPING (up to 5 consecutive pages per row):
+- You MAY group consecutive pages on the same topic: | p.${firstPage}-${Math.min(firstPage + 4, lastPage)}:1-25 | [Summary] |
+- Or output individual pages: | p.${firstPage}:1-25 | [Summary] |
+- EVERY page from ${firstPage} to ${lastPage} must be covered with NO GAPS
 
-EXAMPLE OUTPUT for pages 18-22:
-| p.18-20:1-25 | The witness testified that commission rates were 2% for base sales and 4% for Alex products. He stated he received quarterly reports from McNeff showing sales figures. He confirmed his base salary was $80,000. |
-| p.21:1-25 | The examination turned to employment records. The witness stated he signed his offer letter in New York in April 2017. |
-| p.22:1-25 | Counsel introduced Exhibit 24. The witness confirmed he had reviewed the document prior to the deposition. |
+VALID EXAMPLE for pages 18-22 (all 5 pages covered):
+| p.18-20:1-25 | The witness testified about commission rates... |
+| p.21-22:1-25 | The examination turned to employment records... |
+
+INVALID (GAPS - pages 19,20 missing):
+| p.18:1-25 | ... |
+| p.21-22:1-25 | ... |  ← WRONG! Missing pages 19, 20
+
+FOR PAGES WITH MINIMAL CONTENT:
+- Still include them: | p.X:1-25 | The page contained procedural matters with no substantive testimony. |
 
 RULES:
-1. EVERY page (${pagesList}) must appear in your output - no skipping
-2. Group pages by topic continuity (up to 5 pages per group)
-3. Include: names, dates, dollar amounts, exhibits, specific testimony
-4. For cover/appearances: state case caption, parties, attorneys, court, date
-5. For certification pages: state what is being certified and by whom
-6. 4-8 sentences per row when grouping multiple pages
+1. Cover ALL pages: ${pagesList} - verify your ranges have NO GAPS
+2. Group by topic (max 5 pages) OR output individually
+3. Pages with minimal content still need a row
+4. 3-6 sentences per row
 
 TRANSCRIPT TEXT:
 ${batch.text}
         `.trim()
         : `
-Continue summarizing. Same format and rules.
+Continue summarizing.
 
-PAGES IN THIS BATCH: ${pagesList}
+PAGES: ${pagesList}
+*** ALL pages must be covered - NO GAPS ***
 
-TONE: Factual summary only - report what witness testified, no analysis.
-GROUPING: Combine consecutive pages on same topic (up to 5 pages per row).
-CRITICAL: Every page (${pagesList}) must appear in output.
-
-FORMAT:
-- Grouped: | p.X-Y:1-25 | [Combined summary] |
-- Single: | p.X:1-25 | [Summary] |
+TONE: Factual summary - "testified", "stated", "confirmed"
+FORMAT: | p.X-Y:1-25 | [Summary] | or | p.X:1-25 | [Summary] |
+GROUPING: Up to 5 consecutive pages per row
+MINIMAL CONTENT PAGES: Still include with "procedural matters" note
 
 TRANSCRIPT TEXT:
 ${batch.text}
