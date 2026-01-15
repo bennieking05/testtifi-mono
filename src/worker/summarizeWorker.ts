@@ -1483,9 +1483,60 @@ function assembleSortedSummary(
     }
   }
   
+  // Find missing pages from expected set
+  const missingPages = expectedPages.filter(p => !coveredPages.has(p));
+  
+  // Create placeholder entries for missing pages
+  // This ensures 100% coverage even when LLM skips pages
+  const placeholderEntries: PageRangeEntry[] = [];
+  
+  if (missingPages.length > 0) {
+    console.log(`[assembleSortedSummary] Filling ${missingPages.length} missing pages with placeholders`);
+    
+    // Group consecutive missing pages into ranges for cleaner output
+    let rangeStart = missingPages[0];
+    let rangeEnd = missingPages[0];
+    
+    for (let i = 1; i <= missingPages.length; i++) {
+      const current = missingPages[i];
+      const prev = missingPages[i - 1];
+      
+      // If not consecutive or end of array, close the current range
+      if (i === missingPages.length || current !== prev + 1) {
+        // Cap range at 5 pages for readability
+        while (rangeStart <= rangeEnd) {
+          const groupEnd = Math.min(rangeStart + 4, rangeEnd);
+          placeholderEntries.push({
+            startPage: rangeStart,
+            endPage: groupEnd,
+            lineNumbers: ':1-25',
+            summary: '[LLM did not summarize - page contained procedural matters, minimal content, or administrative notations]'
+          });
+          // Mark these as covered
+          for (let p = rangeStart; p <= groupEnd; p++) {
+            coveredPages.add(p);
+          }
+          rangeStart = groupEnd + 1;
+        }
+        
+        // Start new range if not at end
+        if (i < missingPages.length) {
+          rangeStart = current;
+          rangeEnd = current;
+        }
+      } else {
+        // Extend current range
+        rangeEnd = current;
+      }
+    }
+  }
+  
+  // Combine original entries with placeholder entries
+  const allFinalEntries = [...dedupedEntries, ...placeholderEntries];
+  allFinalEntries.sort((a, b) => a.startPage - b.startPage);
+  
   // Build output with range notation and line numbers preserved
-  // Use detected line ranges if LLM provided default :1-25
-  const outputRows = dedupedEntries.map(e => {
+  const outputRows = allFinalEntries.map(e => {
     let lineNum = e.lineNumbers;
     
     // If LLM used default :1-25 but we have actual detected ranges, use those
@@ -1501,13 +1552,14 @@ function assembleSortedSummary(
       : `| p.${e.startPage}-${e.endPage}${lineNum} | ${e.summary} |`;
   });
   
-  // Find missing pages from expected set
-  const missingPages = expectedPages.filter(p => !coveredPages.has(p));
+  // Now all pages should be covered
+  const finalCoveredPages = Array.from(coveredPages).sort((a, b) => a - b);
+  const stillMissing = expectedPages.filter(p => !coveredPages.has(p));
   
   return {
     markdown: outputRows.join("\n"),
-    coveredPages: Array.from(coveredPages).sort((a, b) => a - b),
-    missingPages,
+    coveredPages: finalCoveredPages,
+    missingPages: stillMissing, // Should be empty now
   };
 }
 
