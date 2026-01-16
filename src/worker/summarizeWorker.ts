@@ -725,7 +725,7 @@ interface TranscriptBatch {
   text: string;           // Combined text with clear page markers
   start: number;          // First page number
   end: number;            // Last page number
-  lineRanges: Map<number, { start: number; end: number }>; // Detected line ranges per page
+  lineRanges: Map<number, { start: number; end: number; detected: boolean }>; // Detected line ranges per page
 }
 
 function createTranscriptBatches(
@@ -737,7 +737,7 @@ function createTranscriptBatches(
   
   for (let i = 0; i < sortedPages.length; i += pagesPerBatch) {
     const batchPageNums = sortedPages.slice(i, i + pagesPerBatch);
-    const lineRanges = new Map<number, { start: number; end: number }>();
+    const lineRanges = new Map<number, { start: number; end: number; detected: boolean }>();
     
     // Build text with explicit page markers for each page in the batch
     const textParts: string[] = [];
@@ -750,7 +750,10 @@ function createTranscriptBatches(
       
       // Inject explicit marker so LLM knows exactly where each page starts
       // Include detected line range in the marker
-      textParts.push(`=== TRANSCRIPT PAGE ${pageNum} (Lines ${lineRange.start}-${lineRange.end}) ===\n${pageText}`);
+      const lineLabel = lineRange.detected
+        ? `Lines ${lineRange.start}-${lineRange.end}`
+        : `Line numbers not detected`;
+      textParts.push(`=== TRANSCRIPT PAGE ${pageNum} (${lineLabel}) ===\n${pageText}`);
     }
     
     batches.push({
@@ -1085,20 +1088,21 @@ TONE - FACTUAL SUMMARY ONLY:
 - Include: names, dates, dollar amounts, exhibits, specific statements
 
 PAGE GROUPING (up to 5 consecutive pages per row):
-- You MAY group consecutive pages on the same topic: | p.${firstPage}-${Math.min(firstPage + 4, lastPage)}:1-25 | [Summary] |
-- Or output individual pages: | p.${firstPage}:1-25 | [Summary] |
+- You MAY group consecutive pages on the same topic: | p.${firstPage}-${Math.min(firstPage + 4, lastPage)}[:Y-Z] | [Summary] |
+- Or output individual pages: | p.${firstPage}[:Y-Z] | [Summary] |
+- Include line numbers ONLY when visible/detected in the text (use format :Y-Z). If not visible, omit line numbers.
 - EVERY page from ${firstPage} to ${lastPage} must be covered with NO GAPS
 
 VALID EXAMPLE for pages 18-22 (all 5 pages covered):
-| p.18-20:1-25 | The witness testified about commission rates... |
-| p.21-22:1-25 | The examination turned to employment records... |
+| p.18-20:3-25 | The witness testified about commission rates... |
+| p.21-22 | The examination turned to employment records... |
 
 INVALID (GAPS - pages 19,20 missing):
 | p.18:1-25 | ... |
-| p.21-22:1-25 | ... |  ← WRONG! Missing pages 19, 20
+| p.21-22 | ... |  ← WRONG! Missing pages 19, 20
 
 FOR PAGES WITH MINIMAL CONTENT:
-- Still include them: | p.X:1-25 | The page contained procedural matters with no substantive testimony. |
+- Still include them: | p.X | The page contained procedural matters with no substantive testimony. |
 
 RULES:
 1. Cover ALL pages: ${pagesList} - verify your ranges have NO GAPS
@@ -1116,7 +1120,7 @@ PAGES: ${pagesList}
 *** ALL pages must be covered - NO GAPS ***
 
 TONE: Factual summary - "testified", "stated", "confirmed"
-FORMAT: | p.X-Y:1-25 | [Summary] | or | p.X:1-25 | [Summary] |
+FORMAT: | p.X-Y[:Y-Z] | [Summary] | or | p.X[:Y-Z] | [Summary] |
 GROUPING: Up to 5 consecutive pages per row
 MINIMAL CONTENT PAGES: Still include with "procedural matters" note
 
@@ -1295,41 +1299,35 @@ function sortAndDeduplicateRows(markdown: string): string {
  * Deposition transcripts have lines numbered 1-25 on the left margin.
  * Returns the range of lines that contain actual content.
  */
-function detectLineRange(pageText: string): { start: number; end: number } {
+function detectLineRange(
+  pageText: string
+): { start: number; end: number; detected: boolean } {
   // Pattern to match line numbers at the start of lines
   // Formats: "1 Q. What is your name?" or "  25  A. I don't recall."
-  // Also handles: "1  Q." or "25 A."
   const linePattern = /^[\s]*(\d{1,2})[\s]+[A-Za-z\.\(\)]/gm;
   const matches = [...pageText.matchAll(linePattern)];
-  
-  if (matches.length === 0) {
-    // Try alternate pattern for lines like "1 THE WITNESS:" or "2 MR. SMITH:"
-    const altPattern = /^[\s]*(\d{1,2})[\s]+(?:THE|MR\.|MS\.|MRS\.|BY|Q\.|A\.)/gmi;
-    const altMatches = [...pageText.matchAll(altPattern)];
-    
-    if (altMatches.length === 0) {
-      return { start: 1, end: 25 }; // Default fallback
-    }
-    
-    const lineNums = altMatches.map(m => parseInt(m[1], 10)).filter(n => n >= 1 && n <= 25);
-    if (lineNums.length === 0) return { start: 1, end: 25 };
-    
-    return {
-      start: Math.min(...lineNums),
-      end: Math.max(...lineNums)
-    };
-  }
-  
-  // Extract valid line numbers (1-25 range typical for depositions)
-  const lineNums = matches.map(m => parseInt(m[1], 10)).filter(n => n >= 1 && n <= 25);
-  
+
+  // Alternate pattern for lines like "1 THE WITNESS:" or "2 MR. SMITH:"
+  const altPattern = /^[\s]*(\d{1,2})[\s]+(?:THE|MR\.|MS\.|MRS\.|BY|Q\.|A\.)/gmi;
+  const altMatches = [...pageText.matchAll(altPattern)];
+
+  // Table/pipe OCR pattern: "| 1 | There were present..."
+  const pipePattern = /^[\s]*\|?\s*(\d{1,2})\s*\|\s*\S/gm;
+  const pipeMatches = [...pageText.matchAll(pipePattern)];
+
+  const allMatches = [...matches, ...altMatches, ...pipeMatches];
+  const lineNums = allMatches
+    .map((m) => parseInt(m[1], 10))
+    .filter((n) => n >= 1 && n <= 25);
+
   if (lineNums.length === 0) {
-    return { start: 1, end: 25 };
+    return { start: 1, end: 25, detected: false };
   }
-  
+
   return {
     start: Math.min(...lineNums),
-    end: Math.max(...lineNums)
+    end: Math.max(...lineNums),
+    detected: true,
   };
 }
 
@@ -1366,8 +1364,9 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
     if (pageMatch) {
       const startPage = parseInt(pageMatch[1], 10);
       const endPage = pageMatch[2] ? parseInt(pageMatch[2], 10) : startPage;
-      const lineStart = pageMatch[3] ? parseInt(pageMatch[3], 10) : 1;
-      const lineEnd = pageMatch[4] ? parseInt(pageMatch[4], 10) : 25;
+      const hasLineNumbers = Boolean(pageMatch[3] && pageMatch[4]);
+      const lineStart = hasLineNumbers ? parseInt(pageMatch[3], 10) : 1;
+      const lineEnd = hasLineNumbers ? parseInt(pageMatch[4], 10) : 25;
       
       // Extract summary: everything after the page reference and a pipe/separator
       let summary = '';
@@ -1389,7 +1388,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
       if (startPage > 0 && summary.length > 10 && endPage >= startPage) {
         // Cap range at 10 pages to prevent runaway ranges
         const cappedEnd = Math.min(endPage, startPage + 10);
-        const lineNumbers = `:${lineStart}-${lineEnd}`;
+        const lineNumbers = hasLineNumbers ? `:${lineStart}-${lineEnd}` : '';
         entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
         
         if (debug) {
@@ -1418,7 +1417,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
 function assembleSortedSummary(
   llmOutputs: string[],
   expectedPages: number[],
-  detectedLineRanges?: Map<number, { start: number; end: number }>
+  detectedLineRanges?: Map<number, { start: number; end: number; detected: boolean }>
 ): { markdown: string; coveredPages: number[]; missingPages: number[] } {
   // Collect all range entries from all outputs
   const allEntries: PageRangeEntry[] = [];
@@ -1509,7 +1508,7 @@ function assembleSortedSummary(
           placeholderEntries.push({
             startPage: rangeStart,
             endPage: groupEnd,
-            lineNumbers: ':1-25',
+            lineNumbers: '',
             summary: '[LLM did not summarize - page contained procedural matters, minimal content, or administrative notations]'
           });
           // Mark these as covered
@@ -1539,17 +1538,28 @@ function assembleSortedSummary(
   const outputRows = allFinalEntries.map(e => {
     let lineNum = e.lineNumbers;
     
-    // If LLM used default :1-25 but we have actual detected ranges, use those
-    if (lineNum === ':1-25' && detectedLineRanges) {
+    // Check if this is a placeholder entry (no line numbers)
+    const isPlaceholder = e.summary.includes('[LLM did not summarize');
+
+    // For actual LLM summaries, use detected line ranges if available
+    if (!isPlaceholder && detectedLineRanges) {
       const detected = detectedLineRanges.get(e.startPage);
-      if (detected && (detected.start !== 1 || detected.end !== 25)) {
+      if (detected?.detected) {
         lineNum = `:${detected.start}-${detected.end}`;
+      } else {
+        // Line numbers not detected on page; omit line numbers
+        lineNum = '';
       }
     }
-    
-    return e.startPage === e.endPage 
-      ? `| p.${e.startPage}${lineNum} | ${e.summary} |`
-      : `| p.${e.startPage}-${e.endPage}${lineNum} | ${e.summary} |`;
+
+    if (isPlaceholder) {
+      lineNum = '';
+    }
+
+    const lineSuffix = lineNum ? lineNum : '';
+    return e.startPage === e.endPage
+      ? `| p.${e.startPage}${lineSuffix} | ${e.summary} |`
+      : `| p.${e.startPage}-${e.endPage}${lineSuffix} | ${e.summary} |`;
   });
   
   // Now all pages should be covered
@@ -1913,7 +1923,7 @@ async function work() {
         const batchOutputs: string[] = new Array(batches.length).fill("");
         
         // Collect all detected line ranges from all batches
-        const allDetectedLineRanges = new Map<number, { start: number; end: number }>();
+        const allDetectedLineRanges = new Map<number, { start: number; end: number; detected: boolean }>();
         for (const batch of batches) {
           for (const [pageNum, range] of batch.lineRanges) {
             allDetectedLineRanges.set(pageNum, range);

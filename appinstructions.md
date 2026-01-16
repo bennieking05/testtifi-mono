@@ -168,3 +168,12 @@
 - Operate **repo‑only** (no local assumptions).  
 - Be explicit with file paths and suggested diffs.  
 - When in doubt, propose 1–2 sane defaults and document assumptions.
+
+---
+
+## Cursor Rules: Line Number Handling
+- Do **not** default line numbers to `:1-25` for every row.
+- Include line numbers **only when detected** from transcript text; otherwise **omit** line numbers.
+- Placeholder rows for skipped/minimal pages must **omit** line numbers.
+- Improve detection for OCR layouts (e.g., numbered lines in tables/pipes).
+- Run a **LineNumberJudge** to verify line-number coverage and flag invalid ranges.
