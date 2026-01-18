@@ -961,15 +961,15 @@ function extractLegalMetadata(
   // - "the 7th day of July, 2022"
   // - "7th day of July, A.D., 2022"
   if (!extractedDate) {
-    const ordinalDayOfMonth =
+  const ordinalDayOfMonth =
       /\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.?\s*D\.?,?\s*)?(\d{4})\b/i;
-    const ordMatch = cleanedHeaderForDate.match(ordinalDayOfMonth);
-    if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
-      const day = Number.parseInt(ordMatch[1], 10);
-      const month = ordMatch[2];
-      const year = ordMatch[3];
-      if (Number.isFinite(day) && day >= 1 && day <= 31) {
-        extractedDate = `${month} ${day}, ${year}`;
+  const ordMatch = cleanedHeaderForDate.match(ordinalDayOfMonth);
+  if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
+    const day = Number.parseInt(ordMatch[1], 10);
+    const month = ordMatch[2];
+    const year = ordMatch[3];
+    if (Number.isFinite(day) && day >= 1 && day <= 31) {
+      extractedDate = `${month} ${day}, ${year}`;
         console.log(`[DateExtraction] Found ordinal date: "${extractedDate}"`);
       }
     }
@@ -1015,7 +1015,7 @@ function extractLegalMetadata(
       if (name === "European Day Month Year" && match[2] && match[3]) {
         extractedDate = `${match[2]} ${match[1]}, ${match[3]}`;
         console.log(`[DateExtraction] Found via "${name}": "${extractedDate}"`);
-        break;
+      break;
       }
       const extracted = extractDateToken(match[1]) || match[1].trim();
       if (extracted) {
@@ -1992,31 +1992,31 @@ async function work() {
         console.log(`[${job.id}] Using LEGACY pipeline (page extraction yielded ${transcriptPageMap.size} pages, ${pageVerification.coveragePercent}% coverage)`);
         
         const chunks = groupPagesToChunks(pages);
-        const parts: string[] = new Array(chunks.length).fill("");
+      const parts: string[] = new Array(chunks.length).fill("");
         
         console.log(`[${job.id}] Created ${chunks.length} chunks from ${pdfPageCount} PDF pages:`);
         chunks.forEach((c, i) => {
           console.log(`[${job.id}]   Chunk ${i + 1}: pages ${c.start}-${c.end}, textLen=${c.text.length}`);
         });
 
-        await Promise.all(
-          chunks.map((chunk, i) =>
-            limit(async () => {
+      await Promise.all(
+        chunks.map((chunk, i) =>
+          limit(async () => {
               console.log(`[${job.id}] Processing chunk ${i + 1}/${chunks.length} (pages ${chunk.start}-${chunk.end})...`);
-              const resp = await withRetry(
-                () => {
-                  const cfg = loadPromptConfig();
-                  return azureChatCompletion(
-                    makePrompt(chunk, i === 0, metaMarkdown, cfg.system),
-                    typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
-                    typeof cfg.temperature === "number" ? cfg.temperature : 0.0
-                  );
-                },
+            const resp = await withRetry(
+              () => {
+                const cfg = loadPromptConfig();
+                return azureChatCompletion(
+                  makePrompt(chunk, i === 0, metaMarkdown, cfg.system),
+                  typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
+                  typeof cfg.temperature === "number" ? cfg.temperature : 0.0
+                );
+              },
                 { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 }
-              );
+            );
               const rawContent = String(resp?.choices?.[0]?.message?.content || "").trim();
               const content = cleanupPageReferences(rawContent);
-              parts[i] = content;
+            parts[i] = content;
               
               const lines = content.split(/\r?\n/);
               const rowish = lines.filter((l) => /^\s*\|?\s*p\.\s*\d+/i.test(l)).length;
@@ -2024,22 +2024,22 @@ async function work() {
                 `[${job.id}] Chunk ${i + 1} (pages ${chunk.start}-${chunk.end}) result: chars=${content.length}, rowishLines=${rowish}`
               );
               
-              const cappedPage = Math.min(
-                totalTranscriptPages,
+            const cappedPage = Math.min(
+              totalTranscriptPages,
                 Math.max(1, Math.round((chunk.end / Math.max(1, pdfPageCount)) * totalTranscriptPages))
-              );
-              await prisma.summaryJob.update({
-                where: { id: job.id },
-                data: { lastPageProcessed: cappedPage },
-              });
-            })
-          )
-        );
+            );
+            await prisma.summaryJob.update({
+              where: { id: job.id },
+              data: { lastPageProcessed: cappedPage },
+            });
+          })
+        )
+      );
 
-        const mergedRaw = parts.join("\n");
-        const rowsOnlyUnbounded = sanitizeGeneratedMarkdown(mergedRaw)
-          .replace(/```[\s\S]*?```/g, "")
-          .trim();
+      const mergedRaw = parts.join("\n");
+      const rowsOnlyUnbounded = sanitizeGeneratedMarkdown(mergedRaw)
+        .replace(/```[\s\S]*?```/g, "")
+        .trim();
         const rowsTrimmed = trimOutOfRangeRows(rowsOnlyUnbounded, totalTranscriptPages);
         rowsOnly = sortAndDeduplicateRows(rowsTrimmed);
       }
@@ -2519,22 +2519,22 @@ function detectTranscriptMaxPage(transcript: string): number {
     const isInTailSection = lineIdx > totalLines * 0.8;
     
     if (!inIndexSection && !isInTailSection) {
-      const pl = line.match(/^(\d{1,6})\s*:\s*(\d{1,3})\b/);
-      if (pl) {
-        const page = Number.parseInt(pl[1], 10);
-        const lineNo = Number.parseInt(pl[2], 10);
-        if (
-          Number.isFinite(lineNo) &&
-          lineNo >= 0 &&
-          lineNo <= 35 &&
-          Number.isFinite(page) &&
-          page >= 1 &&
-          page <= 5000
-        ) {
-          pageLineCandidates.push(page);
-        }
+    const pl = line.match(/^(\d{1,6})\s*:\s*(\d{1,3})\b/);
+    if (pl) {
+      const page = Number.parseInt(pl[1], 10);
+      const lineNo = Number.parseInt(pl[2], 10);
+      if (
+        Number.isFinite(lineNo) &&
+        lineNo >= 0 &&
+        lineNo <= 35 &&
+        Number.isFinite(page) &&
+        page >= 1 &&
+        page <= 5000
+      ) {
+        pageLineCandidates.push(page);
       }
     }
+  }
   }
 
   // PRIORITY 0: If we found a (Pages X - Y) range, use it exclusively.

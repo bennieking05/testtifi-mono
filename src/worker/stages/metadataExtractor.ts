@@ -265,15 +265,15 @@ export function extractLegalMetadata(
 
   // Ordinal date patterns as fallback
   if (!extractedDate) {
-    const ordinalDayOfMonth =
-      /\b(?:on\s+the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.D\.,?\s*)?(\d{4})\b/i;
-    const ordMatch = cleanedHeader.match(ordinalDayOfMonth);
-    if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
-      const day = Number.parseInt(ordMatch[1], 10);
-      const month = ordMatch[2];
-      const year = ordMatch[3];
-      if (Number.isFinite(day) && day >= 1 && day <= 31) {
-        extractedDate = `${month} ${day}, ${year}`;
+  const ordinalDayOfMonth =
+    /\b(?:on\s+the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.D\.,?\s*)?(\d{4})\b/i;
+  const ordMatch = cleanedHeader.match(ordinalDayOfMonth);
+  if (ordMatch?.[1] && ordMatch?.[2] && ordMatch?.[3]) {
+    const day = Number.parseInt(ordMatch[1], 10);
+    const month = ordMatch[2];
+    const year = ordMatch[3];
+    if (Number.isFinite(day) && day >= 1 && day <= 31) {
+      extractedDate = `${month} ${day}, ${year}`;
       }
     }
   }
