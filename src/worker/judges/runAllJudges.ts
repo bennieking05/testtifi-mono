@@ -5,6 +5,7 @@ import { JudgeResult, JudgeContext } from "./types";
 import { pageCountJudge } from "./pageCountJudge";
 import { metadataJudge } from "./metadataJudge";
 import { summaryJudge } from "./summaryJudge";
+import { lineNumberJudge } from "./lineNumberJudge";
 
 export interface JudgeResults {
   allPassed: boolean;
@@ -26,6 +27,7 @@ export async function runAllJudges(context: JudgeContext): Promise<JudgeResults>
     Promise.resolve(pageCountJudge(context)),
     Promise.resolve(metadataJudge(context)),
     Promise.resolve(summaryJudge(context)),
+    Promise.resolve(lineNumberJudge(context)),
   ]);
 
   // Aggregate results

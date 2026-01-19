@@ -56,6 +56,14 @@ steps:
         fi
         echo "Deploying to namespace: $${TARGET_NAMESPACE}"
 
+        # ===== IMPORTANT: Ensure no stale workers in OTHER namespaces =====
+        # Scale down workers in namespaces we're NOT deploying to, to prevent race conditions
+        if [[ "$${TARGET_NAMESPACE}" == "staging" ]]; then
+          echo "Ensuring no stale workers in 'default' namespace..."
+          kubectl -n default scale deployment/summarize-worker --replicas=0 2>/dev/null || true
+          kubectl -n default scale deployment/backend --replicas=0 2>/dev/null || true
+        fi
+
         echo "Updating backend image to $BUILD_ID..."
         kubectl -n "$${TARGET_NAMESPACE}" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
         kubectl -n "$${TARGET_NAMESPACE}" rollout status deployment/backend --timeout=300s

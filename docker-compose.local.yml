@@ -1,0 +1,32 @@
+version: "3.9"
+
+# Extended docker-compose for local development with summarize-worker
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+
+services:
+  summarize-worker:
+    build:
+      context: ./backend
+      target: summarize-worker
+    container_name: testifiai-worker
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/gcp-key.json
+      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME:-deposition-files}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - EMAIL_USER=${EMAIL_USER}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+    volumes:
+      # Mount GCP credentials if available
+      - ./backend/config:/app/config:ro
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+networks:
+  default:
+    name: testifiai-net

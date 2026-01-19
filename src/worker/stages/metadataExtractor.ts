@@ -231,9 +231,40 @@ export function extractLegalMetadata(
   // Deposition date
   let extractedDate: string | null = null;
 
-  // Special-case: "commencing ... on the 7th day of July, A.D., 2022"
   // Handle line breaks and embedded line numbers in transcript text
   const cleanedHeader = header.replace(/\n\d{1,2}\s*/g, " ").replace(/\s+/g, " ");
+
+  // HIGHEST PRIORITY: Look for explicit deposition date indicators first
+  // These patterns directly indicate when the deposition was held
+  const highPriorityDatePatterns: Array<{ pattern: RegExp; name: string }> = [
+    // "was convened on July 7, 2022" - common in deposition openings
+    { pattern: /\bconvened\s+(?:remotely\s+)?on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "convened on" },
+    // "commenced on July 7, 2022" or "commencing on July 7, 2022"
+    { pattern: /\bcommenc(?:ed|ing)\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "commenced/commencing" },
+    // "was held on July 7, 2022"
+    { pattern: /\bwas\s+held\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "was held on" },
+    // "was taken on July 7, 2022"
+    { pattern: /\bwas\s+taken\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "was taken on" },
+    // "at 10:05 a.m. on July 7, 2022"
+    { pattern: /\bat\s+\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "at time on date" },
+    // TAKEN: July 7, 2022 (INDEX page)
+    { pattern: /\bTAKEN\s*[:\-]\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i, name: "TAKEN:" },
+  ];
+  
+  for (const { pattern, name } of highPriorityDatePatterns) {
+    const match = cleanedHeader.match(pattern);
+    if (match?.[1]) {
+      const extracted = extractDateToken(match[1]) || match[1].trim();
+      if (extracted) {
+        extractedDate = extracted;
+        console.log(`[DateExtraction] Found via HIGH PRIORITY "${name}": "${extractedDate}"`);
+        break;
+      }
+    }
+  }
+
+  // Ordinal date patterns as fallback
+  if (!extractedDate) {
   const ordinalDayOfMonth =
     /\b(?:on\s+the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(January|February|March|April|May|June|July|August|September|October|November|December)[,\s]+(?:A\.D\.,?\s*)?(\d{4})\b/i;
   const ordMatch = cleanedHeader.match(ordinalDayOfMonth);
@@ -243,6 +274,7 @@ export function extractLegalMetadata(
     const year = ordMatch[3];
     if (Number.isFinite(day) && day >= 1 && day <= 31) {
       extractedDate = `${month} ${day}, ${year}`;
+      }
     }
   }
 
@@ -295,6 +327,51 @@ export function extractLegalMetadata(
   // Fallback: search for a plausible date near the top
   if (!extractedDate) {
     extractedDate = extractDateToken(header);
+  }
+
+  // Cross-validate: OCR can misread "7th" as "6th". Check multiple sources.
+  // The explicit "Month Day, Year" format is less prone to OCR errors than ordinal forms.
+  if (extractedDate) {
+    const extractedParts = extractedDate.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+    if (extractedParts) {
+      const [, month, day, year] = extractedParts;
+      const dayNum = parseInt(day, 10);
+      
+      // Check if adjacent days appear explicitly in the full transcript (not ordinal form)
+      // Use full transcript to catch dates mentioned in opening statements, etc.
+      const searchText = tr.slice(0, 50000); // First ~50K chars to avoid performance issues
+      const adjacentDays = [dayNum - 1, dayNum, dayNum + 1].filter(d => d >= 1 && d <= 31);
+      const explicitDateCounts: { [key: number]: number } = {};
+      
+      for (const d of adjacentDays) {
+        // Count explicit "Month Day, Year" patterns (not ordinal)
+        const explicitPattern = new RegExp(`\\b${month}\\s+${d},?\\s+${year}\\b`, 'gi');
+        const matches = searchText.match(explicitPattern);
+        explicitDateCounts[d] = matches ? matches.length : 0;
+      }
+      
+      // Also check for "taken on [date]" or "deposition ... [date]" phrases
+      // which are highly reliable indicators of the actual deposition date
+      for (const d of adjacentDays) {
+        const takenOnPattern = new RegExp(`\\b(?:taken|deposition)\\b[^.]{0,50}\\b${month}\\s+${d},?\\s+${year}\\b`, 'gi');
+        const takenMatches = searchText.match(takenOnPattern);
+        if (takenMatches) {
+          // "taken on" phrases are highly reliable, weight them 10x
+          explicitDateCounts[d] = (explicitDateCounts[d] || 0) + takenMatches.length * 10;
+        }
+      }
+      
+      // Find the most common explicit date in adjacent range
+      const mostCommonDay = Object.entries(explicitDateCounts)
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1])[0];
+      
+      if (mostCommonDay && parseInt(mostCommonDay[0]) !== dayNum) {
+        const correctedDate = `${month} ${mostCommonDay[0]}, ${year}`;
+        console.log(`[DateExtraction] Cross-validation: Extracted "${extractedDate}" but "${correctedDate}" appears more reliably (score: ${mostCommonDay[1]} vs ${explicitDateCounts[dayNum] || 0}). Using corrected date.`);
+        extractedDate = correctedDate;
+      }
+    }
   }
 
   const date = normalizeUnknown(extractedDate) || "[Unknown]";

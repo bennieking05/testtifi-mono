@@ -6,9 +6,43 @@ import pLimit from "p-limit";
 import { loadPromptConfig } from "../../lib/promptConfig";
 import { splitPages } from "./pageCounter";
 
+/**
+ * Post-process LLM output to clean up page references.
+ * KEEPS all line number references (including :1-25).
+ */
+function cleanupPageReferences(content: string): string {
+  let cleaned = content;
+  
+  // DO NOT strip line numbers - keep them all, including :1-25
+  // The user wants line number references preserved
+  
+  // Consolidate consecutive pages like "p.18, p.19, p.20, p.21" → "p.18-21"
+  // Only for pages WITHOUT line numbers
+  cleaned = cleaned.replace(/\bp\.(\d+)(?:,\s*p\.(\d+))+/gi, (match) => {
+    if (match.includes(':')) return match; // Don't consolidate if has line numbers
+    const pages = match.match(/\d+/g);
+    if (!pages || pages.length < 2) return match;
+    const nums = pages.map(Number).sort((a, b) => a - b);
+    let isConsecutive = true;
+    for (let i = 1; i < nums.length; i++) {
+      if (nums[i] !== nums[i-1] + 1) {
+        isConsecutive = false;
+        break;
+      }
+    }
+    if (isConsecutive && nums.length >= 3) {
+      return `p.${nums[0]}-${nums[nums.length - 1]}`;
+    }
+    return match;
+  });
+  
+  return cleaned;
+}
+
 // Tuning knobs (env-overridable)
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
-const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 5 : 6);
+// Reduced from 5 to 3 pages per chunk to force LLM to cover all pages (less content = harder to skip)
+const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || (DETAIL_MODE === "high" ? 3 : 4);
 const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1);
 
@@ -65,7 +99,9 @@ export async function summarizePages(input: SummarizerInput): Promise<Summarizer
           { retries: 5, minDelayMs: 2000, maxDelayMs: 30000 }
         );
 
-        const content = String(resp?.choices?.[0]?.message?.content || "").trim();
+        const rawContent = String(resp?.choices?.[0]?.message?.content || "").trim();
+        // Post-process to remove line numbers and clean up page references
+        const content = cleanupPageReferences(rawContent);
         parts[i] = content;
         totalTokens += resp?.usage?.total_tokens || 0;
 
@@ -110,10 +146,29 @@ function groupPagesToChunks(
   const out: { start: number; end: number; text: string }[] = [];
   for (let i = 0; i < pages.length; i += perChunk) {
     const slice = pages.slice(i, i + perChunk);
+    // Add clear page headers so the LLM knows exactly where each page starts
+    // This helps prevent gaps in coverage and allows proper page referencing
+    const textWithPageHeaders = slice.map((p) => {
+      // Check if the page text already has line numbers (e.g., "1  Q.  Hello")
+      const lines = p.text.split('\n');
+      const hasLineNumbers = lines.some(line => /^\s*\d{1,2}\s+[A-Z]/.test(line));
+      
+      // Format page header clearly for LLM
+      const header = `\n=== PAGE ${p.page} ===\n`;
+      
+      // If line numbers exist in text, preserve them; otherwise add placeholder
+      if (hasLineNumbers) {
+        return header + p.text;
+      } else {
+        // Add line number hints based on typical deposition format (25 lines per page)
+        return header + `[Lines 1-25]\n` + p.text;
+      }
+    }).join("\n");
+    
     out.push({
       start: slice[0].page,
       end: slice[slice.length - 1].page,
-      text: slice.map((p) => p.text).join("\n"),
+      text: textWithPageHeaders,
     });
   }
   return out;
@@ -140,17 +195,21 @@ Produce a comprehensive PAGE-LINE deposition summary for pages ${chunk.start}–
 
 ${metaSection}
 
-CRITICAL COVERAGE REQUIREMENT:
-- You MUST cover the entire range from ${chunk.start} through ${chunk.end} with NO GAPS.
-- Your rows must progress forward through the range; do not jump around or cherry-pick.
-- The union of your page ranges must fully cover ${chunk.start}–${chunk.end}.
+MANDATORY COVERAGE - READ CAREFULLY:
+You are given transcript text for pages ${chunk.start} through ${chunk.end}.
+Each page is marked with "=== PAGE X ===" headers.
+You MUST produce summary rows that COLLECTIVELY cover EVERY SINGLE PAGE from ${chunk.start} to ${chunk.end}.
+DO NOT SKIP ANY PAGES. If you skip pages, the output is INVALID.
 
-OUTPUT FORMAT (STRICT):
-- Output ONLY Markdown table rows with EXACTLY two columns: Page(s) | Testimony
-- No header row, rows only
-- First column MUST use transcript page-line format like: "p.12:1-25, p.13:1-25, p.14:1-10"
-- Each row should span 3-5 transcript pages when topics are related (compression), but you must still cover ALL pages in the chunk.
-- For each page/section, write 3-6 complete sentences capturing:
+REQUIRED OUTPUT:
+Create 1-3 table rows that together cover ALL pages ${chunk.start}-${chunk.end}:
+
+OUTPUT FORMAT:
+- Output ONLY Markdown table rows: | Page(s) | Testimony |
+- No header row, just data rows
+- First column: page range like "p.X-Y" or list pages
+- Second column: 3-6 sentences summarizing the testimony
+- Cover:
   * The main topic or subject matter
   * All specific names, titles, entities, dates, and figures mentioned
   * Document references (exhibits, emails, declarations) with context
@@ -163,12 +222,13 @@ Transcript:
 ${chunk.text}
         `.trim()
         : `
-Continue the PAGE-LINE deposition summary for pages ${chunk.start}–${chunk.end}.
+Continue the deposition summary for pages ${chunk.start}–${chunk.end}.
 
-Do NOT repeat metadata. Output ONLY additional Markdown table rows with two columns (Page Number | Testimony).
-- No header row, rows only
-- You MUST cover the entire range from ${chunk.start} through ${chunk.end} with NO GAPS (collectively across your rows)
-- First column MUST use transcript page-line format like: "p.12:1-25, p.13:1-25"
+MANDATORY: You MUST cover EVERY page from ${chunk.start} to ${chunk.end}. DO NOT SKIP ANY PAGES.
+
+Output 1-3 Markdown table rows (| Page(s) | Testimony |) that TOGETHER cover ALL pages in this range.
+- First column: page range like "p.X-Y" or list pages
+- Second column: 3-6 sentences summarizing the testimony
 - Maintain the same comprehensive, detailed style:
   * 3-6 complete sentences per entry for substantive testimony
   * All specific names, dates, figures, entities

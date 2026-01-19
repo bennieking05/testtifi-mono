@@ -4,6 +4,7 @@
 export { pageCountJudge } from "./pageCountJudge";
 export { metadataJudge } from "./metadataJudge";
 export { summaryJudge } from "./summaryJudge";
+export { lineNumberJudge } from "./lineNumberJudge";
 export {
   runAllJudges,
   formatJudgeResultsForStorage,

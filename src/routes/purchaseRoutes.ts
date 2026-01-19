@@ -237,7 +237,8 @@ async function sendPurchaseReceiptEmail({
           : ""
       }
     <div class="notice" style="${noticeStyle}">
-      <p style="${noticeHeadingStyle}"><strong>Important:</strong> Credits Expiration Policy</p>
+      <p style="${noticeHeadingStyle}"><strong>Important:</strong> Sales &amp; Credits Policy</p>
+      <p style="${noticeBodyStyle}">All sales are final. No refunds or exchanges.</p>
       <p style="${noticeBodyStyle}">Credits must be used within 72 hours (3 days) from purchase. Unused credits will expire and cannot be recovered.</p>
     </div>
     <p>The credits are ready to use immediately. If you have any questions, reply to this email or contact <a href="mailto:support@testifi.ai">support@testifi.ai</a>.</p>
@@ -256,7 +257,8 @@ Thank you for your purchase. We've added ${creditsLabel} ${creditNoun} to your T
 
 ${breakdownLines.join("\n")}
 
-Important: Credits Expiration Policy
+Important: Sales & Credits Policy
+All sales are final. No refunds or exchanges.
 Credits must be used within 72 hours (3 days) from purchase. Unused credits will expire and cannot be recovered.
 
 The credits are ready to use immediately. If you have any questions, reply to this email or contact support@testifi.ai.

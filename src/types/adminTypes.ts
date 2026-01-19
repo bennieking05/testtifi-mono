@@ -75,16 +75,6 @@ export interface DownloadMetrics {
   avgDownloadsPerSummary: number;
   topDownloaded: Array<{ summaryId: string; title: string; downloads: number }>;
   downloadsByDay: Array<{ date: string; count: number }>;
-  recentDownloads: Array<{
-    id: string;
-    summaryId: string;
-    title: string;
-    format: string;
-    downloadedAt: string;
-    userName: string | null;
-    userEmail: string | null;
-    companyName: string | null;
-  }>;
 }
 
 export interface SupportMetrics {
