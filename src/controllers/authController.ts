@@ -237,6 +237,7 @@ export const refreshAccessToken = async (
       userId: string;
       email: string;
       credits: number;
+      role?: string;
       exp: number;
       iat: number;
     };
@@ -261,6 +262,12 @@ export const refreshAccessToken = async (
       return;
     }
 
+    // Fetch fresh user data to get current role and credits
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { role: true },
+    });
+    
     const credits = await getEffectiveCreditBalance(prisma, decoded.userId);
 
     const newAccessToken = jwt.sign(
@@ -268,6 +275,7 @@ export const refreshAccessToken = async (
         userId: decoded.userId,
         email: decoded.email,
         credits,
+        role: user?.role || decoded.role || "user",
       },
       JWT_SECRET,
       { expiresIn: "115m" }

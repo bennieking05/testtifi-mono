@@ -345,9 +345,7 @@ function extractAllPages(label: string): number[] {
     if (Number.isFinite(n)) out.push(n);
   }
   return out;
-}
-
-function enforcePageBounds(
+}function enforcePageBounds(
   rows: Array<[string, string]>,
   opts: { maxPage?: number } = {}
 ): Array<[string, string]> {
@@ -376,4 +374,3 @@ function enforcePageBounds(
   }
   return kept;
 }
-
