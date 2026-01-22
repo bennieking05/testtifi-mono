@@ -1584,18 +1584,27 @@ async function azureChatCompletion(
   )}/openai/deployments/${
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME
   }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
-  const { data } = await axios.post(
-    url,
-    { messages, max_tokens: maxTokens, temperature },
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": process.env.AZURE_OPENAI_API_KEY!,
-      },
-      timeout: 120000,
+  try {
+    const { data } = await axios.post(
+      url,
+      { messages, max_tokens: maxTokens, temperature },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": process.env.AZURE_OPENAI_API_KEY!,
+        },
+        timeout: 120000,
+      }
+    );
+    return data;
+  } catch (err: any) {
+    // Log full Azure error response for debugging
+    if (err.response?.data) {
+      console.error("[Azure OpenAI Error]", JSON.stringify(err.response.data, null, 2));
+      console.error("[Azure OpenAI Headers]", JSON.stringify(err.response.headers, null, 2));
     }
-  );
-  return data;
+    throw err;
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
