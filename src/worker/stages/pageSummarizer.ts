@@ -48,6 +48,8 @@ const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) ||
 
 export interface SummaryRow {
   pageLabel: string;
+  topic: string;
+  witness?: string;
   summary: string;
 }
 
@@ -195,28 +197,26 @@ Produce a comprehensive PAGE-LINE deposition summary for pages ${chunk.start}–
 
 ${metaSection}
 
-MANDATORY COVERAGE - READ CAREFULLY:
-You are given transcript text for pages ${chunk.start} through ${chunk.end}.
-Each page is marked with "=== PAGE X ===" headers.
-You MUST produce summary rows that COLLECTIVELY cover EVERY SINGLE PAGE from ${chunk.start} to ${chunk.end}.
-DO NOT SKIP ANY PAGES. If you skip pages, the output is INVALID.
+MANDATORY COVERAGE:
+You MUST produce summary rows covering ALL pages from ${chunk.start} to ${chunk.end}. DO NOT SKIP ANY PAGES.
 
-REQUIRED OUTPUT:
-Create 1-3 table rows that together cover ALL pages ${chunk.start}-${chunk.end}:
+OUTPUT FORMAT (3 COLUMNS for single witness):
+| Page/Line | Topic | Summary |
 
-OUTPUT FORMAT:
-- Output ONLY Markdown table rows: | Page(s) | Testimony |
-- No header row, just data rows
-- First column: page range like "p.X-Y" or list pages
-- Second column: 3-6 sentences summarizing the testimony
-- Cover:
-  * The main topic or subject matter
-  * All specific names, titles, entities, dates, and figures mentioned
-  * Document references (exhibits, emails, declarations) with context
-  * Key facts, admissions, or statements by the witness
-  * Any objections or legal procedural matters
-- Be thorough and specific - the attorney should understand the testimony without reading the transcript
-- Break into multiple rows when topics change within a page range
+TOPIC GROUPING RULES:
+- Group testimony by TOPIC across up to 5 pages per row when discussing the same subject.
+- Start a NEW ROW when the topic changes significantly.
+- DO NOT create one row per page — combine pages with the same topic.
+
+EXAMPLE OUTPUT:
+| p.${chunk.start}-${Math.min(chunk.start + 2, chunk.end)} | Employment History | The witness testified about his background, stating he joined the company in 2018 as a sales representative. He described his initial responsibilities and territory assignments. |
+| p.${Math.min(chunk.start + 3, chunk.end)}-${chunk.end} | Compensation Structure | The witness explained the commission structure, noting 4% on direct sales and 2% on distributor sales. He confirmed receiving quarterly bonus payments. |
+
+REQUIREMENTS:
+- Topic column: 2-5 word label (e.g., "Sales Territories", "Commission Disputes", "Document Review")
+- Summary column: 3-6 sentences in narrative prose, third-person past tense
+- Include: names, titles, dates, figures, exhibit references, objections
+- Be thorough and specific
 
 Transcript:
 ${chunk.text}
@@ -224,19 +224,19 @@ ${chunk.text}
         : `
 Continue the deposition summary for pages ${chunk.start}–${chunk.end}.
 
-MANDATORY: You MUST cover EVERY page from ${chunk.start} to ${chunk.end}. DO NOT SKIP ANY PAGES.
+MANDATORY: Cover ALL pages ${chunk.start} to ${chunk.end}. DO NOT SKIP ANY PAGES.
 
-Output 1-3 Markdown table rows (| Page(s) | Testimony |) that TOGETHER cover ALL pages in this range.
-- First column: page range like "p.X-Y" or list pages
-- Second column: 3-6 sentences summarizing the testimony
-- Maintain the same comprehensive, detailed style:
-  * 3-6 complete sentences per entry for substantive testimony
-  * All specific names, dates, figures, entities
-  * Document references with context
-  * Key facts and admissions
-  * Objections and procedural matters
-- Be thorough and specific
-- Break into multiple rows when topics change
+OUTPUT FORMAT (3 COLUMNS):
+| Page/Line | Topic | Summary |
+
+TOPIC GROUPING:
+- Group by TOPIC across up to 5 pages per row.
+- New row when topic changes.
+
+REQUIREMENTS:
+- Topic: 2-5 word label
+- Summary: 3-6 sentences, narrative prose, third-person past tense
+- Include all specifics: names, dates, figures, exhibits, objections
 
 Transcript:
 ${chunk.text}
@@ -409,17 +409,39 @@ function parseMarkdownRows(md: string): SummaryRow[] {
     if (/^\s*\|?\s*-+/.test(line)) continue;
     if (/^\s*\|?\s*Page\s*\(?s?\)?\s*\|/i.test(line)) continue;
 
-    // Parse table row: | page | summary | or page | summary
+    // Parse table row
     const stripped = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-    const parts = stripped.split("|");
+    const parts = stripped.split("|").map(p => p.trim());
 
-    if (parts.length >= 2) {
-      const pageLabel = parts[0].trim();
-      const summary = parts.slice(1).join("|").trim();
+    // Validate page label looks like a page reference
+    if (parts.length < 2) continue;
+    const pageLabel = parts[0];
+    if (!/^(?:p(?:age)?\.?\s*)?\d{1,6}/i.test(pageLabel)) continue;
 
-      // Validate page label looks like a page reference
-      if (/^(?:p(?:age)?\.?\s*)?\d{1,6}/i.test(pageLabel) && summary) {
-        rows.push({ pageLabel, summary });
+    // Handle different column formats:
+    // 2 columns: | Page/Line | Summary |
+    // 3 columns: | Page/Line | Topic | Summary |
+    // 4 columns: | Page/Line | Witness | Topic | Summary |
+    if (parts.length === 2) {
+      // Legacy 2-column format
+      const summary = parts[1];
+      if (summary) {
+        rows.push({ pageLabel, topic: "", summary });
+      }
+    } else if (parts.length === 3) {
+      // 3-column format: Page/Line | Topic | Summary
+      const topic = parts[1];
+      const summary = parts[2];
+      if (summary) {
+        rows.push({ pageLabel, topic, summary });
+      }
+    } else if (parts.length >= 4) {
+      // 4-column format: Page/Line | Witness | Topic | Summary
+      const witness = parts[1];
+      const topic = parts[2];
+      const summary = parts.slice(3).join("|").trim();
+      if (summary) {
+        rows.push({ pageLabel, witness, topic, summary });
       }
     }
   }

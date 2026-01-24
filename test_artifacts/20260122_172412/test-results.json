@@ -1,0 +1,15 @@
+{
+  "timestamp": "20260122_172412",
+  "changed_files_count": 8,
+  "impact": {
+    "frontend": false,
+    "backend": false,
+    "e2e": true
+  },
+  "results": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1
+  },
+  "artifacts_dir": "test_artifacts/20260122_172412"
+}

@@ -15,19 +15,30 @@ const SNAPS_DIR = path.join(RESULTS_DIR, 'screenshots');
 // Ensure directories exist
 fs.mkdirSync(SNAPS_DIR, { recursive: true });
 
-// Test credentials - loaded from test-login.json if available
-let testEmail = '';
-let testPassword = '';
+// Test credentials - loaded from environment variables or test-login.json
+// Priority: 1. Environment variables, 2. test-login.json file
+let testEmail = process.env.TEST_EMAIL || '';
+let testPassword = process.env.TEST_PASSWORD || '';
 
-try {
-  const loginFile = path.join(process.cwd(), 'test-login.json');
-  if (fs.existsSync(loginFile)) {
-    const creds = JSON.parse(fs.readFileSync(loginFile, 'utf8'));
-    testEmail = creds.email || '';
-    testPassword = creds.password || '';
+// Fall back to test-login.json if env vars not set
+if (!testEmail || !testPassword) {
+  try {
+    const loginFile = path.join(process.cwd(), 'test-login.json');
+    if (fs.existsSync(loginFile)) {
+      const creds = JSON.parse(fs.readFileSync(loginFile, 'utf8'));
+      testEmail = testEmail || creds.email || '';
+      testPassword = testPassword || creds.password || '';
+    }
+  } catch {
+    // No credentials available
   }
-} catch {
-  // No credentials available
+}
+
+// Log credential status (without revealing actual values)
+if (testEmail && testPassword) {
+  console.log(`[Test Setup] Using credentials for: ${testEmail.replace(/(.{3}).*(@.*)/, '$1***$2')}`);
+} else {
+  console.log('[Test Setup] No test credentials available - protected page tests will be skipped');
 }
 
 // Helper to take timestamped screenshots
@@ -111,7 +122,9 @@ test.describe('Public Pages', () => {
 
   test('404 Not Found page displays correctly', async ({ page }) => {
     await page.goto('/this-page-does-not-exist-12345');
-    await page.waitForLoadState('networkidle');
+    // Use domcontentloaded - 404 pages may redirect or have continuous polling
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await snap(page, 'page-not-found');
     
@@ -178,9 +191,10 @@ test.describe('Protected Pages', () => {
 
   test('Checkout page loads', async ({ page }) => {
     await page.goto('/checkout');
-    await page.waitForLoadState('networkidle');
+    // Use domcontentloaded - Stripe elements cause continuous network activity
+    await page.waitForLoadState('domcontentloaded');
     
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
     // Checkout might redirect if no payment intent
     
     await snap(page, 'page-checkout');

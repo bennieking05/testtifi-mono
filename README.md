@@ -37,3 +37,32 @@ DOTENV_CONFIG_PATH=backend/.env \
 npx --prefix backend ts-node -P backend/tsconfig.json \
   ../scripts/test-send-inline-logo.ts
 ```
+
+---
+
+## BugBot Pre-Push Testing Gate
+
+This repo blocks `git push` unless impacted tests pass.
+
+### Install hook
+```bash
+chmod +x scripts/bugbot/prepush-bugbot.sh
+cat > .git/hooks/pre-push <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash scripts/bugbot/prepush-bugbot.sh
+EOF
+chmod +x .git/hooks/pre-push
+```
+
+### Artifacts
+Each run produces:
+- `./test_artifacts/<timestamp>/bugbot-report.md`
+- `./test_artifacts/<timestamp>/test-results.json`
+- `./test_artifacts/<timestamp>/test-results.csv`
+- `./test_artifacts/<timestamp>/raw/*.log`
+
+### Override (not recommended)
+```bash
+ALLOW_PUSH_WITH_FAILURES=true git push
+```

@@ -2289,8 +2289,8 @@ You're receiving this because you have an account on Testifi AI.`;
 }
 
 // Parse summary markdown rows into structured format for judge validation
-function parseSummaryRows(md: string): Array<{ pageLabel: string; summary: string }> {
-  const rows: Array<{ pageLabel: string; summary: string }> = [];
+function parseSummaryRows(md: string): Array<{ pageLabel: string; topic?: string; witness?: string; summary: string }> {
+  const rows: Array<{ pageLabel: string; topic?: string; witness?: string; summary: string }> = [];
   const lines = md.split(/\r?\n/);
 
   for (const line of lines) {
@@ -2298,17 +2298,39 @@ function parseSummaryRows(md: string): Array<{ pageLabel: string; summary: strin
     if (/^\s*\|?\s*-+/.test(line)) continue;
     if (/^\s*\|?\s*Page\s*\(?s?\)?\s*\|/i.test(line)) continue;
 
-    // Parse table row: | page | summary | or page | summary
+    // Parse table row
     const stripped = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-    const parts = stripped.split("|");
+    const parts = stripped.split("|").map(p => p.trim());
 
-    if (parts.length >= 2) {
-      const pageLabel = parts[0].trim();
-      const summary = parts.slice(1).join("|").trim();
+    // Validate page label looks like a page reference
+    if (parts.length < 2) continue;
+    const pageLabel = parts[0];
+    if (!/^(?:p(?:age)?\.?\s*)?\d{1,6}/i.test(pageLabel)) continue;
 
-      // Validate page label looks like a page reference
-      if (/^(?:p(?:age)?\.?\s*)?\d{1,6}/i.test(pageLabel) && summary) {
+    // Handle different column formats:
+    // 2 columns: | Page/Line | Summary |
+    // 3 columns: | Page/Line | Topic | Summary |
+    // 4 columns: | Page/Line | Witness | Topic | Summary |
+    if (parts.length === 2) {
+      // Legacy 2-column format
+      const summary = parts[1];
+      if (summary) {
         rows.push({ pageLabel, summary });
+      }
+    } else if (parts.length === 3) {
+      // 3-column format: Page/Line | Topic | Summary
+      const topic = parts[1];
+      const summary = parts[2];
+      if (summary) {
+        rows.push({ pageLabel, topic, summary });
+      }
+    } else if (parts.length >= 4) {
+      // 4-column format: Page/Line | Witness | Topic | Summary
+      const witness = parts[1];
+      const topic = parts[2];
+      const summary = parts.slice(3).join("|").trim();
+      if (summary) {
+        rows.push({ pageLabel, witness, topic, summary });
       }
     }
   }

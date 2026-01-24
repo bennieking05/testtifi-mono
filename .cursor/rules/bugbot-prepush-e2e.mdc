@@ -1,0 +1,78 @@
+---
+description: "BugBot pre-push gate: run impacted tests (frontend/backend/E2E), write artifacts, block push on regressions."
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# BugBot Pre-Push E2E Gate (TestifiAI)
+
+## Non-negotiables
+- Any change must be push-safe: tests must pass before `git push`.
+- All runs MUST write artifacts to: `./test_artifacts/<timestamp>/`
+- Default: block push on failures. Override only with `ALLOW_PUSH_WITH_FAILURES=true`.
+
+## Repo structure
+- Frontend at `./loveable` (Vite + React + shadcn/ui)
+- Backend at `./backend` (Node + Express + Prisma)
+- Root `package.json` contains the main test scripts
+
+## Standard scripts used
+Root (in `package.json`):
+- `test:regression` — runs API + frontend regression tests
+- `test:api` — API endpoint tests only
+- `test:frontend` — Playwright frontend tests only
+
+Frontend (in `loveable/package.json`):
+- `test:ui` — Playwright UI tests with dev server
+
+## What to do when asked to "make code push-ready"
+1. Ensure the git pre-push hook is installed:
+   - `.git/hooks/pre-push` exists and calls `scripts/bugbot/prepush-bugbot.sh`
+2. Ensure Playwright tests are stable:
+   - Use `data-testid` and stable role queries.
+3. Ensure test artifacts are produced:
+   - `bugbot-report.md`, `test-results.json`, `test-results.csv`, plus raw logs.
+4. If failures occur:
+   - Identify root cause.
+   - Propose the minimal patch.
+   - Apply patch only if it is safe and minimal.
+   - Re-run the exact same bugbot pipeline until green (or stop and document why).
+
+## Output contract
+Every run must produce:
+- `test_artifacts/<timestamp>/bugbot-report.md`
+- `test_artifacts/<timestamp>/test-results.json`
+- `test_artifacts/<timestamp>/test-results.csv`
+- `test_artifacts/<timestamp>/raw/*.log`
+
+## Push gating rules
+- If any suite fails -> exit non-zero -> push blocked
+- If override flag is set -> allow push but still produce artifacts and a report banner
+
+## When generating/patching code for tests
+- Prefer small, local, deterministic tests.
+- Avoid flaky selectors in E2E: use `data-testid` and stable role queries.
+- For Express integration tests: use `supertest` and isolate side effects (db mocks/containers).
+
+## Impact detection
+The script detects which areas are impacted based on changed files:
+- `loveable/*` changes -> frontend impacted
+- `backend/*` changes -> backend impacted
+- Routes, API, tests, or Playwright files -> E2E impacted
+
+## Install hook (for new clones)
+```bash
+chmod +x scripts/bugbot/prepush-bugbot.sh
+cat > .git/hooks/pre-push <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+bash scripts/bugbot/prepush-bugbot.sh
+EOF
+chmod +x .git/hooks/pre-push
+```
+
+## Override (not recommended)
+```bash
+ALLOW_PUSH_WITH_FAILURES=true git push
+```

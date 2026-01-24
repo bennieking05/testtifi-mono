@@ -14,19 +14,23 @@ const SNAPS_DIR = path.join(RESULTS_DIR, 'screenshots');
 // Ensure directories exist
 fs.mkdirSync(SNAPS_DIR, { recursive: true });
 
-// Test credentials
-let testEmail = '';
-let testPassword = '';
+// Test credentials - loaded from environment variables or test-login.json
+// Priority: 1. Environment variables, 2. test-login.json file
+let testEmail = process.env.TEST_EMAIL || '';
+let testPassword = process.env.TEST_PASSWORD || '';
 
-try {
-  const loginFile = path.join(process.cwd(), 'test-login.json');
-  if (fs.existsSync(loginFile)) {
-    const creds = JSON.parse(fs.readFileSync(loginFile, 'utf8'));
-    testEmail = creds.email || '';
-    testPassword = creds.password || '';
+// Fall back to test-login.json if env vars not set
+if (!testEmail || !testPassword) {
+  try {
+    const loginFile = path.join(process.cwd(), 'test-login.json');
+    if (fs.existsSync(loginFile)) {
+      const creds = JSON.parse(fs.readFileSync(loginFile, 'utf8'));
+      testEmail = testEmail || creds.email || '';
+      testPassword = testPassword || creds.password || '';
+    }
+  } catch {
+    // No credentials available
   }
-} catch {
-  // No credentials available
 }
 
 // Helper to take timestamped screenshots
@@ -226,8 +230,9 @@ test.describe('Checkout Form', () => {
 
   test('should show Stripe elements if configured', async ({ page }) => {
     await page.goto('/checkout');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(2000);
+    // Use domcontentloaded instead of networkidle - Stripe elements continuously poll
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(3000); // Give Stripe time to load
 
     // Stripe elements load in iframes
     const stripeFrame = page.locator('iframe[name*="stripe"], iframe[src*="stripe"]');
