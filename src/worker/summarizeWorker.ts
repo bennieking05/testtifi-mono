@@ -1242,29 +1242,42 @@ function extractStartPage(pageRef: string): number {
  */
 function sortAndDeduplicateRows(markdown: string): string {
   const lines = markdown.split(/\r?\n/);
-  const rows: { pageRef: string; startPage: number; testimony: string; originalLine: string }[] = [];
+  const rows: { pageRef: string; startPage: number; topic: string; testimony: string; originalLine: string }[] = [];
   
   for (const line of lines) {
-    // Match table row format: | p.X-Y | Testimony... | or just p.X-Y | Testimony
-    const tableMatch = line.match(/^\s*\|?\s*(p\.[\d,\s\-p.]+)\s*\|\s*(.+?)\s*\|?\s*$/i);
+    // Match 3-column table row: | p.X-Y | Topic | Summary |
+    const threeColMatch = line.match(/^\s*\|?\s*(p\.[\d:,\s\-p.]+)\s*\|\s*([^|]+)\s*\|\s*(.+?)\s*\|?\s*$/i);
+    if (threeColMatch) {
+      const pageRef = threeColMatch[1].trim();
+      const topic = threeColMatch[2].trim();
+      const testimony = threeColMatch[3].trim();
+      const startPage = extractStartPage(pageRef);
+      if (startPage > 0) {
+        rows.push({ pageRef, startPage, topic, testimony, originalLine: line });
+      }
+      continue;
+    }
+    
+    // Match 2-column table row format: | p.X-Y | Testimony... |
+    const tableMatch = line.match(/^\s*\|?\s*(p\.[\d:,\s\-p.]+)\s*\|\s*(.+?)\s*\|?\s*$/i);
     if (tableMatch) {
       const pageRef = tableMatch[1].trim();
       const testimony = tableMatch[2].trim();
       const startPage = extractStartPage(pageRef);
       if (startPage > 0) {
-        rows.push({ pageRef, startPage, testimony, originalLine: line });
+        rows.push({ pageRef, startPage, topic: '', testimony, originalLine: line });
       }
       continue;
     }
     
     // Also match simpler format: p.X-Y  Testimony (tab or multiple spaces)
-    const simpleMatch = line.match(/^\s*(p\.[\d,\s\-p.]+)\s{2,}(.+)$/i);
+    const simpleMatch = line.match(/^\s*(p\.[\d:,\s\-p.]+)\s{2,}(.+)$/i);
     if (simpleMatch) {
       const pageRef = simpleMatch[1].trim();
       const testimony = simpleMatch[2].trim();
       const startPage = extractStartPage(pageRef);
       if (startPage > 0) {
-        rows.push({ pageRef, startPage, testimony, originalLine: line });
+        rows.push({ pageRef, startPage, topic: '', testimony, originalLine: line });
       }
     }
   }
@@ -1285,9 +1298,9 @@ function sortAndDeduplicateRows(markdown: string): string {
     }
   }
   
-  // Rebuild the markdown with sorted, deduplicated rows
+  // Rebuild the markdown with sorted, deduplicated rows (preserve 3-column format)
   const sortedRows = Array.from(seen.values()).sort((a, b) => a.startPage - b.startPage);
-  return sortedRows.map(r => `| ${r.pageRef} | ${r.testimony} |`).join("\n");
+  return sortedRows.map(r => `| ${r.pageRef} | ${r.topic} | ${r.testimony} |`).join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2116,6 +2129,10 @@ async function work() {
       }
 
       const merged = [metaMarkdown, "", rowsOnly].join("\n\n");
+      // #region agent log H7
+      const rowsPreview = rowsOnly.split('\n').slice(0, 5).join('\n');
+      console.log(`[DEBUG-H7] Final rowsOnly preview (first 5 lines):\n${rowsPreview}`);
+      // #endregion
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 
