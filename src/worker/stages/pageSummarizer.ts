@@ -102,6 +102,14 @@ export async function summarizePages(input: SummarizerInput): Promise<Summarizer
         );
 
         const rawContent = String(resp?.choices?.[0]?.message?.content || "").trim();
+        // #region agent log H2
+        if (i === 0) {
+          console.log('[DEBUG-H2] Raw LLM response (first batch), first 500 chars:', rawContent.substring(0, 500));
+          const pipeCount = (rawContent.match(/\|/g) || []).length;
+          const lineCount = rawContent.split('\n').filter(l => l.trim().startsWith('|')).length;
+          console.log('[DEBUG-H2] Pipe count:', pipeCount, 'Table rows:', lineCount, 'Pipes per row:', lineCount > 0 ? pipeCount / lineCount : 0);
+        }
+        // #endregion
         // Post-process to remove line numbers and clean up page references
         const content = cleanupPageReferences(rawContent);
         parts[i] = content;
@@ -403,6 +411,9 @@ function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
 function parseMarkdownRows(md: string): SummaryRow[] {
   const rows: SummaryRow[] = [];
   const lines = md.split(/\r?\n/);
+  // #region agent log H3
+  let columnCounts: Record<number, number> = {};
+  // #endregion
 
   for (const line of lines) {
     // Skip header/separator lines
@@ -417,6 +428,10 @@ function parseMarkdownRows(md: string): SummaryRow[] {
     if (parts.length < 2) continue;
     const pageLabel = parts[0];
     if (!/^(?:p(?:age)?\.?\s*)?\d{1,6}/i.test(pageLabel)) continue;
+
+    // #region agent log H3
+    columnCounts[parts.length] = (columnCounts[parts.length] || 0) + 1;
+    // #endregion
 
     // Handle different column formats:
     // 2 columns: | Page/Line | Summary |
@@ -445,6 +460,13 @@ function parseMarkdownRows(md: string): SummaryRow[] {
       }
     }
   }
+
+  // #region agent log H3
+  console.log('[DEBUG-H3] parseMarkdownRows column distribution:', JSON.stringify(columnCounts));
+  if (rows.length > 0) {
+    console.log('[DEBUG-H3] First parsed row:', JSON.stringify(rows[0]));
+  }
+  // #endregion
 
   return rows;
 }

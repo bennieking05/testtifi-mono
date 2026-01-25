@@ -57,13 +57,23 @@ function ensureDirExists(p: string) {
 }
 
 export function loadPromptConfig(): SummaryPromptConfig {
+  // #region agent log H1
+  console.log('[DEBUG-H1] loadPromptConfig called, CONFIG_PATH:', CONFIG_PATH);
+  // #endregion
   try {
     if (!fs.existsSync(CONFIG_PATH)) {
+      // #region agent log H1
+      console.log('[DEBUG-H1] Config file does not exist, using TypeScript default');
+      console.log('[DEBUG-H1] Default prompt starts with:', defaultConfig.system.substring(0, 100));
+      // #endregion
       ensureDirExists(CONFIG_PATH);
       fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaultConfig, null, 2));
       return defaultConfig;
     }
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+    // #region agent log H1
+    console.log('[DEBUG-H1] Loaded config from JSON file, first 100 chars:', raw.substring(0, 100));
+    // #endregion
     const parsed = JSON.parse(raw);
     return {
       system: typeof parsed.system === "string" ? parsed.system : defaultConfig.system,
