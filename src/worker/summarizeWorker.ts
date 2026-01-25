@@ -1300,7 +1300,11 @@ function sortAndDeduplicateRows(markdown: string): string {
   
   // Rebuild the markdown with sorted, deduplicated rows (preserve 3-column format)
   const sortedRows = Array.from(seen.values()).sort((a, b) => a.startPage - b.startPage);
-  return sortedRows.map(r => `| ${r.pageRef} | ${r.topic} | ${r.testimony} |`).join("\n");
+  const dataRows = sortedRows.map(r => `| ${r.pageRef} | ${r.topic} | ${r.testimony} |`).join("\n");
+  // Add header and separator for proper table rendering
+  const header = "| Page/Line | Topic | Summary |";
+  const separator = "|---|---|---|";
+  return [header, separator, dataRows].join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1606,8 +1610,21 @@ function assembleSortedSummary(
   const finalCoveredPages = Array.from(coveredPages).sort((a, b) => a - b);
   const stillMissing = expectedPages.filter(p => !coveredPages.has(p));
   
+  // Check if any entry has a witness to determine column format
+  const hasWitness = allFinalEntries.some(e => e.witness);
+  
+  // Add table header and separator for proper markdown rendering
+  const header = hasWitness 
+    ? "| Page/Line | Witness | Topic | Summary |"
+    : "| Page/Line | Topic | Summary |";
+  const separator = hasWitness 
+    ? "|---|---|---|---|"
+    : "|---|---|---|";
+  
+  const dataRows = outputRows.join("\n");
+  
   return {
-    markdown: outputRows.join("\n"),
+    markdown: [header, separator, dataRows].join("\n"),
     coveredPages: finalCoveredPages,
     missingPages: stillMissing, // Should be empty now
   };
