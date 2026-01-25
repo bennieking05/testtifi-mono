@@ -1338,6 +1338,8 @@ interface PageRangeEntry {
   startPage: number;
   endPage: number;
   lineNumbers: string; // e.g., ":1-25" or empty string
+  topic: string;       // Topic label (e.g., "Employment History")
+  witness?: string;    // Witness name (for multi-witness transcripts)
   summary: string;
 }
 
@@ -1368,31 +1370,46 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
       const lineStart = hasLineNumbers ? parseInt(pageMatch[3], 10) : 1;
       const lineEnd = hasLineNumbers ? parseInt(pageMatch[4], 10) : 25;
       
-      // Extract summary: everything after the page reference and a pipe/separator
+      // Parse table columns - split by pipe and extract topic/witness/summary
+      // Formats:
+      // 2 columns: | Page/Line | Summary |
+      // 3 columns: | Page/Line | Topic | Summary |
+      // 4 columns: | Page/Line | Witness | Topic | Summary |
+      const stripped = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+      const parts = stripped.split('|').map(p => p.trim());
+      
+      let topic = '';
+      let witness: string | undefined;
       let summary = '';
-      const pipeIdx = line.indexOf('|', line.indexOf('p.'));
-      if (pipeIdx !== -1) {
-        // Find the summary between pipes
-        const afterFirstPipe = line.substring(pipeIdx + 1);
-        const secondPipeIdx = afterFirstPipe.lastIndexOf('|');
-        if (secondPipeIdx > 0) {
-          summary = afterFirstPipe.substring(0, secondPipeIdx).trim();
-        } else {
-          summary = afterFirstPipe.trim();
-        }
+      
+      if (parts.length === 2) {
+        // 2 columns: Page | Summary
+        summary = parts[1];
+      } else if (parts.length === 3) {
+        // 3 columns: Page | Topic | Summary
+        topic = parts[1];
+        summary = parts[2];
+      } else if (parts.length >= 4) {
+        // 4 columns: Page | Witness | Topic | Summary
+        witness = parts[1];
+        topic = parts[2];
+        summary = parts.slice(3).join(' | ').trim();
       }
       
-      // Clean up summary - remove trailing pipe if present
-      summary = summary.replace(/\|\s*$/, '').trim();
+      // #region agent log H6
+      if (debug && entries.length === 0) {
+        console.log(`[DEBUG-H6] parseToRangeEntries first row: parts=${parts.length}, topic="${topic}", witness="${witness || 'N/A'}", summary="${summary.substring(0, 50)}..."`);
+      }
+      // #endregion
       
       if (startPage > 0 && summary.length > 10 && endPage >= startPage) {
         // Cap range at 10 pages to prevent runaway ranges
         const cappedEnd = Math.min(endPage, startPage + 10);
         const lineNumbers = hasLineNumbers ? `:${lineStart}-${lineEnd}` : '';
-        entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
+        entries.push({ startPage, endPage: cappedEnd, lineNumbers, topic, witness, summary });
         
         if (debug) {
-          console.log(`[parseToRangeEntries] Matched p.${startPage}-${cappedEnd}:${lineStart}-${lineEnd}`);
+          console.log(`[parseToRangeEntries] Matched p.${startPage}-${cappedEnd}:${lineStart}-${lineEnd} topic="${topic}"`);
         }
       }
     }
@@ -1509,6 +1526,7 @@ function assembleSortedSummary(
             startPage: rangeStart,
             endPage: groupEnd,
             lineNumbers: '',
+            topic: 'Procedural',
             summary: '[LLM did not summarize - page contained procedural matters, minimal content, or administrative notations]'
           });
           // Mark these as covered
@@ -1557,9 +1575,18 @@ function assembleSortedSummary(
     }
 
     const lineSuffix = lineNum ? lineNum : '';
-    return e.startPage === e.endPage
-      ? `| p.${e.startPage}${lineSuffix} | ${e.summary} |`
-      : `| p.${e.startPage}-${e.endPage}${lineSuffix} | ${e.summary} |`;
+    const pageRef = e.startPage === e.endPage
+      ? `p.${e.startPage}${lineSuffix}`
+      : `p.${e.startPage}-${e.endPage}${lineSuffix}`;
+    
+    // Build row with correct number of columns:
+    // - 4 columns if witness present: | Page | Witness | Topic | Summary |
+    // - 3 columns otherwise: | Page | Topic | Summary |
+    if (e.witness) {
+      return `| ${pageRef} | ${e.witness} | ${e.topic || ''} | ${e.summary} |`;
+    } else {
+      return `| ${pageRef} | ${e.topic || ''} | ${e.summary} |`;
+    }
   });
   
   // Now all pages should be covered
