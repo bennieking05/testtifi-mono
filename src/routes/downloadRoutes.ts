@@ -90,23 +90,25 @@ export function parseMarkdown(md: string) {
   const pageToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+(?:-\d+)?)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
 
   const meta: string[] = [];
-  const rows: string[][] = [];
+  const rows: Array<[string, string, string]> = []; // [pageRef, topic, summary]
   let seenRow = false;
 
   const splitMarkdownTableRow = (
     line: string
   ): { firstCell: string; restCells: string[] } | null => {
     // Accept common markdown table row shapes:
-    // - "| p.6:1-25, p.7:1-25 | testimony |"
-    // - "| p.6:1-25 | testimony | extra |"
+    // - "| p.6:1-25 | Topic | Summary |" (3 columns)
+    // - "| p.6:1-25 | testimony |" (2 columns - legacy)
     if (!line.includes("|")) return null;
     const stripped = line.replace(/^\|+/, "").replace(/\|+$/, "").trim();
     const parts = stripped.split("|").map((p) => clean(p));
     if (parts.length < 2) return null;
     const first = (parts[0] || "").trim();
     const rest = parts.slice(1).map((p) => String(p || "").trim());
+    // Skip header rows
     if (
-      /^page\s*\(s\)$/i.test(first) ||
+      /^page\s*[/(]?s?\)?$/i.test(first) ||
+      /^page\s*\/?\s*line$/i.test(first) ||
       (/^page\s*number$/i.test(first) && rest[0] && /^testimony$/i.test(rest[0]))
     ) {
       return null;
@@ -127,7 +129,7 @@ export function parseMarkdown(md: string) {
     const pipeRow = splitMarkdownTableRow(trimmed);
     if (pipeRow) {
       const labelCell = pipeRow.firstCell;
-      const testimonyCell = pipeRow.restCells.join(" | ").trim();
+      const restCells = pipeRow.restCells;
 
       // Extract one or more page tokens from the label cell
       const pages: string[] = [];
@@ -141,7 +143,16 @@ export function parseMarkdown(md: string) {
       }
       if (pages.length) {
         seenRow = true;
-        rows.push([pages.join(", "), testimonyCell || ""]);
+        // Handle 3 columns: Page | Topic | Summary
+        // Handle 2 columns: Page | Summary (legacy)
+        if (restCells.length >= 2) {
+          const topic = restCells[0] || "";
+          const summary = restCells.slice(1).join(" ").trim();
+          rows.push([pages.join(", "), topic, summary]);
+        } else {
+          // Legacy 2-column format
+          rows.push([pages.join(", "), "", restCells[0] || ""]);
+        }
         return;
       }
     }
@@ -160,21 +171,20 @@ export function parseMarkdown(md: string) {
     if (pages.length) {
       seenRow = true;
       rest = rest.replace(/^[−–:,|\s]+/, "").trim();
-      rows.push([pages.join(", "), rest || ""]);
+      rows.push([pages.join(", "), "", rest || ""]);
       return;
     }
 
     if (!seenRow) {
       // Skip obvious table header lines
+      if (/^page\s*[/(]?s?\)?\s*\|\s*topic\s*\|\s*summary/i.test(trimmed)) return;
       if (/^page\s*\(s\)\s*\|\s*testimony/i.test(trimmed)) return;
       if (/^page\s*number\s*\|\s*testimony/i.test(trimmed)) return;
       meta.push(trimmed);
     }
   });
 
-  const typedRows: Array<[string, string]> = rows.map(([a, b]) => [a, b]);
-
-  return { meta, rows: typedRows };
+  return { meta, rows };
 }
 
 function extractAllPages(label: string): number[] {
@@ -189,13 +199,13 @@ function extractAllPages(label: string): number[] {
 }
 
 function enforcePageBounds(
-  rows: Array<[string, string]>,
+  rows: Array<[string, string, string]>,
   opts: { maxPage?: number } = {}
-): Array<[string, string]> {
+): Array<[string, string, string]> {
   const maxPage = opts.maxPage && opts.maxPage > 0 ? opts.maxPage : null;
   if (!maxPage) return rows;
 
-  const kept: Array<[string, string]> = [];
+  const kept: Array<[string, string, string]> = [];
   let sawValidRow = false;
   let invalidStreak = 0;
   for (const row of rows) {
@@ -349,7 +359,11 @@ router.get(
         
         const body = [
           ...titlePage,
-          ...boundedRows.map(([p, s]) => `${p}\n${s}\n`),
+          ...boundedRows.map(([p, topic, summary]) => {
+            // Format: Page\nTopic | Summary (topic on same line as summary if present)
+            const content = topic ? `${topic} | ${summary}` : summary;
+            return `${p}\n${content}\n`;
+          }),
         ].join("\n");
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         setAttachmentFilename(res, uploadedTitle, "txt");
@@ -521,30 +535,40 @@ router.get(
                     new TableRow({
                       children: [
                         new TableCell({
-                          width: { size: 20, type: WidthType.PERCENTAGE },
+                          width: { size: 12, type: WidthType.PERCENTAGE },
                           children: [
-                            new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] }),
+                            new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] }),
                           ],
                         }),
                         new TableCell({
-                          width: { size: 80, type: WidthType.PERCENTAGE },
+                          width: { size: 18, type: WidthType.PERCENTAGE },
                           children: [
-                            new Paragraph({ children: [new TextRun({ text: "Testimony", bold: true })] }),
+                            new Paragraph({ children: [new TextRun({ text: "Topic", bold: true })] }),
+                          ],
+                        }),
+                        new TableCell({
+                          width: { size: 70, type: WidthType.PERCENTAGE },
+                          children: [
+                            new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] }),
                           ],
                         }),
                       ],
                     }),
                     ...boundedRows.map(
-                      ([p, s]) =>
+                      ([p, topic, summary]) =>
                         new TableRow({
                           children: [
                             new TableCell({
-                              width: { size: 20, type: WidthType.PERCENTAGE },
+                              width: { size: 12, type: WidthType.PERCENTAGE },
                               children: [new Paragraph(p)],
                             }),
                             new TableCell({
-                              width: { size: 80, type: WidthType.PERCENTAGE },
-                              children: [new Paragraph(s)],
+                              width: { size: 18, type: WidthType.PERCENTAGE },
+                              children: [new Paragraph(topic)],
+                            }),
+                            new TableCell({
+                              width: { size: 70, type: WidthType.PERCENTAGE },
+                              children: [new Paragraph(summary)],
                             }),
                           ],
                         })
@@ -587,10 +611,11 @@ router.get(
         const lm = pdf.page.margins.left;
         const rm = pdf.page.margins.right;
         const full = pdf.page.width - lm - rm;
-        // Use a clean grid with no gap for enclosed tabular style
+        // Use a clean grid with no gap for enclosed tabular style - 3 columns
         const gap = 0;
-        const pageCol = 100;
-        const sumCol = full - pageCol - gap;
+        const pageCol = 70;
+        const topicCol = 90;
+        const sumCol = full - pageCol - topicCol - gap;
 
         // Cover page centered both horizontally and vertically
         try {
@@ -703,26 +728,29 @@ router.get(
         details.forEach((l) => pdf.text(l));
         if (details.length) pdf.moveDown(0.5);
         
-        // Enclosed table with borders
+        // Enclosed table with borders - 3 columns
         const pad = 6;
         let y = pdf.y + 18; // add some space after cover
         const tableLeft = lm;
         const col1Left = tableLeft + pad;
         const col2Left = tableLeft + pageCol + gap + pad;
+        const col3Left = tableLeft + pageCol + topicCol + gap + pad;
 
         // Header
         pdf.font("Times-Bold").fontSize(12);
         const headerH = Math.max(
-          pdf.heightOfString("Page(s)", { width: pageCol - 2 * pad }),
-          pdf.heightOfString("Testimony", { width: sumCol - 2 * pad })
+          pdf.heightOfString("Page/Line", { width: pageCol - 2 * pad }),
+          pdf.heightOfString("Topic", { width: topicCol - 2 * pad }),
+          pdf.heightOfString("Summary", { width: sumCol - 2 * pad })
         ) + pad * 2;
         pdf.save();
         pdf.lineWidth(1).strokeColor('#9da9bb').fillColor('#eef2f7');
         pdf.rect(tableLeft, y, full, headerH).fillAndStroke('#eef2f7', '#9da9bb');
         pdf.restore();
         pdf.fillColor('#000');
-        pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
-        pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
+        pdf.text("Page/Line", col1Left, y + pad, { width: pageCol - 2 * pad });
+        pdf.text("Topic", col2Left, y + pad, { width: topicCol - 2 * pad });
+        pdf.text("Summary", col3Left, y + pad, { width: sumCol - 2 * pad });
         y += headerH;
         // Ensure body text starts with normal font/size
         pdf.font("Times-Roman").fontSize(11);
@@ -731,11 +759,12 @@ router.get(
         const pageHeight = pdf.page.height;
         const bottomMargin = 60; // Leave space at bottom
         
-        boundedRows.forEach(([p, s]) => {
+        boundedRows.forEach(([p, topic, summary]) => {
           pdf.font("Times-Roman").fontSize(11);
           const h1 = pdf.heightOfString(p, { width: pageCol - 2 * pad });
-          const h2 = pdf.heightOfString(s, { width: sumCol - 2 * pad });
-          const rowH = Math.max(h1, h2) + pad * 2;
+          const h2 = pdf.heightOfString(topic, { width: topicCol - 2 * pad });
+          const h3 = pdf.heightOfString(summary, { width: sumCol - 2 * pad });
+          const rowH = Math.max(h1, h2, h3) + pad * 2;
           
           // Check if row will overflow page
           if (y + rowH > pageHeight - bottomMargin) {
@@ -752,8 +781,9 @@ router.get(
             pdf.rect(tableLeft, y, full, headerH).fillAndStroke('#eef2f7', '#9da9bb');
             pdf.restore();
             pdf.fillColor('#000');
-            pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
-            pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
+            pdf.text("Page/Line", col1Left, y + pad, { width: pageCol - 2 * pad });
+            pdf.text("Topic", col2Left, y + pad, { width: topicCol - 2 * pad });
+            pdf.text("Summary", col3Left, y + pad, { width: sumCol - 2 * pad });
             y += headerH;
             // Reset font after drawing header so first row on new page is not bold
             pdf.font("Times-Roman").fontSize(11);
@@ -765,7 +795,8 @@ router.get(
           // Text
           pdf.fillColor('#000');
           pdf.text(p, col1Left, y + pad, { width: pageCol - 2 * pad });
-          pdf.text(s, col2Left, y + pad, { width: sumCol - 2 * pad });
+          pdf.text(topic, col2Left, y + pad, { width: topicCol - 2 * pad });
+          pdf.text(summary, col3Left, y + pad, { width: sumCol - 2 * pad });
           y += rowH;
         });
         // No final border needed - each row has its own border
@@ -773,13 +804,13 @@ router.get(
         return;
       }
 
-      // CSV — strict two-column table with header: Page(s),Testimony
+      // CSV — three-column table with header: Page/Line,Topic,Summary
       if (format === "csv") {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         setAttachmentFilename(res, uploadedTitle, "csv");
         const esc = (s: string) => '"' + s.replace(/"/g, '""') + '"';
-        const header = '"Page(s)","Testimony"';
-        const lines = boundedRows.map(([p, s]) => `${esc(p)},${esc(s)}`);
+        const header = '"Page/Line","Topic","Summary"';
+        const lines = boundedRows.map(([p, topic, summary]) => `${esc(p)},${esc(topic)},${esc(summary)}`);
         const csv = [header, ...lines].join("\n");
         
         // Track download - use job.fileId directly for reliability

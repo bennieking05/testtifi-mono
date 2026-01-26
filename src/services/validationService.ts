@@ -3,7 +3,7 @@ import path from "path";
 
 export interface BuildValidationOpts {
   generatedMeta: string[];
-  generatedRows: Array<[string, string]>;
+  generatedRows: Array<[string, string, string]>; // [page, topic, summary]
   referenceText?: string;
 }
 
@@ -39,8 +39,9 @@ export function buildValidationTable(opts: BuildValidationOpts): string {
     referenceText?.replace(/\s+/g, " ").trim().slice(0, 300) ||
     "Reference excerpt unavailable in v1.";
 
-  for (const [page, text] of generatedRows) {
-    const left = `**${page}** — ${text}`.replace(/\n/g, " ");
+  for (const [page, topic, summary] of generatedRows) {
+    const topicPrefix = topic ? `[${topic}] ` : "";
+    const left = `**${page}** — ${topicPrefix}${summary}`.replace(/\n/g, " ");
     lines.push(`| ${left} | ${refExcerpt} |`);
   }
 

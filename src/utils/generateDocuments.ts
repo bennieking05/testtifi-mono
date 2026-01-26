@@ -31,10 +31,10 @@ interface JobData {
 
 interface DocumentData {
   meta: string[];
-  rows: Array<[string, string]>;
+  rows: Array<[string, string, string]>; // [page, topic, summary]
 }
 
-function deriveMaxPageFromRows(rows: Array<[string, string]>): number {
+function deriveMaxPageFromRows(rows: Array<[string, string, string]>): number {
   let maxPage = 0;
   for (const [label] of rows) {
     const m = label.match(/(\d+)(?::\d+)?(?:\s*[-–]\s*(\d+)(?::\d+)?)?/);
@@ -208,30 +208,40 @@ export async function generateDocxBuffer(
               new TableRow({
                 children: [
                   new TableCell({
-                    width: { size: 20, type: WidthType.PERCENTAGE },
+                    width: { size: 12, type: WidthType.PERCENTAGE },
                     children: [
-                      new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] }),
+                      new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] }),
                     ],
                   }),
                   new TableCell({
-                    width: { size: 80, type: WidthType.PERCENTAGE },
+                    width: { size: 18, type: WidthType.PERCENTAGE },
                     children: [
-                      new Paragraph({ children: [new TextRun({ text: "Testimony", bold: true })] }),
+                      new Paragraph({ children: [new TextRun({ text: "Topic", bold: true })] }),
+                    ],
+                  }),
+                  new TableCell({
+                    width: { size: 70, type: WidthType.PERCENTAGE },
+                    children: [
+                      new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] }),
                     ],
                   }),
                 ],
               }),
               ...rows.map(
-                ([p, s]) =>
+                ([p, topic, summary]) =>
                   new TableRow({
                     children: [
                       new TableCell({
-                        width: { size: 20, type: WidthType.PERCENTAGE },
+                        width: { size: 12, type: WidthType.PERCENTAGE },
                         children: [new Paragraph(p)],
                       }),
                       new TableCell({
-                        width: { size: 80, type: WidthType.PERCENTAGE },
-                        children: [new Paragraph(s)],
+                        width: { size: 18, type: WidthType.PERCENTAGE },
+                        children: [new Paragraph(topic)],
+                      }),
+                      new TableCell({
+                        width: { size: 70, type: WidthType.PERCENTAGE },
+                        children: [new Paragraph(summary)],
                       }),
                     ],
                   })
@@ -278,8 +288,9 @@ export async function generatePdfBuffer(
     const rm = pdf.page.margins.right;
     const full = pdf.page.width - lm - rm;
     const gap = 0;
-    const pageCol = 100;
-    const sumCol = full - pageCol - gap;
+    const pageCol = 70;
+    const topicCol = 90;
+    const sumCol = full - pageCol - topicCol - gap;
 
     // Cover page
     try {
@@ -379,13 +390,15 @@ export async function generatePdfBuffer(
     const tableLeft = lm;
     const col1Left = tableLeft + pad;
     const col2Left = tableLeft + pageCol + gap + pad;
+    const col3Left = tableLeft + pageCol + topicCol + gap + pad;
 
     // Header
     pdf.font("Times-Bold").fontSize(12);
     const headerH =
       Math.max(
-        pdf.heightOfString("Page(s)", { width: pageCol - 2 * pad }),
-        pdf.heightOfString("Testimony", { width: sumCol - 2 * pad })
+        pdf.heightOfString("Page/Line", { width: pageCol - 2 * pad }),
+        pdf.heightOfString("Topic", { width: topicCol - 2 * pad }),
+        pdf.heightOfString("Summary", { width: sumCol - 2 * pad })
       ) +
       pad * 2;
     pdf.save();
@@ -393,19 +406,21 @@ export async function generatePdfBuffer(
     pdf.rect(tableLeft, y, full, headerH).fillAndStroke("#eef2f7", "#9da9bb");
     pdf.restore();
     pdf.fillColor("#000");
-    pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
-    pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
+    pdf.text("Page/Line", col1Left, y + pad, { width: pageCol - 2 * pad });
+    pdf.text("Topic", col2Left, y + pad, { width: topicCol - 2 * pad });
+    pdf.text("Summary", col3Left, y + pad, { width: sumCol - 2 * pad });
     y += headerH;
     pdf.font("Times-Roman").fontSize(11);
 
     const pageHeight = pdf.page.height;
     const bottomMargin = 60;
 
-    rows.forEach(([p, s]) => {
+    rows.forEach(([p, topic, summary]) => {
       pdf.font("Times-Roman").fontSize(11);
       const h1 = pdf.heightOfString(p, { width: pageCol - 2 * pad });
-      const h2 = pdf.heightOfString(s, { width: sumCol - 2 * pad });
-      const rowH = Math.max(h1, h2) + pad * 2;
+      const h2 = pdf.heightOfString(topic, { width: topicCol - 2 * pad });
+      const h3 = pdf.heightOfString(summary, { width: sumCol - 2 * pad });
+      const rowH = Math.max(h1, h2, h3) + pad * 2;
 
       if (y + rowH > pageHeight - bottomMargin) {
         pdf.addPage();
@@ -417,8 +432,9 @@ export async function generatePdfBuffer(
         pdf.rect(tableLeft, y, full, headerH).fillAndStroke("#eef2f7", "#9da9bb");
         pdf.restore();
         pdf.fillColor("#000");
-        pdf.text("Page(s)", col1Left, y + pad, { width: pageCol - 2 * pad });
-        pdf.text("Testimony", col2Left, y + pad, { width: sumCol - 2 * pad });
+        pdf.text("Page/Line", col1Left, y + pad, { width: pageCol - 2 * pad });
+        pdf.text("Topic", col2Left, y + pad, { width: topicCol - 2 * pad });
+        pdf.text("Summary", col3Left, y + pad, { width: sumCol - 2 * pad });
         y += headerH;
         pdf.font("Times-Roman").fontSize(11);
       }
@@ -427,7 +443,8 @@ export async function generatePdfBuffer(
       pdf.rect(tableLeft, y, full, rowH).stroke();
       pdf.fillColor("#000");
       pdf.text(p, col1Left, y + pad, { width: pageCol - 2 * pad });
-      pdf.text(s, col2Left, y + pad, { width: sumCol - 2 * pad });
+      pdf.text(topic, col2Left, y + pad, { width: topicCol - 2 * pad });
+      pdf.text(summary, col3Left, y + pad, { width: sumCol - 2 * pad });
       y += rowH;
     });
 

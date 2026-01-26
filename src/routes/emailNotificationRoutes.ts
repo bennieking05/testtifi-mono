@@ -47,12 +47,12 @@ function extractAllPages(label: string): number[] {
 }
 
 function enforcePageBounds(
-  rows: Array<[string, string]>,
+  rows: Array<[string, string, string]>,
   opts: { maxPage?: number } = {}
-): Array<[string, string]> {
+): Array<[string, string, string]> {
   const maxPage = opts.maxPage && opts.maxPage > 0 ? opts.maxPage : null;
   if (!maxPage) return rows;
-  const kept: Array<[string, string]> = [];
+  const kept: Array<[string, string, string]> = [];
   let sawValid = false;
   let invalidStreak = 0;
   for (const row of rows) {
