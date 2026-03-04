@@ -56,7 +56,8 @@ async function login(page: Page) {
   }
 
   await page.goto('/login');
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
   const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').first();
   const passwordInput = page.locator('input[type="password"]').first();
@@ -82,7 +83,8 @@ async function login(page: Page) {
 test.describe('Public Pages', () => {
   test('Login page loads', async ({ page }) => {
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await expect(page).toHaveURL(/\/login/);
     await snap(page, 'page-login');
@@ -90,7 +92,8 @@ test.describe('Public Pages', () => {
 
   test('Register page loads', async ({ page }) => {
     await page.goto('/register');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await expect(page).toHaveURL(/\/register/);
     await snap(page, 'page-register');
@@ -98,7 +101,8 @@ test.describe('Public Pages', () => {
 
   test('Forgot Password page loads', async ({ page }) => {
     await page.goto('/forgot-password');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await expect(page).toHaveURL(/\/forgot-password/);
     await snap(page, 'page-forgot-password');
@@ -106,7 +110,8 @@ test.describe('Public Pages', () => {
 
   test('Terms page loads', async ({ page }) => {
     await page.goto('/terms');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await expect(page).toHaveURL(/\/terms/);
     await snap(page, 'page-terms');
@@ -114,7 +119,8 @@ test.describe('Public Pages', () => {
 
   test('Privacy page loads', async ({ page }) => {
     await page.goto('/privacy');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await expect(page).toHaveURL(/\/privacy/);
     await snap(page, 'page-privacy');
@@ -150,7 +156,8 @@ test.describe('Protected Pages', () => {
 
   test('Dashboard page loads', async ({ page }) => {
     await page.goto('/dashboard');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     // Should not be redirected to login
     await page.waitForTimeout(1000);
@@ -161,7 +168,8 @@ test.describe('Protected Pages', () => {
 
   test('Summaries page loads', async ({ page }) => {
     await page.goto('/summaries');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -171,7 +179,8 @@ test.describe('Protected Pages', () => {
 
   test('Create Summary page loads', async ({ page }) => {
     await page.goto('/create-summary');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -181,7 +190,8 @@ test.describe('Protected Pages', () => {
 
   test('Payment page loads', async ({ page }) => {
     await page.goto('/payment');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -202,9 +212,10 @@ test.describe('Protected Pages', () => {
 
   test('Billing page loads', async ({ page }) => {
     await page.goto('/account/billing');
-    await page.waitForLoadState('networkidle');
+    // Use domcontentloaded - billing page may have continuous API polling
+    await page.waitForLoadState('domcontentloaded');
     
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
     expect(page.url()).not.toContain('/login');
     
     await snap(page, 'page-billing');
@@ -212,7 +223,8 @@ test.describe('Protected Pages', () => {
 
   test('Help page loads', async ({ page }) => {
     await page.goto('/help');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -222,7 +234,8 @@ test.describe('Protected Pages', () => {
 
   test('Help User Guide page loads', async ({ page }) => {
     await page.goto('/help/user-guide');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -232,7 +245,8 @@ test.describe('Protected Pages', () => {
 
   test('Help Keyboard Shortcuts page loads', async ({ page }) => {
     await page.goto('/help/keyboard-shortcuts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -242,7 +256,8 @@ test.describe('Protected Pages', () => {
 
   test('Support page loads', async ({ page }) => {
     await page.goto('/support');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -252,7 +267,8 @@ test.describe('Protected Pages', () => {
 
   test('Automation page loads', async ({ page }) => {
     await page.goto('/automation');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -262,7 +278,8 @@ test.describe('Protected Pages', () => {
 
   test('Case Preparation page loads', async ({ page }) => {
     await page.goto('/case-preparation');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -272,7 +289,8 @@ test.describe('Protected Pages', () => {
 
   test('AI Insights page loads', async ({ page }) => {
     await page.goto('/ai-insights');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -282,7 +300,8 @@ test.describe('Protected Pages', () => {
 
   test('Collaboration page loads', async ({ page }) => {
     await page.goto('/collaboration');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -292,7 +311,8 @@ test.describe('Protected Pages', () => {
 
   test('Security Commitment page loads', async ({ page }) => {
     await page.goto('/security-commitment');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     expect(page.url()).not.toContain('/login');
@@ -302,7 +322,8 @@ test.describe('Protected Pages', () => {
 
   test('Success page loads', async ({ page }) => {
     await page.goto('/success');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     // Success page might redirect if no success context
@@ -328,7 +349,8 @@ test.describe('Admin Pages', () => {
 
   test('Admin page loads (may require admin role)', async ({ page }) => {
     await page.goto('/admin');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     await snap(page, 'page-admin');
@@ -339,7 +361,8 @@ test.describe('Admin Pages', () => {
 
   test('Admin Fine-tune page loads (may require admin role)', async ({ page }) => {
     await page.goto('/admin/finetune');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     await snap(page, 'page-admin-finetune');
@@ -360,7 +383,8 @@ test.describe('Dynamic Pages', () => {
 
   test('Summary Detail page handles invalid ID', async ({ page }) => {
     await page.goto('/summaries/invalid-id-12345');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     await snap(page, 'page-summary-detail-invalid');
@@ -370,7 +394,8 @@ test.describe('Dynamic Pages', () => {
 
   test('Preview page handles invalid ID', async ({ page }) => {
     await page.goto('/preview/invalid-id-12345');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     await snap(page, 'page-preview-invalid');
@@ -378,7 +403,8 @@ test.describe('Dynamic Pages', () => {
 
   test('Download page handles invalid ID', async ({ page }) => {
     await page.goto('/download/invalid-id-12345');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     await snap(page, 'page-download-invalid');
@@ -386,7 +412,8 @@ test.describe('Dynamic Pages', () => {
 
   test('Reset Password page handles token', async ({ page }) => {
     await page.goto('/reset-password/test-token-12345');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await page.waitForTimeout(1000);
     await snap(page, 'page-reset-password-token');
@@ -407,7 +434,8 @@ test.describe('Navigation', () => {
 
   test('Sidebar navigation works', async ({ page }) => {
     await page.goto('/summaries');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     // Look for sidebar navigation
     const sidebar = page.locator('nav, aside, [role="navigation"], .sidebar');
@@ -421,7 +449,8 @@ test.describe('Navigation', () => {
       
       if (linkCount > 0) {
         await navLinks.first().click();
-        await page.waitForLoadState('networkidle');
+        await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
         await snap(page, 'nav-after-click');
       }
     }
@@ -429,14 +458,16 @@ test.describe('Navigation', () => {
 
   test('Header/logo navigation works', async ({ page }) => {
     await page.goto('/support');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     // Look for logo or home link
     const homeLink = page.locator('a[href="/"], header a, .logo');
     
     if (await homeLink.count() > 0) {
       await homeLink.first().click();
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
       await snap(page, 'nav-home-click');
     }
   });
@@ -450,7 +481,8 @@ test.describe('Responsive Design', () => {
   test('Login page mobile viewport', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await snap(page, 'responsive-login-mobile');
   });
@@ -458,7 +490,8 @@ test.describe('Responsive Design', () => {
   test('Login page tablet viewport', async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 1024 });
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await snap(page, 'responsive-login-tablet');
   });
@@ -471,7 +504,8 @@ test.describe('Responsive Design', () => {
     
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto('/dashboard');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     
     await snap(page, 'responsive-dashboard-mobile');
   });

@@ -55,24 +55,27 @@ async function expireLegacyCredits(
     if (available <= 0) continue;
 
     const idempotencyKey = `${LEDGER_EXPIRATION_PREFIX}legacy:${legacy.id}`;
-    const reclaimed = await prisma.$transaction(async (tx) => {
-      const existing = await tx.ledgerEntry.findUnique({
-        where: { idempotencyKey },
-      });
-      if (existing) return 0;
+    const reclaimed = await prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.ledgerEntry.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) return 0;
 
-      await tx.ledgerEntry.create({
-        data: {
-          userId: legacy.userId,
-          type: "credit",
-          credits: -available,
-          description: "Expired unused credits (legacy adjustment)",
-          idempotencyKey,
-        },
-      });
+        await tx.ledgerEntry.create({
+          data: {
+            userId: legacy.userId,
+            type: "credit",
+            credits: -available,
+            description: "Expired unused credits (legacy adjustment)",
+            idempotencyKey,
+          },
+        });
 
-      return available;
-    });
+        return available;
+      },
+      { timeout: 15000, maxWait: 10000 }
+    );
 
     if (reclaimed > 0) {
       creditsExpired += reclaimed;
@@ -116,44 +119,47 @@ export async function expireUnusedCredits(
     if (ledgerUnavailable) break;
 
     try {
-      const reclaimed = await prisma.$transaction(async (tx) => {
-        const idempotencyKey = `${LEDGER_EXPIRATION_PREFIX}${purchase.id}`;
-        const alreadyExpired = await tx.ledgerEntry.findUnique({
-          where: { idempotencyKey },
-        });
-        if (alreadyExpired) return 0;
+      const reclaimed = await prisma.$transaction(
+        async (tx) => {
+          const idempotencyKey = `${LEDGER_EXPIRATION_PREFIX}${purchase.id}`;
+          const alreadyExpired = await tx.ledgerEntry.findUnique({
+            where: { idempotencyKey },
+          });
+          if (alreadyExpired) return 0;
 
-        const creditedAgg = await tx.ledgerEntry.aggregate({
-          _sum: { credits: true },
-          where: { purchaseId: purchase.id, type: "credit" },
-        });
-        const credited = toNumber(creditedAgg._sum.credits);
-        if (credited <= 0) return 0;
+          const creditedAgg = await tx.ledgerEntry.aggregate({
+            _sum: { credits: true },
+            where: { purchaseId: purchase.id, type: "credit" },
+          });
+          const credited = toNumber(creditedAgg._sum.credits);
+          if (credited <= 0) return 0;
 
-        const usedAgg = await tx.creditAllocation.aggregate({
-          _sum: { creditsUsed: true },
-          where: { purchaseId: purchase.id },
-        });
-        const used = toNumber(usedAgg._sum.creditsUsed);
+          const usedAgg = await tx.creditAllocation.aggregate({
+            _sum: { creditsUsed: true },
+            where: { purchaseId: purchase.id },
+          });
+          const used = toNumber(usedAgg._sum.creditsUsed);
 
-        const remaining = Math.max(credited - used, 0);
-        if (remaining <= 0) return 0;
+          const remaining = Math.max(credited - used, 0);
+          if (remaining <= 0) return 0;
 
-        await tx.ledgerEntry.create({
-          data: {
-            userId: purchase.userId,
-            type: "credit",
-            credits: -remaining,
-            description: `Expired unused credits from ${
-              purchase.stripePaymentIntentId ?? purchase.id
-            }`,
-            idempotencyKey,
-            purchaseId: purchase.id,
-          },
-        });
+          await tx.ledgerEntry.create({
+            data: {
+              userId: purchase.userId,
+              type: "credit",
+              credits: -remaining,
+              description: `Expired unused credits from ${
+                purchase.stripePaymentIntentId ?? purchase.id
+              }`,
+              idempotencyKey,
+              purchaseId: purchase.id,
+            },
+          });
 
-        return remaining;
-      });
+          return remaining;
+        },
+        { timeout: 15000, maxWait: 10000 }
+      );
 
       if (reclaimed > 0) {
         purchasesExpired += 1;

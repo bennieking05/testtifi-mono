@@ -22,7 +22,8 @@ import adminRoutes from "./routes/adminRoutes";
 import debugRoutes from "./routes/debugRoutes";
 import cleanupRoutes from "./routes/cleanupRoutes";
 import assetsRoutes from "./routes/assetsRoutes";
-import { startCreditExpirationJob } from "./jobs/creditExpirationJob";
+import { startCreditExpirationJob, stopCreditExpirationJob } from "./jobs/creditExpirationJob";
+import { prisma } from "./lib/prisma";
 
 dotenv.config();
 
@@ -57,15 +58,10 @@ app.post("/api/test", (req, res) => {
 // Emergency endpoint to reset stuck jobs (no auth required)
 app.post("/api/emergency/reset-stuck-jobs", async (_req, res) => {
   try {
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
-    
     const result = await prisma.summaryJob.updateMany({
       where: { status: 'processing' },
       data: { status: 'queued' }
     });
-    
-    await prisma.$disconnect();
     res.json({ message: `Reset ${result.count} stuck jobs to queued status` });
   } catch (error: any) {
     console.error("Emergency reset error:", error);
@@ -76,15 +72,10 @@ app.post("/api/emergency/reset-stuck-jobs", async (_req, res) => {
 // Emergency endpoint to check job status (no auth required)
 app.get("/api/emergency/job-status", async (_req, res) => {
   try {
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
-    
     const jobs = await prisma.summaryJob.findMany({
       where: { status: { in: ['queued', 'processing'] } },
       select: { id: true, status: true, fileName: true, createdAt: true, lastPageProcessed: true, totalPages: true }
     });
-    
-    await prisma.$disconnect();
     res.json({ jobs });
   } catch (error: any) {
     console.error("Job status error:", error);
@@ -134,6 +125,26 @@ app.use("/api/cleanup", cleanupRoutes);
 app.use("/api/assets", assetsRoutes);
 
 /* ─────────────── START SERVER ───────────────── */
-app.listen(PORT, "0.0.0.0", () =>
+const server = app.listen(PORT, "0.0.0.0", () =>
   console.log(`✔️  Backend listening on port ${PORT}`)
 );
+
+function shutdown(): void {
+  console.log("Shutting down gracefully...");
+  stopCreditExpirationJob()
+    .then(() => prisma.$disconnect())
+    .then(() => {
+      server.close(() => {
+        console.log("Server closed");
+        process.exit(0);
+      });
+      setTimeout(() => process.exit(1), 10000);
+    })
+    .catch((err) => {
+      console.error("Shutdown error:", err);
+      process.exit(1);
+    });
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

@@ -1,23 +1,33 @@
-import { PrismaClient } from "@prisma/client";
 import { expireUnusedCredits } from "../billing/creditExpiration";
+import { prisma } from "../lib/prisma";
 
-const prisma = new PrismaClient();
 const DEFAULT_INTERVAL_MS = Number(
   process.env.CREDIT_EXPIRATION_INTERVAL_MS ?? 60 * 60 * 1000
 );
+const RETRY_DELAY_MS = 2000;
 
 let timer: NodeJS.Timeout | null = null;
 
 async function runExpirationOnce(): Promise<void> {
-  try {
+  const run = async (): Promise<void> => {
     const summary = await expireUnusedCredits(prisma);
     if (summary.creditsExpired > 0) {
       console.log(
         `[credit-expiration] Expired ${summary.creditsExpired} credits from ${summary.purchasesExpired} purchase(s)`
       );
     }
+  };
+
+  try {
+    await run();
   } catch (error) {
-    console.error("[credit-expiration] Failed to expire credits:", error);
+    console.error("[credit-expiration] Failed to expire credits (will retry once):", error);
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    try {
+      await run();
+    } catch (retryError) {
+      console.error("[credit-expiration] Retry failed:", retryError);
+    }
   }
 }
 
@@ -43,7 +53,6 @@ export async function stopCreditExpirationJob(): Promise<void> {
     clearInterval(timer);
     timer = null;
   }
-  await prisma.$disconnect().catch(() => {});
 }
 
 

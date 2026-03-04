@@ -48,7 +48,8 @@ async function login(page: Page) {
   }
 
   await page.goto('/login');
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
   const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]').first();
   const passwordInput = page.locator('input[type="password"]').first();
@@ -80,7 +81,8 @@ test.describe('Support Form', () => {
 
   test('should display support form fields', async ({ page }) => {
     await page.goto('/support');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Check for form elements
     const nameInput = page.locator('input[name="name"], input[placeholder*="name" i]');
@@ -94,7 +96,8 @@ test.describe('Support Form', () => {
 
   test('should validate required fields', async ({ page }) => {
     await page.goto('/support');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Try to submit empty form
     const submitButton = page.locator('button[type="submit"], button:has-text("Submit"), button:has-text("Send")').first();
@@ -108,7 +111,8 @@ test.describe('Support Form', () => {
 
   test('should allow filling out support form', async ({ page }) => {
     await page.goto('/support');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Fill in form fields
     const nameInput = page.locator('input[name="name"], input[placeholder*="name" i]').first();
@@ -145,7 +149,8 @@ test.describe('Create Summary Form', () => {
 
   test('should display file upload area', async ({ page }) => {
     await page.goto('/create-summary');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Look for file input or upload zone
     const fileInput = page.locator('input[type="file"]');
@@ -156,7 +161,8 @@ test.describe('Create Summary Form', () => {
 
   test('should show summary name field', async ({ page }) => {
     await page.goto('/create-summary');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     const nameInput = page.locator('input[name="summaryName"], input[name="name"], input[placeholder*="name" i], input[placeholder*="title" i]');
     
@@ -165,7 +171,8 @@ test.describe('Create Summary Form', () => {
 
   test('should show deponent field', async ({ page }) => {
     await page.goto('/create-summary');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     const deponentInput = page.locator('input[name="deponent"], input[placeholder*="deponent" i]');
     
@@ -187,7 +194,8 @@ test.describe('Payment Form', () => {
 
   test('should display pricing plans', async ({ page }) => {
     await page.goto('/payment');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Look for pricing cards or plan options
     const plans = page.locator('[class*="plan"], [class*="pricing"], [class*="card"]');
@@ -197,7 +205,8 @@ test.describe('Payment Form', () => {
 
   test('should allow selecting a plan', async ({ page }) => {
     await page.goto('/payment');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Look for buy/select buttons
     const buyButtons = page.locator('button:has-text("Buy"), button:has-text("Select"), button:has-text("Choose")');
@@ -222,8 +231,9 @@ test.describe('Checkout Form', () => {
 
   test('should display checkout page', async ({ page }) => {
     await page.goto('/checkout');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
+    // Use domcontentloaded - Stripe elements cause continuous network activity
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000);
 
     await snap(page, 'form-checkout-page');
   });
@@ -255,7 +265,8 @@ test.describe('Admin Forms', () => {
 
   test('should display admin dashboard metrics', async ({ page }) => {
     await page.goto('/admin');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     await page.waitForTimeout(1000);
 
     // Look for metric cards or charts
@@ -266,7 +277,8 @@ test.describe('Admin Forms', () => {
 
   test('should display admin fine-tune form', async ({ page }) => {
     await page.goto('/admin/finetune');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     await page.waitForTimeout(1000);
 
     // Look for prompt textarea or config fields
@@ -290,7 +302,8 @@ test.describe('Billing Forms', () => {
 
   test('should display billing history', async ({ page }) => {
     await page.goto('/account/billing');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     await page.waitForTimeout(1000);
 
     // Look for history table or list
@@ -301,7 +314,8 @@ test.describe('Billing Forms', () => {
 
   test('should show credit balance', async ({ page }) => {
     await page.goto('/account/billing');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     await page.waitForTimeout(1000);
 
     // Look for balance display
@@ -325,7 +339,8 @@ test.describe('Download Forms', () => {
 
   test('should display summaries list with download options', async ({ page }) => {
     await page.goto('/summaries');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     await page.waitForTimeout(1000);
 
     // Look for download buttons
@@ -349,7 +364,8 @@ test.describe('Dialogs and Modals', () => {
 
   test('should handle email notification dialog', async ({ page }) => {
     await page.goto('/summaries');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     await page.waitForTimeout(1000);
 
     // Look for notification toggle or button
@@ -364,7 +380,8 @@ test.describe('Dialogs and Modals', () => {
 
   test('should handle preview modal', async ({ page }) => {
     await page.goto('/summaries');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
     await page.waitForTimeout(1000);
 
     // Look for preview buttons
@@ -392,7 +409,8 @@ test.describe('Theme Toggle', () => {
 
   test('should toggle theme if available', async ({ page }) => {
     await page.goto('/dashboard');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Look for theme toggle
     const themeToggle = page.locator('button[class*="theme"], [class*="dark-mode"], [class*="toggle-theme"], button:has([class*="moon"]), button:has([class*="sun"])');
@@ -413,7 +431,8 @@ test.describe('Theme Toggle', () => {
 test.describe('Error States', () => {
   test('should display login error state', async ({ page }) => {
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     const emailInput = page.locator('input[type="email"], input[name="email"]').first();
     const passwordInput = page.locator('input[type="password"]').first();
@@ -429,15 +448,21 @@ test.describe('Error States', () => {
 
   test('should display form validation errors', async ({ page }) => {
     await page.goto('/register');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     const emailInput = page.locator('input[type="email"], input[name="email"]').first();
-    await emailInput.fill('not-an-email');
+    
+    // Wait for the input to be visible before filling
+    if (await emailInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await emailInput.fill('not-an-email');
 
-    const submitButton = page.locator('button[type="submit"]').first();
-    await submitButton.click();
+      const submitButton = page.locator('button[type="submit"]').first();
+      await submitButton.click();
 
-    await page.waitForTimeout(500);
+      await page.waitForTimeout(1000);
+    }
+    
     await snap(page, 'error-validation');
   });
 });

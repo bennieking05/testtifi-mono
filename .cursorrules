@@ -76,6 +76,32 @@ test-results/                 # Test output (gitignored)
 - Frontend pages: `loveable/src/pages/`
 - Frontend components: `loveable/src/components/`
 - Prisma schema: `prisma/schema.prisma`
-- API base URL (local): http://localhost:4000
-- Frontend URL (local): http://localhost:5173
+
+## Environment URLs
+
+### Local Development
+- API base URL: http://localhost:4000
+- Frontend URL: http://localhost:5173
+
+### Staging Environment
+- Frontend URL: https://staging.app.testifi.ai
+- Backend API URL: https://testifi-backend-staging-748916208557.us-central1.run.app
+- GCP Project: golden-cosmos-450417-i8
+- Cloud Run Service (Frontend): testifi-frontend-staging
+- Cloud Run Service (Backend): testifi-backend-staging
+
+### Production Environment
+- Frontend URL: https://app.testifi.ai
+- Backend API URL: https://testifi-backend-748916208557.us-central1.run.app
+- GCP Project: golden-cosmos-450417-i8
+- Cloud Run Service (Frontend): testifi-frontend
+- Cloud Run Service (Backend): testifi-backend
+
+## Regression Testing Commands
+
+After any code change, run regression tests:
+```bash
+npm run test:regression:staging   # Test against staging
+npm run test:regression:prod      # Test against production
+```
 

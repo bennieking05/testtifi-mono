@@ -189,7 +189,8 @@ test.describe('Register Page', () => {
 test.describe('Forgot Password Page', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/forgot-password');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
   });
 
   test('should display forgot password form', async ({ page }) => {
@@ -251,7 +252,8 @@ test.describe('Reset Password Page', () => {
   test('should display password reset form with valid-looking token', async ({ page }) => {
     // Use a UUID-like token format
     await page.goto('/reset-password/12345678-1234-1234-1234-123456789abc');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     await snap(page, 'reset-password-form');
 
@@ -289,7 +291,8 @@ test.describe('Authentication Flow', () => {
 
     // Try to access protected route
     await page.goto('/dashboard');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Should be redirected to login
     await page.waitForURL(/\/(login|$)/, { timeout: 5000 });
@@ -300,7 +303,8 @@ test.describe('Authentication Flow', () => {
     await clearAuthState(page);
 
     await page.goto('/summaries');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     await page.waitForURL(/\/(login|$)/, { timeout: 5000 });
     await snap(page, 'auth-redirect-summaries');
@@ -310,7 +314,8 @@ test.describe('Authentication Flow', () => {
     await clearAuthState(page);
 
     await page.goto('/payment');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     await page.waitForURL(/\/(login|$)/, { timeout: 5000 });
     await snap(page, 'auth-redirect-payment');
@@ -324,7 +329,8 @@ test.describe('Authentication Flow', () => {
 test.describe('Public Legal Pages', () => {
   test('should display terms page', async ({ page }) => {
     await page.goto('/terms');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     // Should have some content
     const content = page.locator('main, article, .content, body');
@@ -335,7 +341,8 @@ test.describe('Public Legal Pages', () => {
 
   test('should display privacy page', async ({ page }) => {
     await page.goto('/privacy');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(1000);
 
     const content = page.locator('main, article, .content, body');
     await expect(content.first()).toBeVisible();

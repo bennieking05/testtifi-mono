@@ -27,6 +27,13 @@ const TARGET = (process.argv[2] || 'local').toLowerCase();
 const RESULTS_DIR = path.join(ROOT, 'test-results');
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
+// Backend URLs for API tests (must match scripts/api-regression.mjs)
+const BACKEND_URLS = {
+  local: 'http://localhost:4000',
+  staging: 'https://testifi-backend-staging-748916208557.us-central1.run.app',
+  prod: 'https://testifi-backend-748916208557.us-central1.run.app',
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +165,7 @@ async function main() {
   console.log('\n' + '═'.repeat(68));
   console.log('  PHASE 1: API Endpoint Tests');
   console.log('═'.repeat(68));
+  console.log(`\n🔗 Backend URL: ${BACKEND_URLS[TARGET] || BACKEND_URLS.local}`);
   
   try {
     apiExitCode = await runCommand('node', ['scripts/api-regression.mjs', TARGET]);
@@ -181,13 +189,15 @@ async function main() {
   console.log('  PHASE 2: Frontend E2E Tests');
   console.log('═'.repeat(68));
   
-  // Determine the base URL for frontend tests
-  const baseUrls = {
+  // Frontend URLs for Playwright tests
+  const FRONTEND_URLS = {
     local: 'http://localhost:5173',
     staging: 'https://staging.app.testifi.ai',
     prod: 'https://app.testifi.ai',
   };
-  const baseUrl = baseUrls[TARGET] || baseUrls.local;
+  const frontendBaseUrl = FRONTEND_URLS[TARGET] || FRONTEND_URLS.local;
+  
+  console.log(`\n🌐 Frontend Base URL: ${frontendBaseUrl}`);
   
   try {
     // Run Playwright tests with JSON reporter to capture results
@@ -199,13 +209,10 @@ async function main() {
       `--output=${path.join(RESULTS_DIR, 'playwright-results')}`,
     ];
     
-    // Set base URL for Playwright
-    process.env.BASE_URL = baseUrl;
-    
     frontendExitCode = await runCommand('npx', playwrightArgs, {
       env: {
         ...process.env,
-        PLAYWRIGHT_BASE_URL: baseUrl,
+        BASE_URL: frontendBaseUrl,  // Used by playwright.config.ts
       },
     });
     

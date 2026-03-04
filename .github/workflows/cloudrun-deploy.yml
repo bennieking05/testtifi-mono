@@ -1,0 +1,185 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: ["main", "staging"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  PROJECT_ID: golden-cosmos-450417-i8
+  REGION: us-central1
+  SERVICE_ACCOUNT: testifi-cloudrun@golden-cosmos-450417-i8.iam.gserviceaccount.com
+
+jobs:
+  build-and-deploy-backend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set environment variables
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ] || [ "${{ github.event.inputs.environment }}" = "production" ]; then
+            echo "ENV_NAME=production" >> $GITHUB_ENV
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+            echo "SERVICE_NAME=testifi-backend" >> $GITHUB_ENV
+            echo "BASE_URL=https://app.testifi.ai" >> $GITHUB_ENV
+            echo "AZURE_MODEL=gpt-5-testifi" >> $GITHUB_ENV
+            echo "SECRETS_PREFIX=backend-secrets" >> $GITHUB_ENV
+          else
+            echo "ENV_NAME=staging" >> $GITHUB_ENV
+            echo "IMAGE_TAG=staging" >> $GITHUB_ENV
+            echo "SERVICE_NAME=testifi-backend-staging" >> $GITHUB_ENV
+            echo "BASE_URL=https://staging.app.testifi.ai" >> $GITHUB_ENV
+            echo "AZURE_MODEL=gpt-4o" >> $GITHUB_ENV
+            echo "SECRETS_PREFIX=backend-secrets-staging" >> $GITHUB_ENV
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io --quiet
+
+      - name: Build and push backend image
+        run: |
+          docker build \
+            -t gcr.io/${{ env.PROJECT_ID }}/testifi-backend:${{ env.IMAGE_TAG }} \
+            -t gcr.io/${{ env.PROJECT_ID }}/testifi-backend:${{ github.sha }} \
+            --target backend \
+            ./backend
+          docker push gcr.io/${{ env.PROJECT_ID }}/testifi-backend:${{ env.IMAGE_TAG }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/testifi-backend:${{ github.sha }}
+
+      - name: Deploy backend to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image gcr.io/${{ env.PROJECT_ID }}/testifi-backend:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --add-cloudsql-instances ${{ env.PROJECT_ID }}:${{ env.REGION }}:testifi \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 3 \
+            --memory 512Mi \
+            --cpu 1 \
+            --timeout 300 \
+            --port 4000 \
+            --set-env-vars "NODE_ENV=${{ env.ENV_NAME }},BASE_URL=${{ env.BASE_URL }},BACKEND_URL=${{ env.BASE_URL }},AZURE_OPENAI_DEPLOYMENT_NAME=${{ env.AZURE_MODEL }},AZURE_API_VERSION=2025-01-01-preview" \
+            --set-secrets "DATABASE_URL=${{ env.SECRETS_PREFIX }}-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=${{ env.SECRETS_PREFIX }}-SENDGRID_API_KEY:latest,JWT_SECRET=${{ env.SECRETS_PREFIX }}-JWT_SECRET:latest,STRIPE_API_KEY=${{ env.SECRETS_PREFIX }}-STRIPE_API_KEY:latest,STRIPE_WEBHOOK_SECRET=${{ env.SECRETS_PREFIX }}-STRIPE_WEBHOOK_SECRET:latest,AZURE_OPENAI_API_KEY=${{ env.SECRETS_PREFIX }}-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=${{ env.SECRETS_PREFIX }}-AZURE_OPENAI_ENDPOINT:latest"
+
+      - name: Verify backend deployment
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --format 'value(status.url)')
+          for i in {1..10}; do
+            if curl -sf "${SERVICE_URL}/health"; then
+              echo "✅ Backend health check passed"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ Backend health check failed"
+          exit 1
+
+  build-and-deploy-frontend:
+    runs-on: ubuntu-latest
+    needs: build-and-deploy-backend
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set environment variables
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ] || [ "${{ github.event.inputs.environment }}" = "production" ]; then
+            echo "ENV_NAME=production" >> $GITHUB_ENV
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+            echo "SERVICE_NAME=testifi-frontend" >> $GITHUB_ENV
+            echo "BACKEND_URL=https://testifi-backend-748916208557.us-central1.run.app" >> $GITHUB_ENV
+          else
+            echo "ENV_NAME=staging" >> $GITHUB_ENV
+            echo "IMAGE_TAG=staging" >> $GITHUB_ENV
+            echo "SERVICE_NAME=testifi-frontend-staging" >> $GITHUB_ENV
+            echo "BACKEND_URL=https://testifi-backend-staging-748916208557.us-central1.run.app" >> $GITHUB_ENV
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io --quiet
+
+      - name: Build and push frontend image
+        run: |
+          docker build \
+            -t gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ env.IMAGE_TAG }} \
+            -t gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ github.sha }} \
+            -f loveable/Dockerfile.cloudrun \
+            --build-arg VITE_API_URL=${{ env.BACKEND_URL }} \
+            ./loveable
+          docker push gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ env.IMAGE_TAG }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ github.sha }}
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 2 \
+            --memory 256Mi \
+            --cpu 1 \
+            --port 80
+
+      - name: Verify frontend deployment
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --format 'value(status.url)')
+          for i in {1..10}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Frontend health check passed"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ Frontend health check failed"
+          exit 1
+
+      - name: Print deployment URLs
+        run: |
+          BACKEND_URL=$(gcloud run services describe ${{ needs.build-and-deploy-backend.outputs.service_name || env.SERVICE_NAME }} --region ${{ env.REGION }} --format 'value(status.url)' 2>/dev/null || echo "N/A")
+          FRONTEND_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --format 'value(status.url)')
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Deployment Complete!"
+          echo "Environment: ${{ env.ENV_NAME }}"
+          echo "Frontend: ${FRONTEND_URL}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

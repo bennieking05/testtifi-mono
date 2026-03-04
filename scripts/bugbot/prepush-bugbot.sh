@@ -171,6 +171,15 @@ if [[ "$IMPACT_FRONTEND" == "true" || "$IMPACT_BACKEND" == "true" || "$IMPACT_E2
   if ! run_suite "regression" "$ROOT_DIR" "test:regression"; then FAILURES=$((FAILURES+1)); fi
 fi
 
+# Run evidence screenshots (captures desktop + mobile for core flows)
+if [[ "$IMPACT_FRONTEND" == "true" || "$IMPACT_E2E" == "true" ]]; then
+  log ""
+  log "==> Running evidence screenshots (desktop + mobile)"
+  export FEATURE_NAME="${FEATURE_NAME:-prepush}"
+  export EVIDENCE_TS="$TS"
+  if ! run_suite "evidence" "$ROOT_DIR" "test:evidence"; then FAILURES=$((FAILURES+1)); fi
+fi
+
 write_json
 write_report
 

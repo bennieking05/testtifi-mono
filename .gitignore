@@ -3,6 +3,7 @@ dist
 artifacts/
 playwright-report/
 test-results/
+tests/regression-screenshots/
 node_modules/
 *.log
 .DS_Store

@@ -2,7 +2,7 @@ import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import dotenv from "dotenv";
 
 dotenv.config();
-const senderEmail = process.env.EMAIL_USER!;
+const senderEmail = process.env.EMAIL_USER ?? "admin@testifi.ai";
 sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 
 const MAX_TOTAL_ATTACHMENT_BYTES = 24 * 1024 * 1024; // 24MB safe cap

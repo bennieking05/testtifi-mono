@@ -1,0 +1,56 @@
+# Cloud Run Job for the summarize worker
+# This runs as a scheduled job or can be triggered on-demand
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: testifi-summarize-worker
+  labels:
+    cloud.googleapis.com/location: us-central1
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/cloudsql-instances: golden-cosmos-450417-i8:us-central1:testifi
+    spec:
+      template:
+        spec:
+          serviceAccountName: testifi-cloudrun@golden-cosmos-450417-i8.iam.gserviceaccount.com
+          containers:
+            - image: gcr.io/golden-cosmos-450417-i8/summarize-worker:latest
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
+              env:
+                - name: NODE_ENV
+                  value: "production"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      key: DATABASE_URL_CLOUDRUN
+                      name: backend-secrets
+                - name: WORKER_CONCURRENCY
+                  value: "1"
+                - name: PAGE_RANGE_SIZE
+                  value: "5"
+                - name: AZURE_OPENAI_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      key: AZURE_OPENAI_API_KEY
+                      name: backend-secrets
+                - name: AZURE_OPENAI_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      key: AZURE_OPENAI_ENDPOINT
+                      name: backend-secrets
+                - name: AZURE_OPENAI_DEPLOYMENT_NAME
+                  value: "gpt-5-testifi"
+                - name: AZURE_API_VERSION
+                  value: "2025-01-01-preview"
+                - name: SENDGRID_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      key: SENDGRID_API_KEY
+                      name: backend-secrets
+          maxRetries: 3
+          timeoutSeconds: 3600

@@ -19,6 +19,8 @@
     "test:api:local": "node scripts/api-regression.mjs local",
     "test:api:staging": "node scripts/api-regression.mjs staging",
     "test:frontend": "npx playwright test tests/regression/",
+    "test:e2e": "npx playwright test",
+    "test:evidence": "npx playwright test tests/evidence/",
     "watch:summary": "npx ts-node scripts/watch-local-summary.ts",
     "watch:summary:once": "npx ts-node scripts/watch-local-summary.ts --once"
   },

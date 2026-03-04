@@ -1,0 +1,84 @@
+# Post-Fix Regression Testing Rule
+
+## Overview
+After making any code changes to the TestifiAI codebase, you MUST run regression tests before considering the task complete.
+
+## Trigger Conditions
+This rule applies when you modify files in:
+- `backend/src/**` (Backend code)
+- `loveable/src/**` (Frontend code)
+- `prisma/schema.prisma` (Database schema)
+- `scripts/**` (Build or test scripts)
+
+## Environment URLs
+
+### Staging Environment
+- **Frontend**: https://staging.app.testifi.ai
+- **Backend API**: https://testifi-backend-staging-748916208557.us-central1.run.app
+
+### Production Environment
+- **Frontend**: https://app.testifi.ai
+- **Backend API**: https://testifi-backend-748916208557.us-central1.run.app
+
+## Required Steps After Code Changes
+
+### 1. Deploy the Changes
+If backend code was modified:
+```bash
+# Build and deploy backend to staging
+gcloud builds submit --config=backend/backend-build-cloudrun.yaml --project=golden-cosmos-450417-i8
+gcloud run deploy testifi-backend-staging --image=us-central1-docker.pkg.dev/golden-cosmos-450417-i8/testifi-repo/testifi-backend:latest --region=us-central1 --project=golden-cosmos-450417-i8
+```
+
+If frontend code was modified:
+```bash
+# Build and deploy frontend to staging
+gcloud builds submit --config=loveable/frontend-cloudbuild-cloudrun.yaml --project=golden-cosmos-450417-i8 --substitutions=_VITE_API_URL=https://testifi-backend-staging-748916208557.us-central1.run.app,_VITE_STRIPE_PUBLISHABLE_KEY=pk_test_XXXXX
+gcloud run deploy testifi-frontend-staging --image=us-central1-docker.pkg.dev/golden-cosmos-450417-i8/testifi-repo/testifi-frontend:latest --region=us-central1 --project=golden-cosmos-450417-i8
+```
+
+### 2. Run Regression Tests on Staging
+```bash
+npm run test:regression:staging
+```
+
+### 3. Review Results
+Check the test results in `test-results/` directory:
+- `api-results-*.csv` - API endpoint test results
+- `regression-summary-*.csv` - Overall summary
+- `playwright-results/` - Frontend E2E test results
+
+### 4. If Tests Pass
+- Consider the fix verified on staging
+- Proceed with production deployment if approved
+- Run `npm run test:regression:prod` after production deployment
+
+### 5. If Tests Fail
+- Analyze the failures
+- Fix any regressions introduced by your changes
+- Re-run the test suite until passing
+
+## Test Commands Reference
+
+| Command | Description |
+|---------|-------------|
+| `npm run test:regression` | Run full suite against local |
+| `npm run test:regression:staging` | Run full suite against staging |
+| `npm run test:regression:prod` | Run full suite against production |
+| `npm run test:api:staging` | Run only API tests against staging |
+| `npm run test:frontend` | Run only Playwright frontend tests |
+
+## Expected Pass Rates
+- API Tests: >= 90% pass rate expected
+- Frontend E2E Tests: >= 95% pass rate expected
+
+## Test Credentials
+- E2E test user: `testifi.e2e.test@gmail.com` / `TestifiE2E2026!`
+- Admin credentials: See `test-admin-login.json`
+
+## Do NOT Skip This Step
+Regression testing is mandatory. Do not mark a task as complete until:
+1. Code changes are deployed to staging
+2. Regression tests have been run
+3. Results have been reviewed
+4. Any failures have been addressed

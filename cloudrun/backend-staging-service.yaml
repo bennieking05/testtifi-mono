@@ -1,0 +1,83 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: testifi-backend-staging
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    metadata:
+      annotations:
+        # Cloud SQL connection
+        run.googleapis.com/cloudsql-instances: golden-cosmos-450417-i8:us-central1:testifi
+        # Auto-scaling configuration - staging uses minimal resources
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "2"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      serviceAccountName: testifi-cloudrun@golden-cosmos-450417-i8.iam.gserviceaccount.com
+      containers:
+        - image: gcr.io/golden-cosmos-450417-i8/testifi-backend:staging
+          ports:
+            - containerPort: 4000
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            - name: NODE_ENV
+              value: "staging"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  key: DATABASE_URL_CLOUDRUN
+                  name: backend-secrets-staging
+            - name: SENDGRID_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: SENDGRID_API_KEY
+                  name: backend-secrets-staging
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  key: JWT_SECRET
+                  name: backend-secrets-staging
+            - name: BASE_URL
+              value: "https://staging.app.testifi.ai"
+            - name: BACKEND_URL
+              value: "https://staging.app.testifi.ai"
+            - name: STRIPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: STRIPE_API_KEY
+                  name: backend-secrets-staging
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  key: STRIPE_WEBHOOK_SECRET
+                  name: backend-secrets-staging
+            - name: AZURE_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: AZURE_OPENAI_API_KEY
+                  name: backend-secrets-staging
+            - name: AZURE_OPENAI_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  key: AZURE_OPENAI_ENDPOINT
+                  name: backend-secrets-staging
+            - name: AZURE_OPENAI_DEPLOYMENT_NAME
+              value: "gpt-4o"
+            - name: AZURE_API_VERSION
+              value: "2025-01-01-preview"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10

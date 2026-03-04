@@ -35,9 +35,9 @@ steps:
   - name: "gcr.io/cloud-builders/docker"
     args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"]
 
-  # ===== Deploy to GKE (pin to this build's tag) =====
-  - id: "Deploy to GKE (pin and rollouts)"
-    name: "gcr.io/cloud-builders/gke-deploy"
+  # ===== Deploy Backend to Cloud Run =====
+  - id: "Deploy Backend to Cloud Run"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
     env:
       - TARGET_BRANCH=$BRANCH_NAME
@@ -45,56 +45,116 @@ steps:
       - "-c"
       - |
         set -euo pipefail
-        echo "Getting GKE credentials for ${_CLUSTER} in ${_CLUSTER_LOCATION}..."
-        gcloud container clusters get-credentials "${_CLUSTER}" --zone "${_CLUSTER_LOCATION}"
-
-        # NOTE: Cloud Build substitutions must be referenced as ${_NAMESPACE} (no bash default syntax),
-        # otherwise Cloud Build rejects the build as having "unused substitutions".
-        TARGET_NAMESPACE="${_NAMESPACE}"
-        if [[ "${TARGET_BRANCH:-}" == "staging" ]]; then
-          TARGET_NAMESPACE="staging"
-        fi
-        echo "Deploying to namespace: $${TARGET_NAMESPACE}"
-
-        # ===== IMPORTANT: Ensure no stale workers in OTHER namespaces =====
-        # Scale down workers in namespaces we're NOT deploying to, to prevent race conditions
-        if [[ "$${TARGET_NAMESPACE}" == "staging" ]]; then
-          echo "Ensuring no stale workers in 'default' namespace..."
-          kubectl -n default scale deployment/summarize-worker --replicas=0 2>/dev/null || true
-          kubectl -n default scale deployment/backend --replicas=0 2>/dev/null || true
-        fi
-
-        echo "Updating backend image to $BUILD_ID..."
-        kubectl -n "$${TARGET_NAMESPACE}" set image deployment/backend backend=gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID
-        kubectl -n "$${TARGET_NAMESPACE}" rollout status deployment/backend --timeout=300s
-
-        echo "Rolling summarize-worker with scale-to-zero to avoid CPU surge..."
-        WORKER_DEPLOYMENT=""
-        if kubectl -n "$${TARGET_NAMESPACE}" get deployment summarize-worker >/dev/null 2>&1; then
-          WORKER_DEPLOYMENT="summarize-worker"
-        elif kubectl -n "$${TARGET_NAMESPACE}" get deployment summarize-worker-staging >/dev/null 2>&1; then
-          WORKER_DEPLOYMENT="summarize-worker-staging"
+        
+        # Determine environment based on branch
+        if [[ "${TARGET_BRANCH:-main}" == "staging" ]]; then
+          SERVICE_NAME="testifi-backend-staging"
+          ENV_NAME="staging"
+          BASE_URL="https://staging.app.testifi.ai"
+          AZURE_MODEL="gpt-4o"
+          SECRETS_PREFIX="backend-secrets-staging"
         else
-          echo "ERROR: No summarize-worker deployment found in namespace $${TARGET_NAMESPACE}" >&2
-          kubectl -n "$${TARGET_NAMESPACE}" get deployments >&2 || true
-          exit 1
+          SERVICE_NAME="testifi-backend"
+          ENV_NAME="production"
+          BASE_URL="https://app.testifi.ai"
+          AZURE_MODEL="gpt-5-testifi"
+          SECRETS_PREFIX="backend-secrets"
         fi
+        
+        echo "Deploying $${SERVICE_NAME} to Cloud Run..."
+        
+        gcloud run deploy $${SERVICE_NAME} \
+          --image gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID \
+          --region us-central1 \
+          --platform managed \
+          --add-cloudsql-instances golden-cosmos-450417-i8:us-central1:testifi \
+          --service-account testifi-cloudrun@golden-cosmos-450417-i8.iam.gserviceaccount.com \
+          --allow-unauthenticated \
+          --min-instances 0 \
+          --max-instances 3 \
+          --memory 512Mi \
+          --cpu 1 \
+          --timeout 300 \
+          --port 4000 \
+          --set-env-vars "NODE_ENV=$${ENV_NAME},BASE_URL=$${BASE_URL},BACKEND_URL=$${BASE_URL},AZURE_OPENAI_DEPLOYMENT_NAME=$${AZURE_MODEL},AZURE_API_VERSION=2025-01-01-preview,EMAIL_USER=admin@testifi.ai" \
+          --set-secrets "DATABASE_URL=$${SECRETS_PREFIX}-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=$${SECRETS_PREFIX}-SENDGRID_API_KEY:latest,JWT_SECRET=$${SECRETS_PREFIX}-JWT_SECRET:latest,STRIPE_API_KEY=$${SECRETS_PREFIX}-STRIPE_API_KEY:latest,STRIPE_WEBHOOK_SECRET=$${SECRETS_PREFIX}-STRIPE_WEBHOOK_SECRET:latest,AZURE_OPENAI_API_KEY=$${SECRETS_PREFIX}-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=$${SECRETS_PREFIX}-AZURE_OPENAI_ENDPOINT:latest"
+        
+        echo "✅ Backend deployed successfully"
 
-        kubectl -n "$${TARGET_NAMESPACE}" scale deployment "$${WORKER_DEPLOYMENT}" --replicas=0
-        kubectl -n "$${TARGET_NAMESPACE}" set image "deployment/$${WORKER_DEPLOYMENT}" summarize-worker=gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID
-        kubectl -n "$${TARGET_NAMESPACE}" scale deployment "$${WORKER_DEPLOYMENT}" --replicas=1
-        kubectl -n "$${TARGET_NAMESPACE}" rollout status "deployment/$${WORKER_DEPLOYMENT}" --timeout=600s
+  # ===== Deploy Worker to Cloud Run =====
+  - id: "Deploy Worker to Cloud Run"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    env:
+      - TARGET_BRANCH=$BRANCH_NAME
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        
+        # Only deploy worker for production (main branch)
+        if [[ "${TARGET_BRANCH:-main}" == "staging" ]]; then
+          echo "Skipping worker deployment for staging branch"
+          exit 0
+        fi
+        
+        echo "Deploying summarize-worker to Cloud Run..."
+        
+        gcloud run deploy testifi-summarize-worker \
+          --image gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID \
+          --region us-central1 \
+          --platform managed \
+          --add-cloudsql-instances golden-cosmos-450417-i8:us-central1:testifi \
+          --service-account testifi-cloudrun@golden-cosmos-450417-i8.iam.gserviceaccount.com \
+          --no-allow-unauthenticated \
+          --min-instances 1 \
+          --max-instances 1 \
+          --memory 2Gi \
+          --cpu 2 \
+          --timeout 3600 \
+          --set-env-vars "NODE_ENV=production,WORKER_CONCURRENCY=1,PAGE_RANGE_SIZE=5,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5-testifi,AZURE_API_VERSION=2025-01-01-preview,BASE_URL=https://app.testifi.ai,EMAIL_USER=admin@testifi.ai" \
+          --set-secrets "DATABASE_URL=backend-secrets-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=backend-secrets-SENDGRID_API_KEY:latest,AZURE_OPENAI_API_KEY=backend-secrets-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=backend-secrets-AZURE_OPENAI_ENDPOINT:latest"
+        
+        echo "✅ Worker deployed successfully"
+
+  # ===== Verify Backend Deployment =====
+  - id: "Verify Backend Health"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    env:
+      - TARGET_BRANCH=$BRANCH_NAME
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        
+        if [[ "${TARGET_BRANCH:-main}" == "staging" ]]; then
+          SERVICE_NAME="testifi-backend-staging"
+        else
+          SERVICE_NAME="testifi-backend"
+        fi
+        
+        SERVICE_URL=$$(gcloud run services describe $${SERVICE_NAME} --region us-central1 --format 'value(status.url)')
+        echo "Verifying health at $${SERVICE_URL}/health..."
+        
+        for i in {1..10}; do
+          if curl -sf "$${SERVICE_URL}/health"; then
+            echo ""
+            echo "✅ Health check passed!"
+            exit 0
+          fi
+          echo "Attempt $$i failed, retrying in 5s..."
+          sleep 5
+        done
+        
+        echo "❌ Health check failed after 10 attempts"
+        exit 1
 
 images:
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
   - "gcr.io/golden-cosmos-450417-i8/testifi-backend:latest"
   - "gcr.io/golden-cosmos-450417-i8/summarize-worker:$BUILD_ID"
   - "gcr.io/golden-cosmos-450417-i8/summarize-worker:latest"
-
-substitutions:
-  _CLUSTER: testifi
-  _CLUSTER_LOCATION: us-central1-c
-  _NAMESPACE: default
 
 options:
   logging: CLOUD_LOGGING_ONLY

@@ -2,6 +2,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+import http from "http";
 import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import axios from "axios";
@@ -41,6 +42,17 @@ const storage = new Storage();
 const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
+
+// Health check HTTP server required by Cloud Run
+const HEALTH_PORT = Number(process.env.PORT) || 8080;
+let workerHealthy = true;
+const healthServer = http.createServer((_req, res) => {
+  res.writeHead(workerHealthy ? 200 : 503, { "Content-Type": "text/plain" });
+  res.end(workerHealthy ? "OK" : "UNHEALTHY");
+});
+healthServer.listen(HEALTH_PORT, "0.0.0.0", () => {
+  console.log(`[WORKER] Health check server listening on port ${HEALTH_PORT}`);
+});
 
 console.log(
   "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
@@ -1371,15 +1383,50 @@ interface PageRangeEntry {
 function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRangeEntry[] {
   const entries: PageRangeEntry[] = [];
   const lines = llmOutput.split(/\r?\n/);
-  
+
   for (const line of lines) {
-    // Skip lines that don't look like page entries
     if (!line.includes('p.') && !/^\s*\|/.test(line)) continue;
-    
-    // Try to extract page info using a flexible approach
+
+    // Prompt's 3-column format: | StartPage:StartLine-EndPage:EndLine | Topic | Summary | (or 8-10)
+    const pipeParts = line.split('|').map((p) => p.trim()).filter(Boolean);
+    if (pipeParts.length >= 3) {
+      const pageRange = pipeParts[0];
+      const topic = pipeParts[1];
+      const summary = pipeParts.slice(2).join(' | ').trim();
+      const withLines = pageRange.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+      const noLines = pageRange.match(/^(\d+)-(\d+)$/);
+      if (withLines && summary.length > 10) {
+        const startPage = parseInt(withLines[1], 10);
+        const lineStart = parseInt(withLines[2], 10);
+        const endPage = parseInt(withLines[3], 10);
+        const lineEnd = parseInt(withLines[4], 10);
+        if (startPage > 0 && endPage >= startPage) {
+          const cappedEnd = Math.min(endPage, startPage + 10);
+          entries.push({
+            startPage,
+            endPage: cappedEnd,
+            lineNumbers: `:${lineStart}-${lineEnd}`,
+            topic,
+            summary,
+          });
+          if (debug) console.log(`[parseToRangeEntries] Matched 3-col ${startPage}:${lineStart}-${endPage}:${lineEnd}`);
+          continue;
+        }
+      }
+      if (noLines && summary.length > 10) {
+        const startPage = parseInt(noLines[1], 10);
+        const endPage = parseInt(noLines[2], 10);
+        if (startPage > 0 && endPage >= startPage) {
+          const cappedEnd = Math.min(endPage, startPage + 10);
+          entries.push({ startPage, endPage: cappedEnd, lineNumbers: '', topic, summary });
+          if (debug) console.log(`[parseToRangeEntries] Matched 3-col range ${startPage}-${endPage}`);
+          continue;
+        }
+      }
+    }
+
     // Pattern: p.START[-END][:LINESTART-LINEEND]
     const pageMatch = line.match(/p\.(\d+)(?:\s*[-–]\s*(\d+))?(?::(\d+)[-–](\d+))?/i);
-    
     if (pageMatch) {
       const startPage = parseInt(pageMatch[1], 10);
       const endPage = pageMatch[2] ? parseInt(pageMatch[2], 10) : startPage;
