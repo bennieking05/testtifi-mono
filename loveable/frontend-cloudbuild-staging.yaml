@@ -1,0 +1,59 @@
+steps:
+  # Build frontend image with staging API and Stripe TEST publishable key
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+      - "--build-arg=VITE_API_URL=$_VITE_API_URL"
+      - "--build-arg=VITE_STRIPE_PUBLISHABLE_KEY=$_VITE_STRIPE_PUBLISHABLE_KEY"
+      - "."
+
+  # Push the image to GCR
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+  # Get cluster credentials
+  - name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        gcloud container clusters get-credentials testifi --zone us-central1-c --project golden-cosmos-450417-i8
+
+  # Update the STAGING deployment to the newly built image
+  - name: "gcr.io/cloud-builders/kubectl"
+    env:
+      - "CLOUDSDK_COMPUTE_ZONE=us-central1-c"
+      - "CLOUDSDK_CONTAINER_CLUSTER=testifi"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        echo "Updating frontend image to $BUILD_ID..."
+        kubectl -n staging set image deployment/frontend frontend=gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID
+        echo "Waiting for rollout to complete..."
+        kubectl -n staging rollout status deployment/frontend --timeout=300s
+
+substitutions:
+  _VITE_API_URL: "https://staging.app.testifi.ai"
+  # Use a valid TEST publishable key from the same Stripe account as backend
+  _VITE_STRIPE_PUBLISHABLE_KEY: "pk_test_51SPyHb1PKdcq2R5zdlTdxGxpj8Lc6AFNbeBfGNkJ5QmMC6IOOE8osz3KqQ3a04RCUsbSPhl694U5p35JAmOuYT0w00PXMi588j"
+
+images:
+  - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET
+ 
+# Logs go to Cloud Logging only (no GCS bucket)
+
+
+
+
+

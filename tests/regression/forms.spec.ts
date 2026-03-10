@@ -14,15 +14,15 @@ const SNAPS_DIR = path.join(RESULTS_DIR, 'screenshots');
 // Ensure directories exist
 fs.mkdirSync(SNAPS_DIR, { recursive: true });
 
-// Test credentials - loaded from environment variables or test-login.json
-// Priority: 1. Environment variables, 2. test-login.json file
+// Test credentials - loaded from environment variables or test-admin-login.json
+// Priority: 1. Environment variables, 2. test-admin-login.json file
 let testEmail = process.env.TEST_EMAIL || '';
 let testPassword = process.env.TEST_PASSWORD || '';
 
-// Fall back to test-login.json if env vars not set
+// Fall back to test-admin-login.json if env vars not set
 if (!testEmail || !testPassword) {
   try {
-    const loginFile = path.join(process.cwd(), 'test-login.json');
+    const loginFile = path.join(process.cwd(), 'test-admin-login.json');
     if (fs.existsSync(loginFile)) {
       const creds = JSON.parse(fs.readFileSync(loginFile, 'utf8'));
       testEmail = testEmail || creds.email || '';

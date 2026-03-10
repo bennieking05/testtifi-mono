@@ -1,0 +1,216 @@
+name: frontend-ci-cd
+
+on:
+  push:
+    branches: ["main", "staging"]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/bennieking05/p-782854
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push (staging)
+        if: github.ref_name == 'staging'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          no-cache: true
+          build-args: |
+            VITE_API_URL=https://staging.app.testifi.ai
+            VITE_BASE_PATH=/
+            VITE_STRIPE_PUBLISHABLE_KEY=${{ secrets.STAGING_VITE_STRIPE_PUBLISHABLE_KEY }}
+            BUST=${{ github.run_id }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:staging-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build and push (prod)
+        if: github.ref_name == 'main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            VITE_API_URL=https://app.testifi.ai
+            VITE_BASE_PATH=/
+            VITE_STRIPE_PUBLISHABLE_KEY=${{ secrets.PROD_VITE_STRIPE_PUBLISHABLE_KEY }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:prod-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify Stripe key is set
+        if: github.ref_name == 'staging'
+        run: |
+          if [ -z "${{ secrets.STAGING_VITE_STRIPE_PUBLISHABLE_KEY }}" ]; then
+            echo "❌ ERROR: STAGING_VITE_STRIPE_PUBLISHABLE_KEY secret is not set!"
+            exit 1
+          fi
+          echo "✅ Stripe key is configured (prefix hidden)"
+      - name: Build VM loadable tar (staging)
+        if: github.ref_name == 'staging'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          no-cache: true
+          build-args: |
+            VITE_API_URL=https://staging.app.testifi.ai
+            VITE_BASE_PATH=/
+            VITE_STRIPE_PUBLISHABLE_KEY=${{ secrets.STAGING_VITE_STRIPE_PUBLISHABLE_KEY }}
+            BUST=${{ github.run_id }}
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          outputs: type=docker,dest=frontend-image.tar
+          cache-from: type=gha
+      - name: Verify Stripe key in built image (non-blocking)
+        if: github.ref_name == 'staging'
+        continue-on-error: true
+        run: |
+          echo "Verifying Stripe key is embedded in built image..."
+          docker load -i frontend-image.tar
+          CONTAINER_ID=$(docker create ${{ env.IMAGE_NAME }}:${{ github.sha }})
+          docker cp $CONTAINER_ID:/usr/share/nginx/html ./built-frontend
+          docker rm $CONTAINER_ID
+          FOUND_KEY=$(grep -r -o 'pk_test_[A-Za-z0-9_\-]*' ./built-frontend | head -n1 | cut -d: -f2 | tr -d ' ')
+          if [ -z "$FOUND_KEY" ]; then
+            echo "⚠️  WARNING: No publishable key string found in built files (may be inlined differently)."
+          else
+            KEY_PREFIX=$(echo "$FOUND_KEY" | cut -c1-12)
+            echo "✅ Found Stripe publishable key in build (prefix): ${KEY_PREFIX}..."
+          fi
+      - name: Build VM loadable tar (prod)
+        if: github.ref_name == 'main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          build-args: |
+            VITE_API_URL=https://app.testifi.ai
+            VITE_BASE_PATH=/
+            VITE_STRIPE_PUBLISHABLE_KEY=${{ secrets.PROD_VITE_STRIPE_PUBLISHABLE_KEY }}
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          outputs: type=docker,dest=frontend-image.tar
+          cache-from: type=gha
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-image
+          path: frontend-image.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    if: ${{ github.ref_name == 'main' || github.ref_name == 'staging' }}
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    env:
+      BRANCH: ${{ github.ref_name }}
+      GITHUB_SHA: ${{ github.sha }}
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-image
+          path: .
+      - name: Copy image to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          source: "frontend-image.tar"
+          target: "/tmp/frontend-image.tar"
+          overwrite: true
+      - name: SSH deploy and verify
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          BRANCH: ${{ env.BRANCH }}
+          GITHUB_SHA: ${{ env.GITHUB_SHA }}
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          envs: IMAGE_NAME,BRANCH,GITHUB_SHA
+          script: |
+            set -euo pipefail
+            set -x
+            FILE=/tmp/frontend-image.tar
+            if [ -d "$FILE" ]; then FILE=$(find "$FILE" -maxdepth 1 -type f -name '*.tar' | head -n1); fi
+            echo "Loading Docker image from $FILE..."
+            docker load -i "$FILE"
+            if [ "$BRANCH" = "main" ]; then TAG=prod-latest; else TAG=staging-latest; fi
+            echo "Tagging image: $IMAGE_NAME:$GITHUB_SHA -> $IMAGE_NAME:$TAG"
+            docker tag "$IMAGE_NAME:$GITHUB_SHA" "$IMAGE_NAME:$TAG" || true
+            echo "Verifying image exists:"
+            docker images | grep "$IMAGE_NAME" | head -3
+            cd /srv/testifi
+            echo "Current directory: $(pwd)"
+            echo "Docker compose services:"
+            docker compose ps --services || echo "No services found"
+            # Choose frontend service name dynamically (frontend or loveable)
+            F_SVC=$(docker compose ps --services | grep -E '^(frontend|loveable)$' | head -n1)
+            [ -z "$F_SVC" ] && echo "No frontend service found in compose" && exit 1
+            echo "Found frontend service: $F_SVC"
+            echo "Current container status:"
+            docker compose ps "$F_SVC"
+            # Force recreate container to ensure new image is used
+            echo "Stopping and removing old container..."
+            docker compose stop "$F_SVC" || true
+            docker compose rm -f "$F_SVC" || true
+            echo "Writing docker-compose override with pre-built image..."
+            printf 'services:\n  %s:\n    image: %s\n' "$F_SVC" "$IMAGE_NAME:$TAG" > docker-compose.override.yml
+            echo "docker-compose.override.yml contents:"
+            cat docker-compose.override.yml
+
+            # Optionally restart reverse proxy if present
+            if docker compose ps --services 2>/dev/null | grep -q '^caddy$'; then
+              echo "Starting $F_SVC and caddy with force recreate using override..."
+              docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --force-recreate --no-deps "$F_SVC" caddy
+            else
+              echo "Starting $F_SVC with force recreate using override..."
+              docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --force-recreate --no-deps "$F_SVC"
+            fi
+            echo "Container status after restart:"
+            docker compose -f docker-compose.yml -f docker-compose.override.yml ps
+            echo "Verifying container is using correct image:"
+            CONTAINER_ID=$(docker compose -f docker-compose.yml -f docker-compose.override.yml ps -q "$F_SVC")
+            if [ -n "$CONTAINER_ID" ]; then
+              docker inspect "$CONTAINER_ID" | grep -A 5 "Image" || true
+            fi
+
+            # Post-deploy health check loop (max ~90s)
+            URL=https://staging.app.testifi.ai
+            for i in $(seq 1 18); do
+              if curl -fsS "$URL" >/dev/null && curl -fsS "$URL/api/health" >/dev/null; then
+                echo "Frontend and API healthy"; break; fi; sleep 5; done
+            # If still not healthy, show logs and fail
+            if ! curl -fsS "$URL/api/health" >/dev/null; then
+              echo "Health check failed; showing recent logs";
+              docker compose logs --tail=80 "$F_SVC" || true; exit 1; fi
+
+            # Optional: verify pk_test key is embedded (non-fatal, avoids jq dependency)
+            set +e
+            cid=$(docker compose ps -q "$F_SVC")
+            if [ -n "$cid" ]; then
+              docker exec "$cid" sh -lc "grep -R -o 'pk_test_[A-Za-z0-9_\-]*' /usr/share/nginx/html | head -n1 || true" || true
+            fi
+            set -e

@@ -1,0 +1,33 @@
+steps:
+  # Build backend image (specifically targeting the backend stage)
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:${_IMAGE_TAG}"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+      - "--target=backend"
+      - "."
+
+  # Push both tags
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:${_IMAGE_TAG}"
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+
+substitutions:
+  _IMAGE_TAG: "latest"
+
+images:
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:${_IMAGE_TAG}"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET

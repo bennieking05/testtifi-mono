@@ -2,12 +2,16 @@
   "name": "testifiai-repo",
   "private": true,
   "version": "0.1.0",
+  "workspaces": [
+    "backend",
+    "loveable"
+  ],
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "start:worker": "node dist/worker/summarizeWorker.js",
-    "start:cleanup": "node dist/worker/summaryCleanupWorker.js",
-    "postinstall": "prisma generate",
+    "dev": "concurrently -n be,fe \"npm run dev -w backend\" \"npm run dev -w loveable\"",
+    "build": "npm run build --workspaces",
+    "start": "npm start -w backend",
+    "start:worker": "npm run start:worker -w backend",
+    "start:cleanup": "npm run start:cleanup -w backend",
     "test:ui": "playwright test -c playwright.config.ts",
     "test:uat:mock": "node scripts/uat-mock-tests.mjs",
     "scrape:webcopy": "node scripts/scrape-webcopy.mjs",
@@ -47,6 +51,7 @@
     "stripe": "^19.3.1"
   },
   "devDependencies": {
+    "concurrently": "^9.1.0",
     "@playwright/test": "^1.48.2",
     "@types/bcryptjs": "^2.4.6",
     "@types/body-parser": "^1.19.5",

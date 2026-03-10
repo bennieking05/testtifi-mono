@@ -1,6 +1,21 @@
-# Testifi AI — Docker Quickstart
+# Testifi AI
 
-## Local containers
+## Quick start — Start the project
+
+This repo is a **monorepo** (npm workspaces: `backend`, `loveable`). From the repo root:
+
+1. **Install:** `npm install`
+2. **Env:** Copy `docs/env.backend.example` to `backend/.env` and `docs/env.frontend.example` to `loveable/.env.local`; set `DATABASE_URL` and `VITE_API_URL` (e.g. `http://localhost:4000`).
+3. **Database:** `cd backend && npx prisma generate && npx prisma migrate dev && cd ..`
+4. **Run:** `npm run dev` — backend at http://localhost:4000, frontend at http://localhost:3000.
+
+**Full instructions (prerequisites, options, tests, DB dump):** [docs/STARTUP.md](docs/STARTUP.md).
+
+**DB dump to Desktop:** From root run `./scripts/dump-db-to-desktop.sh` (requires `mysqldump` and `backend/.env` with `DATABASE_URL`). Output: `~/Desktop/testifi-db-dump-YYYY-MM-DD.sql`.
+
+---
+
+## Local containers (Docker)
 
 Prereqs: Docker Desktop running
 

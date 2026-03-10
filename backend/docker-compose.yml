@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: backend
+    container_name: testifiai-backend
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - STRIPE_API_KEY=${STRIPE_API_KEY}
+      # Optional local paths; adjust as needed
+      # - WEB_COPY_PATH=/data/webCopy.md
+      # - DATABASE_URL=mysql://user:pass@host:3306/dbname
+      # - SENDGRID_API_KEY=your_key
+      # - EMAIL_USER=sender@example.com
+    ports:
+      - "4000:4000"
+    restart: unless-stopped
+
+  loveable:
+    build:
+      context: ./loveable
+      args:
+        # Browser will call backend via localhost:4000
+        VITE_API_URL: http://localhost:4000
+    container_name: testifiai-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: testifiai-net
+

@@ -1,11 +1,14 @@
-
-dist   
+dist/
 artifacts/
 playwright-report/
 test-results/
 tests/regression-screenshots/
+test_artifacts/
 node_modules/
 *.log
 .DS_Store
 notes.txtk*.pdf
 .env
+.env.*
+!.env.example
+!docs/env.*.example

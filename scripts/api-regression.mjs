@@ -36,8 +36,8 @@ const BASE_URLS = {
 
 const BASE = BASE_URLS[TARGET] || BASE_URLS.local;
 
-// Test credentials file
-const LOGIN_FILE = path.join(ROOT, 'test-login.json');
+// Test credentials: use admin for all authenticated endpoints
+const LOGIN_FILE = path.join(ROOT, 'test-admin-login.json');
 const ADMIN_LOGIN_FILE = path.join(ROOT, 'test-admin-login.json');
 
 // Results output
@@ -176,13 +176,13 @@ async function testEndpoint(name, method, endpoint, options = {}) {
 
 async function getAuthToken() {
   if (!fs.existsSync(LOGIN_FILE)) {
-    console.log('⚠️  No test-login.json found, skipping authenticated tests');
+    console.log('⚠️  No test-admin-login.json found, skipping authenticated tests');
     return null;
   }
   
   const { email, password } = JSON.parse(fs.readFileSync(LOGIN_FILE, 'utf8'));
   if (!email || !password) {
-    console.log('⚠️  test-login.json missing email or password');
+    console.log('⚠️  test-admin-login.json missing email or password');
     return null;
   }
   
@@ -331,6 +331,16 @@ async function testSummariesEndpoints(token) {
   const headers = { Authorization: `Bearer ${token}` };
   
   await testEndpoint('List Summaries', 'GET', '/api/summaries', { headers });
+  // Summaries processing: assert response is 200 and body is an array (list shape)
+  const summariesResult = await request('GET', '/api/summaries', { headers });
+  const summariesShapeOk = summariesResult.status === 200 && Array.isArray(summariesResult.data);
+  process.stdout.write('  GET    /api/summaries (response shape) ... ');
+  recordResult('/api/summaries (shape)', 'GET', summariesResult.status, '200+array', summariesShapeOk, summariesResult.elapsed, summariesShapeOk ? '' : 'response not array');
+  if (summariesShapeOk) {
+    console.log(`✅ 200 array (${summariesResult.elapsed}ms)`);
+  } else {
+    console.log(`❌ ${summariesResult.status} (expected 200 and array)`);
+  }
   await testEndpoint('Get Prompt Config', 'GET', '/api/summaries/prompt-config', { headers });
   await testEndpoint('Download History', 'GET', '/api/summaries/download-history', { headers });
 }
@@ -531,27 +541,26 @@ async function run() {
   console.log(`\n🎯 Target: ${TARGET} (${BASE})`);
   console.log(`📅 Started: ${new Date().toISOString()}\n`);
   
-  // Get auth tokens
-  console.log('🔑 Authenticating...');
-  const userToken = await getAuthToken();
-  const adminToken = await getAdminAuthToken();
+  // Get auth token (admin credentials used for all authenticated endpoints)
+  console.log('🔑 Authenticating (admin)...');
+  const authToken = await getAuthToken();
   
-  // Run all test suites
+  // Run all test suites with same token
   await testHealthEndpoints();
   await testAuthEndpoints();
-  await testUserEndpoints(userToken);
-  await testBillingEndpoints(userToken);
-  await testPurchaseEndpoints(userToken);
-  await testSummariesEndpoints(userToken);
-  await testDownloadEndpoints(userToken);
-  await testUploadEndpoints(userToken);
-  await testSupportEndpoints(userToken);
-  await testSummaryJobEndpoints(userToken);
-  await testPreviewEndpoints(userToken);
+  await testUserEndpoints(authToken);
+  await testBillingEndpoints(authToken);
+  await testPurchaseEndpoints(authToken);
+  await testSummariesEndpoints(authToken);
+  await testDownloadEndpoints(authToken);
+  await testUploadEndpoints(authToken);
+  await testSupportEndpoints(authToken);
+  await testSummaryJobEndpoints(authToken);
+  await testPreviewEndpoints(authToken);
   await testSnapshotEndpoints();
-  await testEmailNotificationEndpoints(userToken);
-  await testValidationEndpoints(userToken);
-  await testAdminEndpoints(adminToken);
+  await testEmailNotificationEndpoints(authToken);
+  await testValidationEndpoints(authToken);
+  await testAdminEndpoints(authToken);
   await testEmergencyEndpoints();
   
   // Write results

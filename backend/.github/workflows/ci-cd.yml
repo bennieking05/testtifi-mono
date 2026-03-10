@@ -1,0 +1,93 @@
+name: backend-ci-cd
+
+on:
+  push:
+    branches: ["main", "staging"]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/bennieking05/testifi-backend
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name == 'main' && 'prod-latest' || (github.ref_name == 'staging' && 'staging-latest') }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build VM loadable tar
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          outputs: type=docker,dest=backend-image.tar
+          cache-from: type=gha
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image
+          path: backend-image.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    if: ${{ github.ref_name == 'main' || github.ref_name == 'staging' }}
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    env:
+      BRANCH: ${{ github.ref_name }}
+      GITHUB_SHA: ${{ github.sha }}
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-image
+          path: .
+      - name: Copy image to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          source: "backend-image.tar"
+          target: "/tmp/backend-image.tar"
+          overwrite: true
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          BRANCH: ${{ env.BRANCH }}
+          GITHUB_SHA: ${{ env.GITHUB_SHA }}
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          envs: IMAGE_NAME,BRANCH,GITHUB_SHA
+          script: |
+            set -e
+            FILE=/tmp/backend-image.tar
+            if [ -d "$FILE" ]; then FILE=$(find "$FILE" -maxdepth 1 -type f -name '*.tar' | head -n1); fi
+            docker load -i "$FILE"
+            if [ "$BRANCH" = "main" ]; then TAG=prod-latest; else TAG=staging-latest; fi
+            docker tag "$IMAGE_NAME:$GITHUB_SHA" "$IMAGE_NAME:$TAG" || true
+            cd /srv/testifi
+            docker compose up -d backend worker

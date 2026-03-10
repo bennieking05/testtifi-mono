@@ -28,7 +28,7 @@ let testPassword = process.env.TEST_PASSWORD || '';
 
 if (!testEmail || !testPassword) {
   try {
-    const loginFile = path.join(process.cwd(), 'test-login.json');
+    const loginFile = path.join(process.cwd(), 'test-admin-login.json');
     if (fs.existsSync(loginFile)) {
       const creds = JSON.parse(fs.readFileSync(loginFile, 'utf8'));
       testEmail = testEmail || creds.email || '';

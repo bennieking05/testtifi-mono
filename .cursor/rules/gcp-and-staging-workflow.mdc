@@ -1,0 +1,25 @@
+---
+description: "Use GCP CLI for deploys and DB ops; run full regression on staging after staging changes; complete tasks via CLI without asking the user to run commands."
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# GCP and Staging Workflow (TestifiAI)
+
+## GCP CLI
+
+- Assume the workspace has working `gcloud` (and `gsutil` / `gcloud storage`) access to project `golden-cosmos-450417-i8`.
+- Use CLI for: deploying to Cloud Run (staging/production), running `cloudrun/refresh-staging-db-from-prod.sh`, builds via `gcloud builds submit`, and any other GCP operations. Do not suggest "run this yourself" when the agent can run the same command.
+- If a command fails with 403/forbidden, retry once with the same identity; only then report the error and suggest permission fixes (e.g. roles), without defaulting to "please run from your machine."
+
+## Staging tests after changes
+
+- After making changes that affect staging (e.g. `deploy-staging.sh`, frontend/backend code or config, env vars, DB refresh), the agent must:
+  1. Run the full regression suite against staging: `npm run test:regression:staging`.
+  2. If tests fail: fix issues or clearly report what failed and what needs to change; do not leave staging verification to the user.
+- This applies once per logical "change set" (e.g. after a deploy or after a batch of code/config edits), not necessarily after every single file save.
+
+## Autonomy
+
+- Prefer completing tasks via CLI (build, deploy, test, DB script) rather than asking the user to run commands. Ask the user only when input is required (e.g. secrets, approval for destructive ops) or when CLI cannot be used (e.g. no credentials).

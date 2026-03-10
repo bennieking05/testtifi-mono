@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend-ingress
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # If you're using TLS with cert-manager, also add:
+    cert-manager.io/cluster-issuer: "letsencrypt"
+spec:
+  # If you're using the Nginx Ingress Controller, specify:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app.testifi.ai
+    # secretName: your-frontend-tls-secret (only if you want a separate TLS secret from the backend)
+  rules:
+    - host: "app.testifi.ai"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

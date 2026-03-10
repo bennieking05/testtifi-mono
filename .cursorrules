@@ -97,6 +97,10 @@ test-results/                 # Test output (gitignored)
 - Cloud Run Service (Frontend): testifi-frontend
 - Cloud Run Service (Backend): testifi-backend
 
+## GCP and staging
+
+See `.cursor/rules/gcp-and-staging-workflow.mdc`: use GCP CLI for deploys and DB operations; run `npm run test:regression:staging` after staging-related changes; do not ask the user to run commands the agent can run via CLI.
+
 ## Regression Testing Commands
 
 After any code change, run regression tests:

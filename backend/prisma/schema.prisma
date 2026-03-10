@@ -1,0 +1,295 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "darwin-arm64"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// ───────────────────────── models ────────────────────────
+model User {
+  id             String            @id @default(uuid())
+  email          String            @unique
+  password       String
+  name           String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  resetToken     String?
+  resetTokenExp  DateTime?
+  credits        Int               @default(0)
+  companyName    String?
+  role           Role              @default(user)
+  downloads      DownloadHistory[]
+  files          File[]
+  ledgerEntries  LedgerEntry[]
+  purchases      Purchase[]
+  refreshTokens  RefreshToken?
+  summaryJobs    SummaryJob[]
+  supportTickets SupportTicket[]
+  trainingAssets TrainingAsset[]
+}
+
+model File {
+  id              String            @id @default(uuid())
+  fileName        String
+  fileUrl         String
+  createdAt       DateTime          @default(now())
+  userId          String?
+  summaryFileName String?
+  summaryUrl      String?           @db.Text
+  pages           Int?              @default(0)
+  deponent        String?
+  title           String
+  downloads       DownloadHistory[]
+  user            User?             @relation(fields: [userId], references: [id])
+  summaryJobs     SummaryJob[]      @relation("FileToSummaryJob")
+
+  @@index([userId], map: "File_userId_fkey")
+}
+
+model SummaryJob {
+  id                    String    @id @default(uuid())
+  /// ───── relations ─────
+  userId                String
+  /// ───── file info ─────
+  fileName              String
+  fileUrl               String
+  summaryCsvUrl         String?   @db.Text
+  /// ───── job status ─────
+  status                String
+  lastPageProcessed     Int
+  totalPages            Int
+  /// ───── bookkeeping ───
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  error                 String?   @db.Text
+  fileId                String?
+  notifyOnComplete      Boolean   @default(false)
+  finishedAt            DateTime?
+  /// ───── timing  ─────
+  startedAt             DateTime  @default(now())
+  configVersionId       String?
+  costEstimate          Float?
+  modelUsed             String?
+  tokensUsed            Int?
+  completionEmailSentAt DateTime?
+  user                  User      @relation(fields: [userId], references: [id])
+  file                  File?     @relation("FileToSummaryJob", fields: [fileId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_SummaryJob_file")
+
+  @@index([userId], map: "SummaryJob_userId_fkey")
+  @@index([fileId], map: "fk_SummaryJob_file")
+  @@index([configVersionId])
+}
+
+model Purchase {
+  id                    String             @id @default(uuid())
+  userId                String
+  createdAt             DateTime           @default(now())
+  stripePaymentIntentId String             @unique
+  amountCents           Int
+  currency              String             @default("usd")
+  creditsAdded          Int
+  status                PurchaseStatus     @default(succeeded)
+  receiptUrl            String?
+  updatedAt             DateTime           @updatedAt
+  creditAllocations     CreditAllocation[]
+  ledgerEntries         LedgerEntry[]
+  user                  User               @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "Purchase_userId_fkey")
+}
+
+model LedgerEntry {
+  id                String             @id @default(uuid())
+  userId            String
+  type              LedgerEntryType
+  credits           Int
+  summaryId         String?
+  description       String?
+  idempotencyKey    String             @unique
+  purchaseId        String?
+  createdAt         DateTime           @default(now())
+  creditAllocations CreditAllocation[]
+  purchase          Purchase?          @relation(fields: [purchaseId], references: [id])
+  user              User               @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([purchaseId])
+}
+
+model CreditAllocation {
+  id            String      @id @default(uuid())
+  debitLedgerId String
+  purchaseId    String
+  creditsUsed   Int
+  debitLedger   LedgerEntry @relation(fields: [debitLedgerId], references: [id])
+  purchase      Purchase    @relation(fields: [purchaseId], references: [id])
+
+  @@index([debitLedgerId])
+  @@index([purchaseId])
+}
+
+model Email {
+  id      Int    @id @default(autoincrement())
+  subject String
+  body    String @db.VarChar(10000)
+}
+
+model RefreshToken {
+  id              String    @id @default(uuid())
+  token           String    @db.Text
+  userId          String    @unique
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+  revoked         Boolean   @default(false)
+  revokedAt       DateTime?
+  replacedByToken String?   @db.Text
+  user            User      @relation(fields: [userId], references: [id])
+}
+
+model SupportTicket {
+  id        String         @id @default(cuid())
+  userId    String?
+  name      String
+  email     String
+  subject   String
+  message   String         @db.Text
+  status    SupportStatus  @default(OPEN)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  replies   SupportReply[]
+  user      User?          @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "SupportTicket_userId_fkey")
+}
+
+model SupportReply {
+  id        String        @id @default(cuid())
+  ticketId  String
+  from      ReplyAuthor
+  message   String
+  createdAt DateTime      @default(now())
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id])
+
+  @@index([ticketId], map: "SupportReply_ticketId_fkey")
+}
+
+model DownloadHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  fileId    String
+  format    String
+  createdAt DateTime @default(now())
+  file      File     @relation(fields: [fileId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([fileId], map: "DownloadHistory_fileId_fkey")
+  @@index([userId], map: "DownloadHistory_userId_fkey")
+}
+
+model TrainingAsset {
+  id          String    @id @default(uuid())
+  userId      String
+  type        AssetType
+  filename    String
+  fileSize    Int
+  uploadedAt  DateTime  @default(now())
+  description String?
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "TrainingAsset_userId_fkey")
+}
+
+model ConfigComparison {
+  id               String    @id
+  oldVersionId     String
+  newVersionId     String
+  testDepositionId String
+  oldSummaryJobId  String?
+  newSummaryJobId  String?
+  status           String
+  createdAt        DateTime  @default(now())
+  promotedAt       DateTime?
+
+  @@index([status])
+}
+
+model PageContent {
+  id           String   @id
+  route        String   @unique
+  sections     Json
+  version      Int      @default(1)
+  isProduction Boolean  @default(false)
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+
+  @@index([isProduction])
+  @@index([route])
+}
+
+model PageContentVersion {
+  id         String    @id
+  route      String
+  sections   Json
+  version    Int
+  createdBy  String
+  createdAt  DateTime  @default(now())
+  promotedAt DateTime?
+
+  @@index([route, version])
+}
+
+model PromptConfigVersion {
+  id              String    @id
+  system          String    @db.Text
+  temperature     Float
+  maxTokens       Int
+  modelName       String?
+  isProduction    Boolean   @default(false)
+  createdBy       String
+  createdAt       DateTime  @default(now())
+  promotedAt      DateTime?
+  comparisonJobId String?
+
+  @@index([createdAt])
+  @@index([isProduction])
+}
+
+/// ───────────────────────── enums ─────────────────────────
+enum Role {
+  user
+  admin
+}
+
+enum SupportStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
+}
+
+enum ReplyAuthor {
+  support
+  user
+}
+
+enum AssetType {
+  human_summary
+  training_pair
+  generated_pair
+}
+
+enum PurchaseStatus {
+  succeeded
+  refunded
+  partially_refunded
+  requires_payment_method
+}
+
+enum LedgerEntryType {
+  credit
+  debit
+  adjustment
+}

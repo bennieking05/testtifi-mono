@@ -1,0 +1,20 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/summarize-worker:staging"
+      - "--target=summarize-worker"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/summarize-worker:staging"
+
+images:
+  - "gcr.io/golden-cosmos-450417-i8/summarize-worker:staging"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET

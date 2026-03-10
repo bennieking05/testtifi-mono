@@ -1,0 +1,11 @@
+autodetect: true
+createTime: '2025-10-25T19:12:40.500771033Z'
+github:
+  name: p-782854
+  owner: bennieking05
+  push:
+    branch: ^staging$
+id: 01f3adbe-ee43-49d9-be2c-1d042d46cdeb
+name: staging-frontend
+resourceName: projects/golden-cosmos-450417-i8/locations/us-central1/triggers/01f3adbe-ee43-49d9-be2c-1d042d46cdeb
+serviceAccount: projects/golden-cosmos-450417-i8/serviceAccounts/748916208557@cloudbuild.gserviceaccount.com

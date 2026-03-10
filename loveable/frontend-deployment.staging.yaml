@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: gcr.io/golden-cosmos-450417-i8/testifi-frontend:latest
+          env:
+            - name: VITE_API_URL
+              value: "https://staging.app.testifi.ai"
+          ports:
+            - containerPort: 80
+
+
+

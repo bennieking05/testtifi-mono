@@ -1,0 +1,38 @@
+steps:
+  # Build frontend image for Cloud Run
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:${_IMAGE_TAG}"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+      - "-f"
+      - "Dockerfile.cloudrun"
+      - "--build-arg=VITE_API_URL=${_VITE_API_URL}"
+      - "--build-arg=VITE_STRIPE_PUBLISHABLE_KEY=${_VITE_STRIPE_PUBLISHABLE_KEY}"
+      - "."
+
+  # Push both tags
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:${_IMAGE_TAG}"
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+substitutions:
+  _IMAGE_TAG: "latest"
+  _VITE_API_URL: "https://app.testifi.ai"
+  _VITE_STRIPE_PUBLISHABLE_KEY: "pk_live_51SPyHb1PKdcq2R5zOc8C1xjv53gfqNDmPYTLTvXWxOXVdP06nFPT6pEPzFlOVLGbA4vJEkE5Kj1Dwy17bh59QZMM00AxKdgUMY"
+
+images:
+  - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:${_IMAGE_TAG}"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET

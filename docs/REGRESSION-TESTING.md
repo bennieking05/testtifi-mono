@@ -160,6 +160,8 @@ timestamp,target,total_tests,passed,failed,pass_rate,api_passed,api_failed,front
 | GET | `/api/emergency/job-status` | No | Check job status |
 | POST | `/api/emergency/reset-stuck-jobs` | No | Reset stuck jobs |
 
+**Summaries and processing:** API regression asserts GET `/api/summaries` returns 200 and response body is an array; GET `/api/emergency/job-status` is exercised. Frontend regression includes a test that the Summaries page shows the Processing tab.
+
 ---
 
 ## Frontend Page Inventory

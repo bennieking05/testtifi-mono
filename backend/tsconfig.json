@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    "target": "ES6", // Use ES6 for modern JavaScript support
+    "module": "CommonJS", // Use CommonJS for Node.js compatibility
+    "rootDir": "src", // Source directory for TypeScript files
+    "outDir": "dist", // Output directory for compiled JavaScript files
+    "strict": true, // Enable all strict type-checking options
+
+    /* Module Resolution */
+    "moduleResolution": "node", // Use Node.js module resolution
+    "baseUrl": "./", // Base directory for resolving module imports
+    "paths": {
+      // Alias imports for cleaner paths
+      "@controllers/*": ["src/controllers/*"],
+      "@routes/*": ["src/routes/*"],
+      "@models/*": ["src/models/*"],
+      "@utils/*": ["src/utils/*"]
+    },
+
+    /* JavaScript Support */
+    "allowJs": true, // Allow JavaScript files in the project
+    "checkJs": false, // Disable type checking for JavaScript files
+
+    /* Emit Options */
+    "noEmit": false, // Allow compilation output
+    "declaration": true, // Generate .d.ts files for TypeScript modules
+    "sourceMap": true, // Generate source maps for debugging
+
+    /* Node.js Compatibility */
+    "esModuleInterop": true, // Enable compatibility with CommonJS modules
+    "forceConsistentCasingInFileNames": true, // Enforce case-sensitive import paths
+    "skipLibCheck": true, // Skip type checking for third-party libraries
+
+    /* Type Checking */
+    "strictNullChecks": true, // Ensure explicit null checks
+    "noImplicitAny": true, // Disallow implicit `any` type
+    "strictFunctionTypes": true, // Enforce strict function parameter types
+    "noUnusedLocals": true, // Report unused local variables
+    "noUnusedParameters": true, // Report unused function parameters
+    "noImplicitReturns": true, // Ensure all code paths return values
+    "noFallthroughCasesInSwitch": true // Prevent fallthrough in switch statements
+  },
+  "include": ["src", "src/types"], // Include `src` and `src/types` folders
+  "exclude": ["node_modules", "dist"] // Exclude `node_modules` and `dist` folders
+}

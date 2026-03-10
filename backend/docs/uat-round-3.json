@@ -1,0 +1,67 @@
+{
+  "source": "UAT Round 3.xlsx",
+  "sheets": {
+    "Sheet1": [
+      {
+        "Issue": "I selected get notified when ready but I never received an email when the depo summary was ready.",
+        "URL": "https://app.testifi.ai/create-summary ",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "Initially, it showed no summaries. I had to refresh the page and then it showed the summary. I didn’t get an email notifying me it was ready.",
+        "URL": "https://app.testifi.ai/summaries",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "After I refreshed the page, it generated the summary on the page. I didn't get an email notifying me it was ready after it completed processing the summary. ",
+        "URL": null,
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "When I attempted to download the summary in Word it states download failed.",
+        "URL": "https://app.testifi.ai/download/87166ba9-15da-48b0-a960-d672ca8a844f",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "When I clicked on the \"Back\" icon on the preview page nothing happened. It wouldn't allow me to go back to the previous page. Also, I wasn't sure if the preview page was intended to be \"John Doe\" as a placeholder instead of the actual Emhart Industries deposition transcript that I uploaded. Please let me know your thoughts. Thanks. ",
+        "URL": "https://app.testifi.ai/preview/87166ba9-15da-48b0-a960-d672ca8a844f",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "On the deposition summary in .pdf format, is it possible to remove \"#Case Metadata\"? Also, it was unable to determine the civil action number perhaps because there were several listed on the first page in the caption. If it can pull the first civil action number on this transcript examplet that would work. Next, the Deposition Title is \"Unknown.\" Can you instruct the LLM to detect \"Continued deposition of Joseph Nadeau\" language on the second line of the first page from this transcript example? On the \"Date\" section, it lists December 17, 2002 but the date on the first page of the transcript states June 24, 2013. Is it possible to instruct the LLM to detect the date on the first 3 lines of the first page of this deposition transcript example?  I noticed on the \"Page Numbers\" column the page numbers 1-2 need to be spaced down since it appears jumbled in the wording \"Page Numbers.\"",
+        "URL": "https://drive.google.com/file/d/1FdfOjKKK0T5LhuqsODfuN3CerK-wuFDv/view?usp=sharing",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "The Emhart Industries deposition transcript is volume II and consists of the cover page and pages 147-219. The deposition transcript pages that are summarized that goes under the Detailed Testimony table should list the summary of pages 150 - 219. However, the depo summary currently lists page numbers 1-18, a blank page for 19, 20-24, 49-60, 73-88, 121-125, 133-137, 162-163, it jumps to157 and leaves 158 blank, and then it picks back up with 159-160, 169, etc. through 458. Here is the link to the Testifi AI depo summary and the link to the Emhart Industries transcript that I uploaded for summary processing. Thanks.",
+        "URL": "https://drive.google.com/file/d/1FdfOjKKK0T5LhuqsODfuN3CerK-wuFDv/view?usp=sharing",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "This is the Emhart Industries Depostion Transcript that I uploaded in Testifi AI to be summarized that I reference above.",
+        "URL": " ",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "Old Instructions: ",
+        "URL": "New instructions.",
+        "Screenshot (If necessary)": null,
+        "Status": null
+      },
+      {
+        "Issue": "**2. Detailed Testimony Table (Markdown):**\n- Create a table with **two columns**: (1) Page Number(s), (2) Summary of Testimony.\n- Each row should summarize a specific page or small range of pages (e.g., 9–11, 12, 13–14, etc.).\n- The summary for each row must be **rich with specific details** from the text:\n  - Names and roles of individuals (attorneys, deponent, others mentioned).\n  - References to **exhibits**, **emails**, or important documents (identify by number or description).\n  - **Key questions and answers**, legal arguments, objections, and important points or admissions.\n  - Dates, critical figures, or short direct quotes (as needed for clarity or emphasis).\n- **Do not generalize.** Instead, create a factual, thorough, and clear summary for each segment, including every key topic, action, or exchange.\n- Structure the table using standard Markdown syntax.\n\nBelow is the transcript text:\n${chunk.text}\n        `.trim()\n        : `\nContinue summarizing the deposition transcript from where the previous chunk ended (pages ${chunk.start}–${chunk.end}). **Do not repeat the metadata.**\n- Use the same Markdown table structure, adding new rows for the next page numbers in this chunk.\n- Continue in the same detailed, page-by-page style.\n\nBelow is the next chunk of transcript:",
+        "URL": null,
+        "Screenshot (If necessary)": null,
+        "Status": null
+      }
+    ]
+  }
+}

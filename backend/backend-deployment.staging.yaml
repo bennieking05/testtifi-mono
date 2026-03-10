@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloudsql-docker/gce-proxy:1.33.2
+          command:
+            - "/cloud_sql_proxy"
+            - "-instances=golden-cosmos-450417-i8:us-central1:testifi=tcp:3306"
+            - "-credential_file=/secrets/cloudsql/credentials.json"
+          volumeMounts:
+            - name: cloudsql-instance-credentials
+              mountPath: /secrets/cloudsql
+              readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+        - name: backend
+          image: gcr.io/golden-cosmos-450417-i8/testifi-backend:latest
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: gcp-service-account
+              mountPath: /var/secrets/google
+              readOnly: true
+          env:
+            - name: NODE_ENV
+              value: "staging"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DATABASE_URL
+            - name: DB_HOST
+              value: "127.0.0.1"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DB_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DB_NAME
+            - name: SENDGRID_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: SENDGRID_API_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: OPENAI_API_KEY
+            - name: EMAIL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: EMAIL_USER
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: JWT_SECRET
+            - name: BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: BASE_URL
+            - name: BACKEND_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: BACKEND_URL
+            - name: STRIPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: STRIPE_API_KEY
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: STRIPE_WEBHOOK_SECRET
+            # ---------- Azure OpenAI (STAGING - GPT-5) ----------
+            - name: AZURE_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: AZURE_OPENAI_API_KEY
+            - name: AZURE_OPENAI_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: AZURE_OPENAI_ENDPOINT
+            # Staging uses GPT-5 (same as production, can be upgraded to test newer models first)
+            - name: AZURE_OPENAI_DEPLOYMENT_NAME
+              value: "gpt-5-testifi"  # Same as production for now
+            - name: AZURE_API_VERSION
+              value: "2025-01-01-preview"  # Latest API version
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 10
+      volumes:
+        - name: cloudsql-instance-credentials
+          secret:
+            secretName: your-cloudsql-credentials
+        - name: gcp-service-account
+          secret:
+            secretName: service-account-json
+
+
+
+

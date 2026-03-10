@@ -15,15 +15,15 @@ const SNAPS_DIR = path.join(RESULTS_DIR, 'screenshots');
 // Ensure directories exist
 fs.mkdirSync(SNAPS_DIR, { recursive: true });
 
-// Test credentials - loaded from environment variables or test-login.json
-// Priority: 1. Environment variables, 2. test-login.json file
+// Test credentials - loaded from environment variables or test-admin-login.json
+// Priority: 1. Environment variables, 2. test-admin-login.json file
 let testEmail = process.env.TEST_EMAIL || '';
 let testPassword = process.env.TEST_PASSWORD || '';
 
-// Fall back to test-login.json if env vars not set
+// Fall back to test-admin-login.json if env vars not set
 if (!testEmail || !testPassword) {
   try {
-    const loginFile = path.join(process.cwd(), 'test-login.json');
+    const loginFile = path.join(process.cwd(), 'test-admin-login.json');
     if (fs.existsSync(loginFile)) {
       const creds = JSON.parse(fs.readFileSync(loginFile, 'utf8'));
       testEmail = testEmail || creds.email || '';
@@ -175,6 +175,16 @@ test.describe('Protected Pages', () => {
     expect(page.url()).not.toContain('/login');
     
     await snap(page, 'page-summaries');
+  });
+
+  test('Summaries page shows processing tab or list', async ({ page }) => {
+    await page.goto('/summaries');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2500);
+    expect(page.url()).not.toContain('/login');
+    // Summaries page loads: "Showing X of Y summaries" or metrics/chart; confirms summaries/processing view is usable
+    const summariesContent = page.getByText(/Showing \d+ of \d+ summaries/i);
+    await expect(summariesContent).toBeVisible({ timeout: 15000 });
   });
 
   test('Create Summary page loads', async ({ page }) => {

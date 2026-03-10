@@ -1,0 +1,50 @@
+steps:
+  # Step 1: Build the Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+      - "--build-arg=VITE_API_URL=$_VITE_API_URL"
+      - "--build-arg=VITE_STRIPE_PUBLISHABLE_KEY=$_VITE_STRIPE_PUBLISHABLE_KEY"
+      - "."
+
+  # Step 2: Push the image to GCR
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+  # Step 3: Get cluster credentials for kubectl
+  - name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        gcloud container clusters get-credentials testifi --zone us-central1-c --project golden-cosmos-450417-i8
+
+  # Step 4: Update the Kubernetes deployment to use the new image
+  - name: "gcr.io/cloud-builders/kubectl"
+    env:
+      - "CLOUDSDK_COMPUTE_ZONE=us-central1-c"
+      - "CLOUDSDK_CONTAINER_CLUSTER=testifi"
+    args:
+      - "set"
+      - "image"
+      - "deployment/frontend"
+      - "frontend=gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+substitutions:
+  _VITE_API_URL: "https://app.testifi.ai"
+  _VITE_STRIPE_PUBLISHABLE_KEY: "pk_live_51Q4c27P0QEFCJzDAus6zWF4ktghPrAi1sagzQbKAyplGhsXBAXJsR2u6XlK5m7jZcSjxqc9eG7asU9BGsuR0REAC00XJ8Wsgbo"
+
+images:
+  - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+ 
+# Logs go to Cloud Logging only (no GCS bucket)
+
+  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET

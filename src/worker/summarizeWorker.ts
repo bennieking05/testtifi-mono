@@ -69,6 +69,8 @@ const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE ==
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1); // Reduced from 3 to 1 to avoid rate limits
 const WORKER_ID = process.env.WORKER_ID || os.hostname();
 const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // keep email payloads <25MB
+// Jobs in "processing" longer than this are reset to "queued" so they can be retried (e.g. after worker crash)
+const STUCK_JOB_THRESHOLD_MS = Number(process.env.STUCK_JOB_THRESHOLD_MS) || 2 * 60 * 60 * 1000; // 2 hours
 
 async function extractFullText(
   buffer: Buffer,
@@ -1423,6 +1425,22 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
           continue;
         }
       }
+      // Single page in first column: | 200 | Topic | Summary | or | p.200 | Topic | Summary |
+      const singlePage = pageRange.match(/^p?\.?\s*(\d+)$/i) || pageRange.match(/^(\d+)$/);
+      if (singlePage && summary.length > 10) {
+        const pageNum = parseInt(singlePage[1], 10);
+        if (pageNum > 0) {
+          entries.push({
+            startPage: pageNum,
+            endPage: pageNum,
+            lineNumbers: '',
+            topic,
+            summary,
+          });
+          if (debug) console.log(`[parseToRangeEntries] Matched 3-col single page ${pageNum}`);
+          continue;
+        }
+      }
     }
 
     // Pattern: p.START[-END][:LINESTART-LINEEND]
@@ -1434,13 +1452,13 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
       const lineStart = hasLineNumbers ? parseInt(pageMatch[3], 10) : 1;
       const lineEnd = hasLineNumbers ? parseInt(pageMatch[4], 10) : 25;
       
-      // Parse table columns - split by pipe and extract topic/witness/summary
-      // Formats:
-      // 2 columns: | Page/Line | Summary |
-      // 3 columns: | Page/Line | Topic | Summary |
-      // 4 columns: | Page/Line | Witness | Topic | Summary |
+      // Parse table columns - split by pipe or tab and extract topic/witness/summary
+      // Formats: pipe | Page | Topic | Summary |  or  tab  p.200 \t Witness \t Topic \t Summary
       const stripped = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-      const parts = stripped.split('|').map(p => p.trim());
+      let parts = stripped.split('|').map(p => p.trim());
+      if (parts.length < 2 && line.includes('\t')) {
+        parts = line.split('\t').map(p => p.trim()).filter(Boolean);
+      }
       
       let topic = '';
       let witness: string | undefined;
@@ -1450,14 +1468,14 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
         // 2 columns: Page | Summary
         summary = parts[1];
       } else if (parts.length === 3) {
-        // 3 columns: Page | Topic | Summary
+        // 3 columns: Page | Topic | Summary (or p.200 \t Witness \t Topic when summary in next)
         topic = parts[1];
-        summary = parts[2];
+        summary = parts[2] || '';
       } else if (parts.length >= 4) {
         // 4 columns: Page | Witness | Topic | Summary
         witness = parts[1];
         topic = parts[2];
-        summary = parts.slice(3).join(' | ').trim();
+        summary = parts.slice(3).join(' ').trim();
       }
       
       // #region agent log H6
@@ -1751,6 +1769,21 @@ async function work() {
     if (pollCount % 6 === 1) {
       // Log every minute (every 6 polls at 10s interval)
       console.log(`[WORKER] Polling for jobs... (poll #${pollCount})`);
+    }
+    // 0) Reset jobs stuck in "processing" too long (e.g. worker crashed or timed out)
+    if (pollCount % 12 === 1) {
+      const stuckBefore = new Date(Date.now() - STUCK_JOB_THRESHOLD_MS);
+      try {
+        const reset = await prisma.summaryJob.updateMany({
+          where: { status: "processing", updatedAt: { lt: stuckBefore } },
+          data: { status: "queued", error: null },
+        });
+        if (reset.count > 0) {
+          console.log(`[WORKER] Reset ${reset.count} stuck job(s) (processing > ${STUCK_JOB_THRESHOLD_MS / 3600000}h) to queued`);
+        }
+      } catch (resetErr: any) {
+        console.warn("[WORKER] Stuck-job reset failed:", resetErr?.message || resetErr);
+      }
     }
     // 1) Find and atomically claim the next queued job
     const candidate = await prisma.summaryJob.findFirst({

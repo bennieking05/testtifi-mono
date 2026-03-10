@@ -55,7 +55,7 @@ echo "🔨 Building frontend image..."
 cd ../loveable
 gcloud builds submit \
     --config=frontend-cloudbuild-cloudrun.yaml \
-    --substitutions=_IMAGE_TAG=staging,_VITE_API_URL=https://staging.app.testifi.ai,_VITE_STRIPE_PUBLISHABLE_KEY=pk_test_51SPyHb1PKdcq2R5zdlTdxGxpj8Lc6AFNbeBfGNkJ5QmMC6IOOE8osz3KqQ3a04RCUsbSPhl694U5p35JAmOuYT0w00PXMi588j .
+    --substitutions=_IMAGE_TAG=staging,_VITE_API_URL=https://testifi-backend-staging-748916208557.us-central1.run.app,_VITE_STRIPE_PUBLISHABLE_KEY=pk_test_51SPyHb1PKdcq2R5zdlTdxGxpj8Lc6AFNbeBfGNkJ5QmMC6IOOE8osz3KqQ3a04RCUsbSPhl694U5p35JAmOuYT0w00PXMi588j .
 
 cd ../cloudrun
 
@@ -85,7 +85,7 @@ gcloud run deploy testifi-summarize-worker-staging \
     --add-cloudsql-instances $CLOUD_SQL_INSTANCE \
     --service-account $SA_EMAIL \
     --no-allow-unauthenticated \
-    --min-instances 0 \
+    --min-instances 1 \
     --max-instances 1 \
     --memory 2Gi \
     --cpu 2 \
