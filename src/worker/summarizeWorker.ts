@@ -1609,7 +1609,7 @@ function assembleSortedSummary(
             endPage: groupEnd,
             lineNumbers: '',
             topic: 'Procedural',
-            summary: '[LLM did not summarize - page contained procedural matters, minimal content, or administrative notations]'
+            summary: '—'
           });
           // Mark these as covered
           for (let p = rangeStart; p <= groupEnd; p++) {
@@ -1639,7 +1639,7 @@ function assembleSortedSummary(
     let lineNum = e.lineNumbers;
     
     // Check if this is a placeholder entry (no line numbers)
-    const isPlaceholder = e.summary.includes('[LLM did not summarize');
+    const isPlaceholder = e.summary === '—' || e.summary.includes('[LLM did not summarize');
 
     // For actual LLM summaries, use detected line ranges if available
     if (!isPlaceholder && detectedLineRanges) {

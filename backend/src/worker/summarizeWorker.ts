@@ -859,14 +859,19 @@ function extractLegalMetadata(
   // Look at more content: first several pages + a decent line budget catches most cover/index formats.
   const header = sliceFirstPages(tr, 10);
 
-  const civMatch = header.match(
-    /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
-  );
-  const civil = civMatch?.[2] || "[Unknown]";
+  const civMatch =
+    header.match(
+      /(?:CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)\s*([\d]+:\d{2}-[a-z]{2}-\d+(?:-[A-Z]{2,})?)/i
+    ) ||
+    header.match(
+      /(?:CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
+    );
+  const civil = civMatch?.[1]?.trim() || null;
 
   const captionLine =
     lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
-  const caption = captionLine.trim() || `Civil Action No. ${civil}`;
+  const caption =
+    captionLine.trim() || (civil ? `Civil Action No. ${civil}` : "");
 
   const deponentMatchers: Array<{ pattern: RegExp; name: string }> = [
     // explicit "Witness" in index
@@ -1114,7 +1119,7 @@ PAGE GROUPING (UP TO 5 PAGES PER TOPIC):
 - If line numbers aren't visible, use format: StartPage-EndPage
 
 TOPIC LABELS (2-4 words):
-- Use descriptive labels: "Surgical Procedure", "Pre-Op Assessment", "Employment History", "Contract Terms", "Document Review", "Damages", "Expert Opinion", "Admissions"
+- Use descriptive labels: "Surgical Procedure", "Pre-Op Assessment", "Employment History", "Contract Terms", "Document Review", "Damages", "Expert Opinion", "Acknowledgment"
 - Use "Preliminary Matters" for introductions, "Procedural Matters" for breaks/recesses
 
 VALID EXAMPLES:
@@ -1596,7 +1601,7 @@ function assembleSortedSummary(
             startPage: rangeStart,
             endPage: groupEnd,
             lineNumbers: '',
-            summary: '[Pages not explicitly labeled in LLM output - content may be covered in adjacent entries]'
+            summary: '—'
           });
           // Mark these as covered
           for (let p = rangeStart; p <= groupEnd; p++) {
@@ -1626,7 +1631,7 @@ function assembleSortedSummary(
     let lineNum = e.lineNumbers;
     
     // Check if this is a placeholder entry (no line numbers)
-    const isPlaceholder = e.summary.includes('[LLM did not summarize');
+    const isPlaceholder = e.summary === '—' || e.summary.includes('[LLM did not summarize');
 
     // For actual LLM summaries, use detected line ranges if available
     if (!isPlaceholder && detectedLineRanges) {
@@ -2229,6 +2234,8 @@ async function work() {
             try {
               console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
               const { rows } = parseMarkdown(merged);
+              // Exclude placeholder-only rows from attachments
+              const displayRows = rows.filter((r) => (r.summary || "").trim() !== "—");
               const filePages =
                 typeof job.file?.pages === "number" && !Number.isNaN(job.file.pages)
                   ? String(job.file.pages)
@@ -2253,13 +2260,13 @@ async function work() {
               const docxBuffer = await generateDocxBuffer(
                 jobData,
                 metadata,
-                { meta: metaMarkdown.split("\n"), rows },
+                { meta: metaMarkdown.split("\n"), rows: displayRows },
                 merged
               );
               const pdfBuffer = await generatePdfBuffer(
                 jobData,
                 metadata,
-                { meta: metaMarkdown.split("\n"), rows },
+                { meta: metaMarkdown.split("\n"), rows: displayRows },
                 merged
               );
               const totalBytes = docxBuffer.length + pdfBuffer.length;

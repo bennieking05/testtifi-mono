@@ -382,14 +382,15 @@ test.describe('Dialogs and Modals', () => {
     await page.goto('/summaries');
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
-    await page.waitForTimeout(1000);
 
-    // Look for preview buttons
+    // Look for preview buttons (button with text "Preview" in the actions column)
     const previewButtons = page.locator('button:has-text("Preview"), a:has-text("Preview"), [class*="preview"]');
     
     if (await previewButtons.count() > 0) {
       await previewButtons.first().click();
-      await page.waitForTimeout(1000);
+      // Wait for modal overlay or content (preview may load via API)
+      await page.locator('[class*="fixed"][class*="inset-0"]').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(1500);
       await snap(page, 'dialog-preview-modal');
     }
   });

@@ -166,6 +166,8 @@ router.post(
                     ? Number(job.file.pages)
                     : undefined) || undefined;
                 const boundedRows = enforcePageBounds(rows, { maxPage });
+                // Exclude placeholder-only rows (e.g. "p.16-18  General Testimony  —") from output
+                const displayRows = boundedRows.filter((r) => (r.summary || "").trim() !== "—");
 
                 // Convert job to match JobData interface (pages needs to be string)
                 const jobData = {
@@ -188,7 +190,7 @@ router.post(
                 const docxBuffer = await generateDocxBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows: boundedRows },
+                  { meta: metadataLines, rows: displayRows },
                   summaryContent
                 );
                 const docxFilename = `${
@@ -207,7 +209,7 @@ router.post(
                 const pdfBuffer = await generatePdfBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows: boundedRows },
+                  { meta: metadataLines, rows: displayRows },
                   summaryContent
                 );
                 const pdfFilename = `${

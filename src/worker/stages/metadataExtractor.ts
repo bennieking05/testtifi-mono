@@ -183,15 +183,20 @@ export function extractLegalMetadata(
   const lines = tr.split(/\r?\n/);
   const header = sliceFirstPages(tr, 10);
 
-  // Case number
-  const civMatch = header.match(
-    /(CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
-  );
-  const civil = civMatch?.[2] || "[Unknown]";
+  // Case number — support "Civil Action No. 1:22-cv-12345", "Case No. 12345", etc.
+  const civMatch =
+    header.match(
+      /(?:CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)\s*([\d]+:\d{2}-[a-z]{2}-\d+(?:-[A-Z]{2,})?)/i
+    ) ||
+    header.match(
+      /(?:CIVIL\s+ACTION\s+NO\.?|C\.A\.\s*NO\.?|CASE\s*NO\.?)[^\w]*(\w[\w\-\/:]*)/i
+    );
+  const civil = civMatch?.[1]?.trim() || null;
 
-  // Case caption
+  // Case caption — never use "Civil Action No. [Unknown]"
   const captionLine = lines.slice(0, 40).find((l) => /\b(v\.|vs\.|versus)\b/i.test(l)) || "";
-  const caption = captionLine.trim() || `Civil Action No. ${civil}`;
+  const caption =
+    captionLine.trim() || (civil ? `Civil Action No. ${civil}` : "");
 
   // Deponent - comprehensive patterns to handle various transcript formats
   const deponentMatchers: Array<{ pattern: RegExp; name: string }> = [
@@ -378,7 +383,7 @@ export function extractLegalMetadata(
 
   return {
     caseCaption: caption,
-    caseNumber: civil === "[Unknown]" ? null : civil,
+    caseNumber: civil,
     deponent,
     depositionDate: date,
   };

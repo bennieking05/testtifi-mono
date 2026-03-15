@@ -75,6 +75,10 @@ router.get(
           ? Number(job.file.pages)
           : undefined) || undefined;
       const boundedRows = enforcePageBounds(rows, { maxPage });
+      // Exclude placeholder-only rows (e.g. "p.16-18  General Testimony  —") from output
+      const displayRows = boundedRows.filter((r) => (r.summary || "").trim() !== "—");
+      const hasMultipleWitnesses =
+        new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
       
       const suppressedPrefixes = [
         "Deponent:", "Case Title:", "Source File:", "Pages:", "Date:",
@@ -93,13 +97,20 @@ router.get(
         .map((m) => `<p>${escapeHtml(m)}</p>`)
         .join("\n");
       
-      const tableRowsHtml = boundedRows
-        .map((row) =>
-          `<tr><td>${escapeHtml(row.pageLine)}</td><td>${escapeHtml(row.witness)}</td><td>${escapeHtml(row.topic)}</td><td>${escapeHtml(row.summary).replace(/\n/g, "<br/>")}</td></tr>`
-        )
-        .join("\n");
+      const tableRowsHtml = hasMultipleWitnesses
+        ? displayRows
+            .map((row) =>
+              `<tr><td>${escapeHtml(row.pageLine)}</td><td>${escapeHtml(row.witness)}</td><td>${escapeHtml(row.topic)}</td><td>${escapeHtml(row.summary).replace(/\n/g, "<br/>")}</td></tr>`
+            )
+            .join("\n")
+        : displayRows
+            .map((row) =>
+              `<tr><td>${escapeHtml(row.pageLine)}</td><td>${escapeHtml(row.topic)}</td><td>${escapeHtml(row.summary).replace(/\n/g, "<br/>")}</td></tr>`
+            )
+            .join("\n");
       
-      const tableHtml = `
+      const tableHtml = hasMultipleWitnesses
+        ? `
         <table>
           <thead>
             <tr>
@@ -107,6 +118,19 @@ router.get(
               <th style="width: 13%">Witness</th>
               <th style="width: 15%">Topic</th>
               <th style="width: 60%">Summary</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRowsHtml}
+          </tbody>
+        </table>`
+        : `
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 15%">Page/Line</th>
+              <th style="width: 18%">Topic</th>
+              <th style="width: 67%">Summary</th>
             </tr>
           </thead>
           <tbody>
@@ -172,7 +196,7 @@ router.get(
     ${logoHtml}
     <h1>${titleOfDocument}</h1>
     <div style="text-align: left; margin: 20px 0;">
-      <p><strong>Deponent:</strong> ${deponentName}</p>
+      ${hasMultipleWitnesses ? `<p><strong>Deponent:</strong> ${deponentName}</p>` : ""}
       <p><strong>Case Title:</strong> ${coverTitle}</p>
       <p><strong>Source File:</strong> ${job.fileName || "Unknown"}</p>
       ${coverPages ? `<p><strong>Pages:</strong> ${coverPages}</p>` : ""}
@@ -232,9 +256,12 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
     if (/contract|agreement|term|provision/i.test(lower)) return "Contract Terms";
     if (/medical|surgery|procedure|patient|doctor|hospital/i.test(lower)) return "Medical Treatment";
     if (/expert|opinion|analysis|conclusion/i.test(lower)) return "Expert Opinion";
-    if (/admit|acknowledge|confirm|concede/i.test(lower)) return "Admissions";
+    if (/admit|acknowledge|confirm|concede/i.test(lower)) return "Acknowledgment";
     return "General Testimony";
   };
+
+  const normalizeTopic = (topic: string): string =>
+    (topic || "").replace(/\bAdmissions?\b/i, "Acknowledgment").trim() || "General";
 
   mdText.split(/\r?\n/).forEach((raw) => {
     let trimmed = raw.trim();
@@ -250,7 +277,7 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
       if (pageMatch) {
         seenRow = true;
         if (cells.length >= 3) {
-          rows.push({ pageLine: pageLineCell, witness: witness, topic: cells[1] || "General", summary: cells.slice(2).join(" | ").trim() || "" });
+          rows.push({ pageLine: pageLineCell, witness: witness, topic: normalizeTopic(cells[1] || "General"), summary: cells.slice(2).join(" | ").trim() || "" });
         } else {
           const summaryText = cells[1] || "";
           rows.push({ pageLine: pageLineCell, witness: witness, topic: deriveTopicFromSummary(summaryText), summary: summaryText });
