@@ -22,8 +22,9 @@ TOPIC GROUPING (CRITICAL):
 
 TOPIC LABELS:
 - Each row MUST have a concise topic label (2-5 words).
-- Examples: "Compensation Structure", "Employment History", "Sales Territories", "Commission Disputes", "Document Review", "Exhibit Discussion".
+- Examples: "Compensation Structure", "Employment History", "Sales Territories", "Commission Disputes", "Document Review", "Exhibit Discussion", "Product Description".
 - Use consistent topic labels when the same subject continues.
+- "Educational background" / "Education": ONLY the witness's formal schooling, degrees, licenses, and training—not educational products, curricula, or instructional materials (use "Product Description" or "Document Review" for those).
 
 PAGE/LINE FORMAT:
 - Format as page ranges: "p.X-Y" for multiple pages, "p.X:L1-L2" for specific lines.
@@ -42,7 +43,8 @@ AVOID:
 - Q: and A: format (use narrative prose)
 - Vague topic labels
 - Commentary, apologies, or prompts to continue
-- Header rows (output data rows only)`,
+- Header rows (output data rows only)
+- Mentioning OCR, scanned text, text extraction, or page header markers (e.g. === PAGE X ===) in the Summary column`,
   temperature: 0.0,
   maxTokens: 4000,
 };

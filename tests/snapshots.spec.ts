@@ -34,7 +34,7 @@ test('snap on nav & clicks; log console + network', async ({ page, context }) =>
 
   const snap = async (tag: string) => {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    await page.screenshot({ path: path.join(SNAP_DIR, `${ts}_${tag}.png`), fullPage: true });
+    await page.screenshot({ path: path.join(SNAP_DIR, `${ts}_${tag}.png`), fullPage: false, timeout: 5000 });
   };
 
   await page.goto('/', { waitUntil: 'networkidle' });

@@ -123,7 +123,7 @@ timestamp,target,total_tests,passed,failed,pass_rate,api_passed,api_failed,front
 ### Preview (`/api/preview`)
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/preview?id=X` | Yes | Get summary preview HTML |
+| GET | `/api/preview?id=X` | Yes | Get summary preview HTML (cover metadata; body omits duplicate Case Caption/Title/Date lines; unfilled page ranges show stub text) |
 
 ### Snapshots (`/api/snapshots`)
 | Method | Endpoint | Auth | Description |

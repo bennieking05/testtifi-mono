@@ -191,7 +191,7 @@ async function main() {
   
   // Frontend URLs for Playwright tests
   const FRONTEND_URLS = {
-    local: 'http://localhost:5173',
+    local: 'http://localhost:3000',
     staging: 'https://staging.app.testifi.ai',
     prod: 'https://app.testifi.ai',
   };

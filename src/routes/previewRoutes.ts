@@ -10,6 +10,7 @@ import {
   renderMetadataMarkdown,
 } from "../utils/summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
+import { sanitizeSummaryMetaLanguage } from "../utils/summarySanitize";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -69,6 +70,12 @@ router.get(
         rows.map(([p, s]) => [p, s] as [string, string]),
         { maxPage }
       );
+      const PLACEHOLDER_STUB =
+        "No summary generated for this page range; see transcript.";
+      const displayRows: Array<[string, string]> = boundedRows.map(([p, s]) => {
+        const text = (s || "").trim() === "—" ? PLACEHOLDER_STUB : s || "";
+        return [p, sanitizeSummaryMetaLanguage(text)];
+      });
       const suppressedPrefixes = [
         "Deponent:",
         "Case Title:",
@@ -82,18 +89,30 @@ router.get(
         "Date of Deposition:",
       ];
 
-      const filteredMeta = meta.filter((line) => {
+      const lineMatchesSuppressedPrefix = (line: string): boolean => {
         const trimmed = line.trim();
-        if (!trimmed) return false;
-        return !suppressedPrefixes.some((prefix) =>
-          trimmed.toLowerCase().startsWith(prefix.toLowerCase())
-        );
-      });
-      const metadataParagraphs = metadataMarkdown.split("\n").filter(Boolean);
+        if (!trimmed) return true;
+        const lower = trimmed.toLowerCase();
+        return suppressedPrefixes.some((prefix) => {
+          const pl = prefix.toLowerCase();
+          const bare = pl.replace(/:\s*$/, "");
+          return (
+            lower.startsWith(pl) ||
+            lower.startsWith(`${bare}:`) ||
+            lower.startsWith(`${bare}.`)
+          );
+        });
+      };
+
+      const filteredMeta = meta.filter((line) => !lineMatchesSuppressedPrefix(line));
+      const metadataParagraphs = metadataMarkdown
+        .split("\n")
+        .filter(Boolean)
+        .filter((line) => !lineMatchesSuppressedPrefix(line));
       const metaHtml = [...metadataParagraphs, ...filteredMeta]
         .map((m) => `<p>${escapeHtml(m)}</p>`)
         .join("\n");
-      const tableRowsHtml = boundedRows
+      const tableRowsHtml = displayRows
         .map(
           ([p, s]) =>
             `<tr><td>${escapeHtml(p)}</td><td>${escapeHtml(s).replace(/\n/g, '<br/>')}</td></tr>`

@@ -28,6 +28,7 @@ import {
   renderMetadataMarkdown,
   saveSummaryMetadata,
 } from "../utils/summaryMetadata";
+import { sanitizeSummaryMetaLanguage } from "../utils/summarySanitize";
 import {
   runAllJudges,
   formatJudgeResultsForStorage,
@@ -1099,7 +1100,11 @@ This batch contains ${pagesCount} transcript pages: ${pagesList}
 TONE - FACTUAL SUMMARY ONLY:
 - Report what the witness SAID using: "testified", "stated", "confirmed", "denied"
 - NO analysis, interpretation, or commentary
+- Do NOT mention OCR, scanned text, or page header markers in the summary text
 - Include: names, dates, dollar amounts, exhibits, specific statements
+
+TOPIC LABELS (when using topic+summary columns):
+- "Educational background" means ONLY the witness's degrees, schools, licenses, and training—not educational products or e-learning offerings (use Product Description or Document Review for those)
 
 PAGE GROUPING (up to 5 consecutive pages per row):
 - You MAY group consecutive pages on the same topic: | p.${firstPage}-${Math.min(firstPage + 4, lastPage)}[:Y-Z] | [Summary] |
@@ -1526,53 +1531,54 @@ function assembleSortedSummary(
     const cleaned = cleanupPageReferences(output);
     // Enable debug for first batch to diagnose parsing issues
     const debug = i === 0;
-    allEntries.push(...parseToRangeEntries(cleaned, debug));
-  }
-  
-  // Sort by start page
-  allEntries.sort((a, b) => a.startPage - b.startPage);
-  
-  // Deduplicate overlapping entries: for each start page, keep the entry with longest summary
-  const dedupedEntries: PageRangeEntry[] = [];
-  const coveredByEntry = new Map<number, PageRangeEntry>(); // Track which entry covers each page
-  
-  for (const entry of allEntries) {
-    // Check if this entry's start page is already covered by a previous entry
-    const existingEntry = coveredByEntry.get(entry.startPage);
-    if (existingEntry) {
-      // Only replace if new entry has longer summary
-      if (entry.summary.length > existingEntry.summary.length) {
-        // Remove old entry and add new one
-        const idx = dedupedEntries.indexOf(existingEntry);
-        if (idx !== -1) dedupedEntries.splice(idx, 1);
-        dedupedEntries.push(entry);
-        // Update coverage
-        for (let p = entry.startPage; p <= entry.endPage; p++) {
-          coveredByEntry.set(p, entry);
-        }
-      }
-    } else {
-      // Check if this entry overlaps with existing entries
-      let hasOverlap = false;
-      for (let p = entry.startPage; p <= entry.endPage; p++) {
-        if (coveredByEntry.has(p)) {
-          hasOverlap = true;
-          break;
-        }
-      }
-      
-      if (!hasOverlap) {
-        dedupedEntries.push(entry);
-        for (let p = entry.startPage; p <= entry.endPage; p++) {
-          coveredByEntry.set(p, entry);
-        }
+    const parsed = parseToRangeEntries(cleaned, debug);
+    for (const e of parsed) {
+      if (e.summary !== "—") {
+        e.summary = sanitizeSummaryMetaLanguage(e.summary);
       }
     }
+    allEntries.push(...parsed);
   }
-  
-  // Re-sort after deduplication
+
+  // Sort by start page
+  allEntries.sort((a, b) => a.startPage - b.startPage);
+
+  // Split entries on overlap: keep only pages not yet covered (avoids dropping whole rows when batches overlap)
+  const dedupedEntries: PageRangeEntry[] = [];
+  const pagesClaimed = new Set<number>();
+
+  const uncoveredFragments = (
+    entry: PageRangeEntry
+  ): Array<{ start: number; end: number }> => {
+    const out: Array<{ start: number; end: number }> = [];
+    let runStart: number | null = null;
+    for (let p = entry.startPage; p <= entry.endPage; p++) {
+      if (!pagesClaimed.has(p)) {
+        if (runStart === null) runStart = p;
+      } else if (runStart !== null) {
+        out.push({ start: runStart, end: p - 1 });
+        runStart = null;
+      }
+    }
+    if (runStart !== null) out.push({ start: runStart, end: entry.endPage });
+    return out;
+  };
+
+  for (const entry of allEntries) {
+    if (entry.summary === "—") continue;
+    for (const frag of uncoveredFragments(entry)) {
+      dedupedEntries.push({
+        startPage: frag.start,
+        endPage: frag.end,
+        lineNumbers: entry.lineNumbers,
+        summary: entry.summary,
+      });
+      for (let p = frag.start; p <= frag.end; p++) pagesClaimed.add(p);
+    }
+  }
+
   dedupedEntries.sort((a, b) => a.startPage - b.startPage);
-  
+
   // Track which pages are covered
   const coveredPages = new Set<number>();
   for (const entry of dedupedEntries) {

@@ -19,7 +19,11 @@ fs.mkdirSync(SNAPS_DIR, { recursive: true });
 async function snap(page: any, name: string) {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `${ts}_${name}.png`;
-  await page.screenshot({ path: path.join(SNAPS_DIR, filename), fullPage: true });
+  try {
+    await page.screenshot({ path: path.join(SNAPS_DIR, filename), fullPage: false, timeout: 5000 });
+  } catch (e) {
+    console.log(`Failed to take screenshot ${name}:`, e);
+  }
   return filename;
 }
 

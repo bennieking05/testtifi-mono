@@ -10,6 +10,7 @@ import {
   renderMetadataMarkdown,
 } from "../utils/summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
+import { sanitizeSummaryMetaLanguage } from "../utils/summarySanitize";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -75,24 +76,42 @@ router.get(
           ? Number(job.file.pages)
           : undefined) || undefined;
       const boundedRows = enforcePageBounds(rows, { maxPage });
-      // Exclude placeholder-only rows (e.g. "p.16-18  General Testimony  —") from output
-      const displayRows = boundedRows.filter((r) => (r.summary || "").trim() !== "—");
+      const PLACEHOLDER_STUB =
+        "No summary generated for this page range; see transcript.";
+      const displayRows = boundedRows.map((r) => ({
+        ...r,
+        summary: sanitizeSummaryMetaLanguage(
+          (r.summary || "").trim() === "—" ? PLACEHOLDER_STUB : r.summary || ""
+        ),
+      }));
       const hasMultipleWitnesses =
         new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
-      
+
       const suppressedPrefixes = [
         "Deponent:", "Case Title:", "Source File:", "Pages:", "Date:",
         "Upload Date:", "Download Date:", "Case Caption:", "Title of Document:", "Date of Deposition:",
       ];
 
-      const filteredMeta = meta.filter((line) => {
+      const lineMatchesSuppressedPrefix = (line: string): boolean => {
         const trimmed = line.trim();
-        if (!trimmed) return false;
-        return !suppressedPrefixes.some((prefix) =>
-          trimmed.toLowerCase().startsWith(prefix.toLowerCase())
-        );
-      });
-      const metadataParagraphs = metadataMarkdown.split("\n").filter(Boolean);
+        if (!trimmed) return true;
+        const lower = trimmed.toLowerCase();
+        return suppressedPrefixes.some((prefix) => {
+          const pl = prefix.toLowerCase();
+          const bare = pl.replace(/:\s*$/, "");
+          return (
+            lower.startsWith(pl) ||
+            lower.startsWith(`${bare}:`) ||
+            lower.startsWith(`${bare}.`)
+          );
+        });
+      };
+
+      const filteredMeta = meta.filter((line) => !lineMatchesSuppressedPrefix(line));
+      const metadataParagraphs = metadataMarkdown
+        .split("\n")
+        .filter(Boolean)
+        .filter((line) => !lineMatchesSuppressedPrefix(line));
       const metaHtml = [...metadataParagraphs, ...filteredMeta]
         .map((m) => `<p>${escapeHtml(m)}</p>`)
         .join("\n");
@@ -251,7 +270,23 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
     if (/procedural|recess|break|off.?the.?record/i.test(lower)) return "Procedural Matters";
     if (/exhibit|document|email|letter|memo/i.test(lower)) return "Document Review";
     if (/employ|job|position|title|role|work/i.test(lower)) return "Employment History";
-    if (/educat|school|degree|graduate|university/i.test(lower)) return "Education Background";
+    const eduProductCue =
+      /\beducational\s+product\b|\beducat(?:ion|ional)?\s+(?:software|platform|program|materials?|content|course|curriculum)\b|\btraining\s+materials?\b|\be-?learning\b/i;
+    const witnessEduCue =
+      /\b(degree|diploma|bachelor|master|ph\.?d|doctorate|graduated|university|college|law\s+school|medical\s+school|residency|license\s+certification|where\s+(?:did\s+you\s+)?(?:go\s+to\s+)?school|educational\s+background)\b/i;
+    if (
+      !eduProductCue.test(lower) &&
+      witnessEduCue.test(lower)
+    ) {
+      return "Education Background";
+    }
+    if (
+      /(?:^|[^a-z])school\b/.test(lower) &&
+      !eduProductCue.test(lower) &&
+      /(?:degree|graduate|university|college|diploma|major|minor|gpa)\b/i.test(lower)
+    ) {
+      return "Education Background";
+    }
     if (/damage|injur|harm|loss|cost/i.test(lower)) return "Damages";
     if (/contract|agreement|term|provision/i.test(lower)) return "Contract Terms";
     if (/medical|surgery|procedure|patient|doctor|hospital/i.test(lower)) return "Medical Treatment";

@@ -54,7 +54,7 @@ export async function evidenceScreenshot(
   const filename = `${padded}-${name}-${viewport}.png`;
   const filepath = path.join(EVIDENCE_DIR, filename);
 
-  await page.screenshot({ path: filepath, fullPage: true });
+  await page.screenshot({ path: filepath, fullPage: false, timeout: 5000 });
   screenshotCount++;
 
   return filepath;
