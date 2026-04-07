@@ -1,0 +1,51 @@
+# Full staging regression: API (api-regression.mjs) + Playwright (tests/regression/).
+# PRs still use playwright-regression.yml (Playwright only) for faster feedback.
+name: Staging full regression
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily 06:00 UTC — adjust in repo Settings if you prefer another window
+    - cron: '0 6 * * *'
+  push:
+    branches: [staging]
+
+permissions:
+  contents: read
+
+jobs:
+  staging-regression:
+    name: API + Playwright vs staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run full staging regression
+        run: npm run test:regression:staging
+        env:
+          TEST_EMAIL: ${{ secrets.TEST_EMAIL }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+          TESTIFI_ADMIN_EMAIL: ${{ secrets.TESTIFI_ADMIN_EMAIL }}
+          TESTIFI_ADMIN_PASSWORD: ${{ secrets.TESTIFI_ADMIN_PASSWORD }}
+
+      - name: Upload test-results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-regression-test-results
+          path: test-results/
+          retention-days: 14

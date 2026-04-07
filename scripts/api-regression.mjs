@@ -36,9 +36,39 @@ const BASE_URLS = {
 
 const BASE = BASE_URLS[TARGET] || BASE_URLS.local;
 
-// Test credentials: use admin for all authenticated endpoints
+// Test credentials: use admin for all authenticated endpoints.
+// CI: set TESTIFI_ADMIN_EMAIL + TESTIFI_ADMIN_PASSWORD, or TEST_EMAIL + TEST_PASSWORD.
+// Local: test-admin-login.json at repo root (gitignored).
 const LOGIN_FILE = path.join(ROOT, 'test-admin-login.json');
-const ADMIN_LOGIN_FILE = path.join(ROOT, 'test-admin-login.json');
+
+/**
+ * @returns {{ email: string, password: string } | null}
+ */
+function getLoginCredentials() {
+  const email =
+    process.env.TESTIFI_ADMIN_EMAIL?.trim() ||
+    process.env.TEST_EMAIL?.trim() ||
+    '';
+  const password =
+    process.env.TESTIFI_ADMIN_PASSWORD ||
+    process.env.TEST_PASSWORD ||
+    '';
+  if (email && password) {
+    return { email, password };
+  }
+  if (!fs.existsSync(LOGIN_FILE)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(LOGIN_FILE, 'utf8'));
+    if (parsed?.email && parsed?.password) {
+      return { email: parsed.email, password: parsed.password };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 // Results output
 const RESULTS_DIR = path.join(ROOT, 'test-results');
@@ -175,17 +205,15 @@ async function testEndpoint(name, method, endpoint, options = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function getAuthToken() {
-  if (!fs.existsSync(LOGIN_FILE)) {
-    console.log('⚠️  No test-admin-login.json found, skipping authenticated tests');
+  const creds = getLoginCredentials();
+  if (!creds) {
+    console.log(
+      '⚠️  No API test credentials (env TESTIFI_ADMIN_* / TEST_* or test-admin-login.json), skipping authenticated tests'
+    );
     return null;
   }
-  
-  const { email, password } = JSON.parse(fs.readFileSync(LOGIN_FILE, 'utf8'));
-  if (!email || !password) {
-    console.log('⚠️  test-admin-login.json missing email or password');
-    return null;
-  }
-  
+
+  const { email, password } = creds;
   const result = await request('POST', '/api/auth/login', { body: { email, password } });
   
   if (result.status === 200 && result.data?.accessToken) {
@@ -197,17 +225,15 @@ async function getAuthToken() {
 }
 
 async function getAdminAuthToken() {
-  if (!fs.existsSync(ADMIN_LOGIN_FILE)) {
-    console.log('⚠️  No test-admin-login.json found, skipping admin tests');
+  const creds = getLoginCredentials();
+  if (!creds) {
+    console.log(
+      '⚠️  No API test credentials (env TESTIFI_ADMIN_* / TEST_* or test-admin-login.json), skipping admin tests'
+    );
     return null;
   }
-  
-  const { email, password } = JSON.parse(fs.readFileSync(ADMIN_LOGIN_FILE, 'utf8'));
-  if (!email || !password) {
-    console.log('⚠️  test-admin-login.json missing email or password');
-    return null;
-  }
-  
+
+  const { email, password } = creds;
   const result = await request('POST', '/api/auth/login', { body: { email, password } });
   
   if (result.status === 200 && result.data?.accessToken) {

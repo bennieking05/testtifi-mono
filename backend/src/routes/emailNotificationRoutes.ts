@@ -156,8 +156,11 @@ router.post(
 
                 const [buf] = await bucket.file(key).download();
                 const summaryContent = buf.toString("utf-8");
-                const { rows } = parseMarkdown(summaryContent);
                 const metadata = await resolveSummaryMetadata(bucket, job as any);
+                const { rows, depositionOverview } = parseMarkdown(
+                  summaryContent,
+                  metadata.deponent || job.file?.deponent || "Not Specified"
+                );
                 const metadataLines = renderMetadataMarkdown(metadata).split("\n");
                 const maxPage =
                   (metadata.totalPages && metadata.totalPages > 0
@@ -190,7 +193,7 @@ router.post(
                 const docxBuffer = await generateDocxBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows: displayRows },
+                  { meta: metadataLines, rows: displayRows, depositionOverview },
                   summaryContent
                 );
                 const docxFilename = `${
@@ -209,7 +212,7 @@ router.post(
                 const pdfBuffer = await generatePdfBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows: displayRows },
+                  { meta: metadataLines, rows: displayRows, depositionOverview },
                   summaryContent
                 );
                 const pdfFilename = `${

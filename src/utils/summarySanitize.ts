@@ -14,6 +14,20 @@ export function sanitizeSummaryMetaLanguage(summary: string): string {
   for (const re of leadingPatterns) {
     s = s.replace(re, "").trim();
   }
-  s = s.replace(/\bOCR\s+text\b/gi, "transcript").replace(/\s+/g, " ").trim();
+  for (let i = 0; i < 3; i++) {
+    const before = s;
+    s = s
+      .replace(/\bOCR\s+issue[s]?\b/gi, "transcript formatting issue")
+      .replace(/\bOCR\s+error[s]?\b/gi, "transcript error")
+      .replace(/\b(?:an|the)\s+OCR\s+(?:issue|error|problem)\b/gi, "a transcript issue")
+      .replace(/\bfrom\s+OCR\b/gi, "from the transcript")
+      .replace(/\bdue\s+to\s+OCR\b/gi, "in the transcript")
+      .replace(/\bOCR\s+text\b/gi, "transcript")
+      .replace(/\bOCR[-\s]?generated\b/gi, "transcript")
+      .replace(/\bthe\s+OCR\b/gi, "the transcript")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (s === before) break;
+  }
   return s;
 }

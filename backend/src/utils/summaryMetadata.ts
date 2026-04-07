@@ -25,6 +25,8 @@ export interface SummaryMetadata {
     allPassed: boolean;
     judges: JudgeResultSummary[];
   };
+  /** One-page narrative overview (optional; newer jobs only) */
+  depositionOverview?: string | null;
 }
 
 export function normalizeUnknownString(value?: string | null): string | null {

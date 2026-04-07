@@ -40,7 +40,11 @@ export async function runValidation(req: Request, res: Response) {
     const [buf] = await bucket.file(key).download();
     const data = buf.toString("utf-8");
     const parsed = parseMarkdown(data);
-    const rows = parsed.rows;
+    // Convert SummaryRow[] to [string, string][] for validation table
+    const rows: Array<[string, string]> = parsed.rows.map(row => [
+      row.pageLine,
+      row.summary
+    ]);
 
     let referenceText: string | undefined;
     if (referencePath) {

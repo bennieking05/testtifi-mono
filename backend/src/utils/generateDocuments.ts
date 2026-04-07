@@ -40,6 +40,7 @@ export interface SummaryRow {
 export interface DocumentData {
   meta: string[];
   rows: SummaryRow[];
+  depositionOverview?: string | null;
 }
 
 // Legacy 2-column format for backwards compatibility
@@ -71,9 +72,13 @@ export async function generateDocxBuffer(
   documentData: DocumentData,
   _summaryContent: string
 ): Promise<Buffer> {
-  const { rows } = documentData;
+  const { rows, depositionOverview } = documentData;
   const hasMultipleWitnesses =
     new Set(rows.map((r) => r.witness).filter(Boolean)).size > 1;
+  const depositionOverviewText =
+    (depositionOverview && depositionOverview.trim()) ||
+    (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
+    "";
   // Use caseCaption (extracted from document) for Case Title, fallback to user-provided title
   const coverTitle =
     metadata.caseCaption || metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
@@ -215,7 +220,25 @@ export async function generateDocxBuffer(
             return paras;
           })(),
           new Paragraph({ children: [], spacing: { before: 160 } }),
-          // Table: 4 columns (Page/Line, Witness, Topic, Summary) when multiple witnesses; 3 columns otherwise
+          ...(depositionOverviewText
+            ? [
+                new Paragraph({
+                  children: [new TextRun({ text: "Deposition overview", bold: true })],
+                  spacing: { after: 160 },
+                }),
+                ...depositionOverviewText
+                  .split(/\n\s*\n/)
+                  .filter((b) => b.trim())
+                  .map(
+                    (block) =>
+                      new Paragraph({
+                        children: [new TextRun(block.trim())],
+                        spacing: { after: 120 },
+                      })
+                  ),
+                new Paragraph({ children: [], spacing: { before: 160 } }),
+              ]
+            : []),
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
             borders: {
@@ -227,34 +250,29 @@ export async function generateDocxBuffer(
               insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "C0C0C0" },
             },
             rows: [
-              // Header row
               new TableRow({
                 children: hasMultipleWitnesses
                   ? [
-                      new TableCell({ width: { size: 12, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
-                      new TableCell({ width: { size: 13, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Witness", bold: true })] })] }),
-                      new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Topic", bold: true })] })] }),
-                      new TableCell({ width: { size: 60, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
+                      new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
+                      new TableCell({ width: { size: 20, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Witness", bold: true })] })] }),
+                      new TableCell({ width: { size: 65, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
                     ]
                   : [
-                      new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
-                      new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Topic", bold: true })] })] }),
-                      new TableCell({ width: { size: 67, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
+                      new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
+                      new TableCell({ width: { size: 82, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
                     ],
               }),
               ...rows.map((row) =>
                 new TableRow({
                   children: hasMultipleWitnesses
                     ? [
-                        new TableCell({ width: { size: 12, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.pageLine)] }),
-                        new TableCell({ width: { size: 13, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.witness)] }),
-                        new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.topic)] }),
-                        new TableCell({ width: { size: 60, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.summary)] }),
+                        new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.pageLine)] }),
+                        new TableCell({ width: { size: 20, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.witness)] }),
+                        new TableCell({ width: { size: 65, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.summary)] }),
                       ]
                     : [
-                        new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.pageLine)] }),
-                        new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.topic)] }),
-                        new TableCell({ width: { size: 67, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.summary)] }),
+                        new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.pageLine)] }),
+                        new TableCell({ width: { size: 82, type: WidthType.PERCENTAGE }, children: [new Paragraph(row.summary)] }),
                       ],
                 })
               ),
@@ -277,10 +295,13 @@ export async function generatePdfBuffer(
   documentData: DocumentData,
   _summaryContent: string
 ): Promise<Buffer> {
-  const { rows } = documentData;
+  const { rows, depositionOverview } = documentData;
   const hasMultipleWitnesses =
     new Set(rows.map((r) => r.witness).filter(Boolean)).size > 1;
-  // Use caseCaption (extracted from document) for Case Title, fallback to user-provided title
+  const depositionOverviewText =
+    (depositionOverview && depositionOverview.trim()) ||
+    (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
+    "";
   const coverTitle =
     metadata.caseCaption || metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
@@ -303,11 +324,9 @@ export async function generatePdfBuffer(
     const rm = pdf.page.margins.right;
     const full = pdf.page.width - lm - rm;
     
-    // Column widths: 4-col when multiple witnesses, 3-col otherwise
-    const col1Width = hasMultipleWitnesses ? full * 0.12 : full * 0.15;
-    const col2Width = hasMultipleWitnesses ? full * 0.13 : full * 0.18;  // Witness or Topic
-    const col3Width = hasMultipleWitnesses ? full * 0.15 : full * 0.67; // Topic or Summary
-    const col4Width = hasMultipleWitnesses ? full * 0.60 : 0;
+    const col1Width = hasMultipleWitnesses ? full * 0.15 : full * 0.18;
+    const col2Width = hasMultipleWitnesses ? full * 0.20 : full * 0.82;
+    const col3Width = hasMultipleWitnesses ? full * 0.65 : 0;
 
     // Cover page
     try {
@@ -406,17 +425,25 @@ export async function generatePdfBuffer(
     details.forEach((l) => pdf.text(l));
     if (details.length) pdf.moveDown(0.5);
 
+    if (depositionOverviewText) {
+      pdf.font("Times-Bold").fontSize(12).text("Deposition overview", { align: "left" });
+      pdf.moveDown(0.4);
+      pdf.font("Times-Roman").fontSize(10);
+      for (const block of depositionOverviewText.split(/\n\s*\n/).filter((b) => b.trim())) {
+        pdf.text(block.trim(), { align: "left", width: full });
+        pdf.moveDown(0.5);
+      }
+      pdf.moveDown(0.5);
+    }
+
     const pad = 4;
     let y = pdf.y + 18;
     const tableLeft = lm;
 
-    // Column positions
     const col1Left = tableLeft + pad;
     const col2Left = tableLeft + col1Width + pad;
-    const col3Left = tableLeft + col1Width + col2Width + pad;
-    const col4Left = tableLeft + col1Width + col2Width + col3Width + pad;
+    const summaryLeftMulti = tableLeft + col1Width + col2Width + pad;
 
-    // Draw header row (3 or 4 columns)
     const drawHeader = (yPos: number): number => {
       pdf.font("Times-Bold").fontSize(10);
       const headerH =
@@ -424,30 +451,25 @@ export async function generatePdfBuffer(
           ? Math.max(
               pdf.heightOfString("Page/Line", { width: col1Width - 2 * pad }),
               pdf.heightOfString("Witness", { width: col2Width - 2 * pad }),
-              pdf.heightOfString("Topic", { width: col3Width - 2 * pad }),
-              pdf.heightOfString("Summary", { width: col4Width - 2 * pad })
+              pdf.heightOfString("Summary", { width: col3Width - 2 * pad })
             )
           : Math.max(
               pdf.heightOfString("Page/Line", { width: col1Width - 2 * pad }),
-              pdf.heightOfString("Topic", { width: col2Width - 2 * pad }),
-              pdf.heightOfString("Summary", { width: col3Width - 2 * pad })
-            )) +
-        pad * 2;
-      
+              pdf.heightOfString("Summary", { width: col2Width - 2 * pad })
+            )) + pad * 2;
+
       pdf.save();
       pdf.lineWidth(1).strokeColor("#9da9bb").fillColor("#eef2f7");
       pdf.rect(tableLeft, yPos, full, headerH).fillAndStroke("#eef2f7", "#9da9bb");
       pdf.restore();
       pdf.fillColor("#000");
-      
+
       pdf.text("Page/Line", col1Left, yPos + pad, { width: col1Width - 2 * pad });
       if (hasMultipleWitnesses) {
         pdf.text("Witness", col2Left, yPos + pad, { width: col2Width - 2 * pad });
-        pdf.text("Topic", col3Left, yPos + pad, { width: col3Width - 2 * pad });
-        pdf.text("Summary", col4Left, yPos + pad, { width: col4Width - 2 * pad });
+        pdf.text("Summary", summaryLeftMulti, yPos + pad, { width: col3Width - 2 * pad });
       } else {
-        pdf.text("Topic", col2Left, yPos + pad, { width: col2Width - 2 * pad });
-        pdf.text("Summary", col3Left, yPos + pad, { width: col3Width - 2 * pad });
+        pdf.text("Summary", col2Left, yPos + pad, { width: col2Width - 2 * pad });
       }
       return headerH;
     };
@@ -462,10 +484,11 @@ export async function generatePdfBuffer(
     rows.forEach((row) => {
       pdf.font("Times-Roman").fontSize(9);
       const h1 = pdf.heightOfString(row.pageLine, { width: col1Width - 2 * pad });
-      const h2 = hasMultipleWitnesses ? pdf.heightOfString(row.witness, { width: col2Width - 2 * pad }) : pdf.heightOfString(row.topic, { width: col2Width - 2 * pad });
-      const h3 = hasMultipleWitnesses ? pdf.heightOfString(row.topic, { width: col3Width - 2 * pad }) : pdf.heightOfString(row.summary, { width: col3Width - 2 * pad });
-      const h4 = hasMultipleWitnesses ? pdf.heightOfString(row.summary, { width: col4Width - 2 * pad }) : 0;
-      const rowH = Math.max(h1, h2, h3, h4) + pad * 2;
+      const h2 = hasMultipleWitnesses
+        ? pdf.heightOfString(row.witness, { width: col2Width - 2 * pad })
+        : pdf.heightOfString(row.summary, { width: col2Width - 2 * pad });
+      const h3 = hasMultipleWitnesses ? pdf.heightOfString(row.summary, { width: col3Width - 2 * pad }) : 0;
+      const rowH = Math.max(h1, h2, h3) + pad * 2;
 
       if (y + rowH > pageHeight - bottomMargin) {
         pdf.addPage();
@@ -477,21 +500,17 @@ export async function generatePdfBuffer(
 
       pdf.lineWidth(0.75).strokeColor("#c8d0da");
       pdf.rect(tableLeft, y, full, rowH).stroke();
-      
+
       if (hasMultipleWitnesses) {
         pdf.moveTo(tableLeft + col1Width, y).lineTo(tableLeft + col1Width, y + rowH).stroke();
         pdf.moveTo(tableLeft + col1Width + col2Width, y).lineTo(tableLeft + col1Width + col2Width, y + rowH).stroke();
-        pdf.moveTo(tableLeft + col1Width + col2Width + col3Width, y).lineTo(tableLeft + col1Width + col2Width + col3Width, y + rowH).stroke();
         pdf.text(row.pageLine, col1Left, y + pad, { width: col1Width - 2 * pad });
         pdf.text(row.witness, col2Left, y + pad, { width: col2Width - 2 * pad });
-        pdf.text(row.topic, col3Left, y + pad, { width: col3Width - 2 * pad });
-        pdf.text(row.summary, col4Left, y + pad, { width: col4Width - 2 * pad });
+        pdf.text(row.summary, summaryLeftMulti, y + pad, { width: col3Width - 2 * pad });
       } else {
         pdf.moveTo(tableLeft + col1Width, y).lineTo(tableLeft + col1Width, y + rowH).stroke();
-        pdf.moveTo(tableLeft + col1Width + col2Width, y).lineTo(tableLeft + col1Width + col2Width, y + rowH).stroke();
         pdf.text(row.pageLine, col1Left, y + pad, { width: col1Width - 2 * pad });
-        pdf.text(row.topic, col2Left, y + pad, { width: col2Width - 2 * pad });
-        pdf.text(row.summary, col3Left, y + pad, { width: col3Width - 2 * pad });
+        pdf.text(row.summary, col2Left, y + pad, { width: col2Width - 2 * pad });
       }
       y += rowH;
     });

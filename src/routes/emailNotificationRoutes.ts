@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { Storage } from "@google-cloud/storage";
 import { authenticateToken } from "../middlewares/authMiddleware";
 import { sendEmail, EmailAttachment } from "../lib/sendEmail";
-import { parseMarkdown } from "./downloadRoutes";
+import { parseMarkdown, SummaryRow } from "./downloadRoutes";
 import { generateDocxBuffer, generatePdfBuffer } from "../utils/generateDocuments";
 import { getLightLogoDataUri } from "../utils/logo";
 import {
@@ -47,16 +47,16 @@ function extractAllPages(label: string): number[] {
 }
 
 function enforcePageBounds(
-  rows: Array<[string, string, string]>,
+  rows: SummaryRow[],
   opts: { maxPage?: number } = {}
-): Array<[string, string, string]> {
+): SummaryRow[] {
   const maxPage = opts.maxPage && opts.maxPage > 0 ? opts.maxPage : null;
   if (!maxPage) return rows;
-  const kept: Array<[string, string, string]> = [];
+  const kept: SummaryRow[] = [];
   let sawValid = false;
   let invalidStreak = 0;
   for (const row of rows) {
-    const pages = extractAllPages(row[0]);
+    const pages = extractAllPages(row.pageLine);
     if (!pages.length) {
       kept.push(row);
       continue;
@@ -156,8 +156,11 @@ router.post(
 
                 const [buf] = await bucket.file(key).download();
                 const summaryContent = buf.toString("utf-8");
-                const { rows } = parseMarkdown(summaryContent);
                 const metadata = await resolveSummaryMetadata(bucket, job as any);
+                const { rows, depositionOverview } = parseMarkdown(
+                  summaryContent,
+                  metadata.deponent || job.file?.deponent || "Not Specified"
+                );
                 const metadataLines = renderMetadataMarkdown(metadata).split("\n");
                 const maxPage =
                   (metadata.totalPages && metadata.totalPages > 0
@@ -166,6 +169,8 @@ router.post(
                     ? Number(job.file.pages)
                     : undefined) || undefined;
                 const boundedRows = enforcePageBounds(rows, { maxPage });
+                // Exclude placeholder-only rows (e.g. "p.16-18  General Testimony  —") from output
+                const displayRows = boundedRows.filter((r) => (r.summary || "").trim() !== "—");
 
                 // Convert job to match JobData interface (pages needs to be string)
                 const jobData = {
@@ -188,7 +193,7 @@ router.post(
                 const docxBuffer = await generateDocxBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows: boundedRows },
+                  { meta: metadataLines, rows: displayRows, depositionOverview },
                   summaryContent
                 );
                 const docxFilename = `${
@@ -207,7 +212,7 @@ router.post(
                 const pdfBuffer = await generatePdfBuffer(
                   jobData,
                   metadata,
-                  { meta: metadataLines, rows: boundedRows },
+                  { meta: metadataLines, rows: displayRows, depositionOverview },
                   summaryContent
                 );
                 const pdfFilename = `${

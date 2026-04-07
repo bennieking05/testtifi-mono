@@ -29,6 +29,7 @@ import {
   saveSummaryMetadata,
 } from "../utils/summaryMetadata";
 import { sanitizeSummaryMetaLanguage } from "../utils/summarySanitize";
+import { DEPOSITION_OVERVIEW_END } from "../utils/summaryOverviewDelimiter";
 import {
   runAllJudges,
   formatJudgeResultsForStorage,
@@ -1100,42 +1101,33 @@ ${metaSection}
 This batch contains ${pagesCount} transcript pages: ${pagesList}
 
 *** MANDATORY: Your output MUST cover ALL of these pages: ${pagesList} ***
-*** NO GAPS - if you output 8:2-10:15, then 15:1-17:20, you have FAILED (missing pages 11-14) ***
+*** NO GAPS - if you output p.8-10 then p.15-17, you have FAILED (missing pages 11-14) ***
 
-OUTPUT FORMAT - 3 COLUMNS (Page/Line | Topic | Summary):
-| StartPage:StartLine-EndPage:EndLine | Topic Label | Narrative Summary |
+OUTPUT FORMAT - EXACTLY 2 COLUMNS (Page/Line | Summary):
+| p.StartPage-EndPage | Narrative summary text |
+| p.SinglePage | Narrative summary text |
+| p.Page:StartLine-EndLine | Use ONLY when the row does NOT cover the full page (partial page). |
 
-EXAMPLE ROW:
-| 8:2-10:15 | Employment Background | The witness testified about his employment history... |
+PAGE/LINE COLUMN:
+- Prefer p.X or p.X-Y when the row covers whole transcript pages (omit line numbers for full pages).
+- Include :line-line ONLY for partial-page coverage when line numbers are visible in the transcript.
 
-TONE - FACTUAL SUMMARY ONLY:
-- Report what the witness SAID using: "testified", "stated", "confirmed", "denied"
-- NO analysis, interpretation, or commentary
-- Do NOT mention OCR, scanned text, or page header markers in the Summary column
-- Include: names, dates, dollar amounts, exhibits, specific statements
+GROUPING:
+- You may group up to 5 consecutive pages per row when the same subject continues; start a new row when the subject changes.
 
-PAGE GROUPING (UP TO 5 PAGES PER TOPIC):
-- Group pages by TOPIC - start a new row when the topic changes significantly
-- Each row should cover UP TO 5 transcript pages on a related topic
-- Include line numbers when visible in transcript (format: StartPage:StartLine-EndPage:EndLine)
-- If line numbers aren't visible, use format: StartPage-EndPage
-
-TOPIC LABELS (2-4 words):
-- Use descriptive labels: "Surgical Procedure", "Pre-Op Assessment", "Employment History", "Contract Terms", "Document Review", "Damages", "Expert Opinion", "Acknowledgment", "Product Description"
-- "Educational background" / "Education": ONLY the witness's degrees, schools, licenses, and training—not educational products, courses sold, or instructional materials (use "Product Description" or "Document Review" for those)
-- Use "Preliminary Matters" for introductions, "Procedural Matters" for breaks/recesses
+TONE:
+- Factual: "testified", "stated", "confirmed", "denied"
+- Do NOT mention OCR, scanned text, or page header markers
 
 VALID EXAMPLES:
-| 8:2-10:15 | Employment Background | The witness testified about his employment at ABC Corp from 2015-2020. He described his role as regional sales manager... |
-| 11:1-13:8 | Document Review | Exhibit 3 was introduced showing the employment contract dated March 2015. The witness confirmed his signature... |
-| 14:1-18:25 | Preliminary Matters | Pages 14-18 contained procedural matters including a recess. The court reporter was sworn. Counsel entered appearances. |
+| p.8-10 | The witness testified about his employment at ABC Corp from 2015-2020. He described his role as regional sales manager. |
+| p.11-13 | Exhibit 3 was introduced showing the employment contract dated March 2015. The witness confirmed his signature. |
+| p.14:3-22 | On page 14, the witness addressed only the fee schedule; lines 3-22 covered commission percentages. |
 
 RULES:
 1. Cover ALL pages from ${firstPage} to ${lastPage} with NO GAPS
-2. Each row: | Page:Line-Page:Line | Topic | Summary |
-3. Group by topic, up to 5 pages per row
-4. Include meaningful topic labels
-5. 3-8 sentences per row
+2. Each row: | Page/Line cell | Summary cell | — no Topic column
+3. 3-8 sentences per row where substantive
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1146,10 +1138,7 @@ Continue summarizing.
 PAGES: ${pagesList}
 *** ALL pages must be covered - NO GAPS ***
 
-FORMAT: | Page:Line-Page:Line | Topic | Summary |
-GROUPING: By topic, up to 5 pages per row
-TOPICS: Use descriptive 2-4 word labels
-TONE: Factual - "testified", "stated", "confirmed"
+FORMAT: | p.X-Y | Summary | (2 columns only; add line range only for partial pages)
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1189,18 +1178,17 @@ ${metaSection}
 THIS CHUNK CONTAINS TRANSCRIPT PAGES: ${pagesListStr}
 You MUST summarize content from EACH of these pages. Do not skip any.
 
-OUTPUT FORMAT - 3 COLUMNS:
-| Page:Line-Page:Line | Topic Label | Narrative Summary |
+OUTPUT FORMAT - 2 COLUMNS ONLY:
+| Page/Line | Summary |
 
 INSTRUCTIONS:
-- First column: Page/line references (e.g., "8:2-10:15" or "${pagesRangeStr}")
-- Second column: Concise topic label (2-4 words, e.g., "Employment Background", "Document Review")
-- Third column: 3-6 sentences covering names, dates, exhibits, key facts
+- First column: Prefer p.X or p.X-Y for full pages; use p.X:lines only for partial-page coverage when lines are visible (e.g. compared to "${pagesRangeStr}")
+- Second column: 3-6 sentences: names, dates, exhibits, key facts
+- NO Topic column
 - SKIP any Index, Errata, Concordance, or Certificate sections
-- Be thorough - cover testimony from EVERY page listed above
 
 EXAMPLE:
-| 8:2-10:15 | Employment History | The witness testified about his employment... |
+| p.8-10 | The witness testified about his employment history and prior roles. |
 
 Transcript:
 ${chunk.text}
@@ -1211,10 +1199,7 @@ Continue summarizing.
 THIS CHUNK CONTAINS TRANSCRIPT PAGES: ${pagesListStr}
 You MUST summarize content from EACH of these pages.
 
-FORMAT: | Page:Line-Page:Line | Topic | Summary |
-- Include topic labels (2-4 words)
-- 3-6 sentences per entry with names, dates, facts
-- SKIP Index, Errata, Concordance, or Certificate sections
+FORMAT: | p.X-Y | Summary | (2 columns; lines only if partial page)
 
 Transcript:
 ${chunk.text}
@@ -1390,11 +1375,76 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
     // Skip lines that don't look like page entries
     if (!line.includes('p.') && !/^\s*\|/.test(line)) continue;
 
-    // Format A/B: Prompt's 3-column format | PageRange | Topic | Summary | (page range = 8:2-10:15 or 8-10)
     const pipeParts = line.split('|').map((p) => p.trim()).filter(Boolean);
+
+    // 2 columns: | PageRange | Summary |
+    if (pipeParts.length === 2) {
+      const pageRange = pipeParts[0];
+      const summary = pipeParts[1];
+      if (summary.length > 10) {
+        const withLines = pageRange.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+        const noLines = pageRange.match(/^(\d+)-(\d+)$/);
+        const pDot = pageRange.match(/^p\.(\d+)(?:\s*[-–]\s*(\d+))?(?::(\d+)[-–](\d+))?$/i);
+        if (withLines) {
+          const startPage = parseInt(withLines[1], 10);
+          const lineStart = parseInt(withLines[2], 10);
+          const endPage = parseInt(withLines[3], 10);
+          const lineEnd = parseInt(withLines[4], 10);
+          if (startPage > 0 && endPage >= startPage) {
+            const cappedEnd = Math.min(endPage, startPage + 10);
+            entries.push({
+              startPage,
+              endPage: cappedEnd,
+              lineNumbers: `:${lineStart}-${lineEnd}`,
+              summary,
+            });
+            if (debug) console.log(`[parseToRangeEntries] Matched 2-col ${startPage}:${lineStart}-${endPage}:${lineEnd}`);
+            continue;
+          }
+        }
+        if (noLines) {
+          const startPage = parseInt(noLines[1], 10);
+          const endPage = parseInt(noLines[2], 10);
+          if (startPage > 0 && endPage >= startPage) {
+            const cappedEnd = Math.min(endPage, startPage + 10);
+            entries.push({ startPage, endPage: cappedEnd, lineNumbers: '', summary });
+            if (debug) console.log(`[parseToRangeEntries] Matched 2-col range ${startPage}-${endPage}`);
+            continue;
+          }
+        }
+        if (pDot) {
+          const startPage = parseInt(pDot[1], 10);
+          const endPage = pDot[2] ? parseInt(pDot[2], 10) : startPage;
+          const hasLn = Boolean(pDot[3] && pDot[4]);
+          const lineStart = hasLn ? parseInt(pDot[3], 10) : 0;
+          const lineEnd = hasLn ? parseInt(pDot[4], 10) : 0;
+          if (startPage > 0 && endPage >= startPage) {
+            const cappedEnd = Math.min(endPage, startPage + 10);
+            const lineNumbers = hasLn ? `:${lineStart}-${lineEnd}` : '';
+            entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
+            if (debug) console.log(`[parseToRangeEntries] Matched 2-col p.${startPage}-${cappedEnd}`);
+            continue;
+          }
+        }
+        const singlePage = pageRange.match(/^p?\.?\s*(\d+)$/i) || pageRange.match(/^(\d+)$/);
+        if (singlePage) {
+          const pageNum = parseInt(singlePage[1], 10);
+          if (pageNum > 0) {
+            entries.push({ startPage: pageNum, endPage: pageNum, lineNumbers: '', summary });
+            if (debug) console.log(`[parseToRangeEntries] Matched 2-col single page ${pageNum}`);
+            continue;
+          }
+        }
+      }
+    }
+
+    // 3+ columns (legacy Topic / Witness layouts)
     if (pipeParts.length >= 3) {
       const pageRange = pipeParts[0];
-      const summary = pipeParts.slice(2).join(' | ').trim();
+      const summary =
+        pipeParts.length >= 4
+          ? pipeParts.slice(3).join(' | ').trim()
+          : pipeParts.slice(2).join(' | ').trim();
       const withLines = pageRange.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
       const noLines = pageRange.match(/^(\d+)-(\d+)$/);
       if (withLines && summary.length > 10) {
@@ -1509,6 +1559,16 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
  * @param detectedLineRanges - Optional map of detected line ranges per page (from OCR)
  * @returns Markdown table rows sorted by page number, with ranges preserved
  */
+
+function shouldDropFullPageLineSuffix(lineSuffix: string): boolean {
+  if (!lineSuffix) return false;
+  const m = lineSuffix.match(/^:(\d+)-(\d+)$/);
+  if (!m) return false;
+  const ls = parseInt(m[1], 10);
+  const le = parseInt(m[2], 10);
+  return ls === 1 && le >= 22 && le <= 28;
+}
+
 function assembleSortedSummary(
   llmOutputs: string[],
   expectedPages: number[],
@@ -1633,17 +1693,14 @@ function assembleSortedSummary(
   // Build output with range notation and line numbers preserved
   const outputRows = allFinalEntries.map(e => {
     let lineNum = e.lineNumbers;
-    
-    // Check if this is a placeholder entry (no line numbers)
+
     const isPlaceholder = e.summary === '—' || e.summary.includes('[LLM did not summarize');
 
-    // For actual LLM summaries, use detected line ranges if available
     if (!isPlaceholder && detectedLineRanges) {
       const detected = detectedLineRanges.get(e.startPage);
       if (detected?.detected) {
         lineNum = `:${detected.start}-${detected.end}`;
       } else {
-        // Line numbers not detected on page; omit line numbers
         lineNum = '';
       }
     }
@@ -1652,7 +1709,8 @@ function assembleSortedSummary(
       lineNum = '';
     }
 
-    const lineSuffix = lineNum ? lineNum : '';
+    const candidateSuffix = lineNum ? lineNum : '';
+    const lineSuffix = shouldDropFullPageLineSuffix(candidateSuffix) ? '' : candidateSuffix;
     return e.startPage === e.endPage
       ? `| p.${e.startPage}${lineSuffix} | ${e.summary} |`
       : `| p.${e.startPage}-${e.endPage}${lineSuffix} | ${e.summary} |`;
@@ -1725,6 +1783,67 @@ async function withRetry<T>(
   }
   throw lastErr;
 }
+
+const OVERVIEW_TABLE_INPUT_CAP = 120_000;
+
+async function generateDepositionOverview(
+  jobId: string,
+  rowsMarkdown: string,
+  ctx: { deponent: string; caseCaption: string; totalPages: number }
+): Promise<string> {
+  let tableInput = rowsMarkdown;
+  if (tableInput.length > OVERVIEW_TABLE_INPUT_CAP) {
+    const half = Math.floor(OVERVIEW_TABLE_INPUT_CAP / 2) - 80;
+    tableInput =
+      tableInput.slice(0, half) +
+      "\n\n[... middle of page-line summary omitted for length ...]\n\n" +
+      tableInput.slice(-half);
+  }
+  const userMsg = `Write a one-page deposition overview for attorneys.
+
+Case context:
+- Deponent: ${ctx.deponent}
+- Case caption: ${ctx.caseCaption}
+- Transcript pages summarized: ${ctx.totalPages}
+
+Input: the full page-line summary table below (markdown). Produce ONE cohesive overview (max ~500 words, about one printed page).
+
+Rules:
+- Third person, factual, neutral; use "the witness testified", "stated", "confirmed" as appropriate.
+- Summarize who testified, high-level subject matter, and the arc of the examination. Do NOT re-list every page range.
+- No Q&A format. Do NOT cite specific page or line numbers in the overview.
+- Do NOT mention OCR, scanned documents, or text extraction.
+- Output plain paragraphs only (no markdown headings, no table, no pipe characters).
+
+--- PAGE-LINE SUMMARY TABLE ---
+
+${tableInput}`;
+
+  try {
+    const resp = await withRetry(
+      () =>
+        azureChatCompletion(
+          [
+            {
+              role: "system",
+              content:
+                "You write concise deposition overviews for litigation professionals. Follow instructions exactly.",
+            },
+            { role: "user", content: userMsg },
+          ],
+          2000,
+          0.0
+        ),
+      { retries: 3, minDelayMs: 2000, maxDelayMs: 20000 }
+    );
+    const raw = String(resp?.choices?.[0]?.message?.content || "").trim();
+    return sanitizeSummaryMetaLanguage(raw);
+  } catch (e: any) {
+    console.warn(`[${jobId}] Deposition overview generation failed:`, e?.message || e);
+    return "";
+  }
+}
+
 
 async function work() {
   console.log("[WORKER] Entering main work loop...");
@@ -2173,9 +2292,23 @@ async function work() {
       const judgeResults = await runAllJudges(judgeContext);
 
       // Update metadata with judge results
+      let depositionOverviewText = "";
+      try {
+        depositionOverviewText = await generateDepositionOverview(job.id, rowsOnly, {
+          deponent: legalMeta.deponent || "Not Specified",
+          caseCaption: legalMeta.caseCaption || displayTitle,
+          totalPages: totalTranscriptPages,
+        });
+      } catch (ovErr: any) {
+        console.warn(`[${job.id}] Overview generation error:`, ovErr?.message || ovErr);
+      }
+
       const metadataWithJudges: SummaryMetadata = {
         ...metadata,
         judgeResults: formatJudgeResultsForStorage(judgeResults),
+        ...(depositionOverviewText.trim()
+          ? { depositionOverview: depositionOverviewText.trim() }
+          : {}),
       };
       await saveSummaryMetadata(summaryBucket, metadataWithJudges);
 
@@ -2190,7 +2323,19 @@ async function work() {
         );
       }
 
-      const merged = [metaMarkdown, "", rowsOnly].join("\n\n");
+      const mergedParts: string[] = [metaMarkdown, ""];
+      if (depositionOverviewText.trim()) {
+        mergedParts.push(
+          "# Deposition overview",
+          "",
+          depositionOverviewText.trim(),
+          "",
+          DEPOSITION_OVERVIEW_END,
+          ""
+        );
+      }
+      mergedParts.push(rowsOnly);
+      const merged = mergedParts.join("\n");
       const tmpPath = `/tmp/${job.id}.md`;
       fs.writeFileSync(tmpPath, merged);
 
@@ -2237,7 +2382,7 @@ async function work() {
             const attachments: EmailAttachment[] = [];
             try {
               console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
-              const { rows } = parseMarkdown(merged);
+              const { rows, depositionOverview } = parseMarkdown(merged);
               // Exclude placeholder-only rows from attachments
               const displayRows = rows.filter((r) => (r.summary || "").trim() !== "—");
               const filePages =
@@ -2261,16 +2406,22 @@ async function work() {
                   .replace(/[^a-z0-9_.-]+/gi, "-")
                   .replace(/-+/g, "-")
                   .replace(/^-|-$/g, "") || "summary";
+              const docData = {
+                meta: metaMarkdown.split("\n"),
+                rows: displayRows,
+                depositionOverview:
+                  depositionOverview || metadataWithJudges.depositionOverview || undefined,
+              };
               const docxBuffer = await generateDocxBuffer(
                 jobData,
-                metadata,
-                { meta: metaMarkdown.split("\n"), rows: displayRows },
+                metadataWithJudges,
+                docData,
                 merged
               );
               const pdfBuffer = await generatePdfBuffer(
                 jobData,
-                metadata,
-                { meta: metaMarkdown.split("\n"), rows: displayRows },
+                metadataWithJudges,
+                docData,
                 merged
               );
               const totalBytes = docxBuffer.length + pdfBuffer.length;

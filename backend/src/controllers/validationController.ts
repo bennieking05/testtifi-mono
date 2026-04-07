@@ -43,7 +43,7 @@ export async function runValidation(req: Request, res: Response) {
     // Convert SummaryRow[] to [string, string][] for validation table
     const rows: Array<[string, string]> = parsed.rows.map(row => [
       row.pageLine,
-      `[${row.topic}] ${row.summary}`
+      row.summary
     ]);
 
     let referenceText: string | undefined;

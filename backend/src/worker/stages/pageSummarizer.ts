@@ -205,10 +205,11 @@ REQUIRED OUTPUT:
 Create 1-3 table rows that together cover ALL pages ${chunk.start}-${chunk.end}:
 
 OUTPUT FORMAT:
-- Output ONLY Markdown table rows: | Page(s) | Testimony |
+- Output ONLY Markdown table rows: | Page/Line | Summary |
 - No header row, just data rows
-- First column: page range like "p.X-Y" or list pages
+- First column: prefer "p.X" or "p.X-Y" when covering whole pages (omit :line-line for full pages); use line ranges only for partial pages
 - Second column: 3-6 sentences summarizing the testimony
+- Do NOT mention OCR or scanned text
 - Cover:
   * The main topic or subject matter
   * All specific names, titles, entities, dates, and figures mentioned
@@ -226,7 +227,7 @@ Continue the deposition summary for pages ${chunk.start}–${chunk.end}.
 
 MANDATORY: You MUST cover EVERY page from ${chunk.start} to ${chunk.end}. DO NOT SKIP ANY PAGES.
 
-Output 1-3 Markdown table rows (| Page(s) | Testimony |) that TOGETHER cover ALL pages in this range.
+Output 1-3 Markdown table rows (| Page/Line | Summary |) that TOGETHER cover ALL pages in this range.
 - First column: page range like "p.X-Y" or list pages
 - Second column: 3-6 sentences summarizing the testimony
 - Maintain the same comprehensive, detailed style:

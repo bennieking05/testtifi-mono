@@ -10,6 +10,7 @@ import {
   renderMetadataMarkdown,
 } from "../utils/summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
+import { splitDepositionOverview } from "../utils/summaryOverviewDelimiter";
 import { sanitizeSummaryMetaLanguage } from "../utils/summarySanitize";
 
 const router = express.Router();
@@ -60,11 +61,17 @@ router.get(
       const [buf] = await bucket.file(objectName).download();
       const raw = buf.toString("utf-8");
       const cleaned = stripContinuations(raw);
-      
+
       const metadata = await resolveSummaryMetadata(bucket, job as any);
       const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
-      
-      const { meta, rows } = parseToRows(cleaned, deponentName);
+
+      const { mdForTableParsing, depositionOverview: overviewFromMd } = splitDepositionOverview(cleaned);
+      const depositionOverviewText =
+        (overviewFromMd && overviewFromMd.trim()) ||
+        (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
+        "";
+
+      const { meta, rows } = parseToRows(mdForTableParsing, deponentName);
       const metadataMarkdown = renderMetadataMarkdown(metadata);
       
       const maxPage =
@@ -118,25 +125,26 @@ router.get(
       
       const tableRowsHtml = hasMultipleWitnesses
         ? displayRows
-            .map((row) =>
-              `<tr><td>${escapeHtml(row.pageLine)}</td><td>${escapeHtml(row.witness)}</td><td>${escapeHtml(row.topic)}</td><td>${escapeHtml(row.summary).replace(/\n/g, "<br/>")}</td></tr>`
+            .map(
+              (row) =>
+                `<tr><td>${escapeHtml(row.pageLine)}</td><td>${escapeHtml(row.witness)}</td><td>${escapeHtml(row.summary).replace(/\n/g, "<br/>")}</td></tr>`
             )
             .join("\n")
         : displayRows
-            .map((row) =>
-              `<tr><td>${escapeHtml(row.pageLine)}</td><td>${escapeHtml(row.topic)}</td><td>${escapeHtml(row.summary).replace(/\n/g, "<br/>")}</td></tr>`
+            .map(
+              (row) =>
+                `<tr><td>${escapeHtml(row.pageLine)}</td><td>${escapeHtml(row.summary).replace(/\n/g, "<br/>")}</td></tr>`
             )
             .join("\n");
-      
+
       const tableHtml = hasMultipleWitnesses
         ? `
         <table>
           <thead>
             <tr>
-              <th style="width: 12%">Page/Line</th>
-              <th style="width: 13%">Witness</th>
-              <th style="width: 15%">Topic</th>
-              <th style="width: 60%">Summary</th>
+              <th style="width: 15%">Page/Line</th>
+              <th style="width: 20%">Witness</th>
+              <th style="width: 65%">Summary</th>
             </tr>
           </thead>
           <tbody>
@@ -147,16 +155,22 @@ router.get(
         <table>
           <thead>
             <tr>
-              <th style="width: 15%">Page/Line</th>
-              <th style="width: 18%">Topic</th>
-              <th style="width: 67%">Summary</th>
+              <th style="width: 18%">Page/Line</th>
+              <th style="width: 82%">Summary</th>
             </tr>
           </thead>
           <tbody>
             ${tableRowsHtml}
           </tbody>
         </table>`;
-      const htmlBody = `${metaHtml}\n${tableHtml}`;
+      const overviewHtml = depositionOverviewText
+        ? `<section class="deposition-overview"><h2>Deposition overview</h2>${depositionOverviewText
+            .split(/\n\s*\n/)
+            .filter((b) => b.trim())
+            .map((b) => `<p>${escapeHtml(b.trim()).replace(/\n/g, "<br/>")}</p>`)
+            .join("\n")}</section>`
+        : "";
+      const htmlBody = `${metaHtml}\n${overviewHtml}\n${tableHtml}`;
 
       const css = `
         html, body { margin: 0; padding: 0; background: #fff; }
@@ -264,39 +278,6 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
     return parts.map(p => p.trim());
   };
 
-  const deriveTopicFromSummary = (summary: string): string => {
-    const lower = summary.toLowerCase();
-    if (/preliminary|sworn|introduction|commence|appear/i.test(lower)) return "Preliminary Matters";
-    if (/procedural|recess|break|off.?the.?record/i.test(lower)) return "Procedural Matters";
-    if (/exhibit|document|email|letter|memo/i.test(lower)) return "Document Review";
-    if (/employ|job|position|title|role|work/i.test(lower)) return "Employment History";
-    const eduProductCue =
-      /\beducational\s+product\b|\beducat(?:ion|ional)?\s+(?:software|platform|program|materials?|content|course|curriculum)\b|\btraining\s+materials?\b|\be-?learning\b/i;
-    const witnessEduCue =
-      /\b(degree|diploma|bachelor|master|ph\.?d|doctorate|graduated|university|college|law\s+school|medical\s+school|residency|license\s+certification|where\s+(?:did\s+you\s+)?(?:go\s+to\s+)?school|educational\s+background)\b/i;
-    if (
-      !eduProductCue.test(lower) &&
-      witnessEduCue.test(lower)
-    ) {
-      return "Education Background";
-    }
-    if (
-      /(?:^|[^a-z])school\b/.test(lower) &&
-      !eduProductCue.test(lower) &&
-      /(?:degree|graduate|university|college|diploma|major|minor|gpa)\b/i.test(lower)
-    ) {
-      return "Education Background";
-    }
-    if (/damage|injur|harm|loss|cost/i.test(lower)) return "Damages";
-    if (/contract|agreement|term|provision/i.test(lower)) return "Contract Terms";
-    if (/medical|surgery|procedure|patient|doctor|hospital/i.test(lower)) return "Medical Treatment";
-    if (/expert|opinion|analysis|conclusion/i.test(lower)) return "Expert Opinion";
-    if (/admit|acknowledge|confirm|concede/i.test(lower)) return "Acknowledgment";
-    return "General Testimony";
-  };
-
-  const normalizeTopic = (topic: string): string =>
-    (topic || "").replace(/\bAdmissions?\b/i, "Acknowledgment").trim() || "General";
 
   mdText.split(/\r?\n/).forEach((raw) => {
     let trimmed = raw.trim();
@@ -311,11 +292,27 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
       const pageMatch = pageLineCell.match(pageRegex);
       if (pageMatch) {
         seenRow = true;
-        if (cells.length >= 3) {
-          rows.push({ pageLine: pageLineCell, witness: witness, topic: normalizeTopic(cells[1] || "General"), summary: cells.slice(2).join(" | ").trim() || "" });
+        if (cells.length >= 4) {
+          rows.push({
+            pageLine: pageLineCell,
+            witness: (cells[1] || "").trim() || witness,
+            topic: "",
+            summary: cells.slice(3).join(" | ").trim() || "",
+          });
+        } else if (cells.length >= 3) {
+          rows.push({
+            pageLine: pageLineCell,
+            witness,
+            topic: "",
+            summary: cells.slice(2).join(" | ").trim() || "",
+          });
         } else {
-          const summaryText = cells[1] || "";
-          rows.push({ pageLine: pageLineCell, witness: witness, topic: deriveTopicFromSummary(summaryText), summary: summaryText });
+          rows.push({
+            pageLine: pageLineCell,
+            witness,
+            topic: "",
+            summary: (cells[1] || "").trim(),
+          });
         }
         return;
       }
@@ -327,7 +324,7 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
       seenRow = true;
       const pageLine = rowMatch[0].replace(/\s+/g, " ").trim();
       let remainder = normalized.slice(rowMatch[0].length).trim().replace(/^[-–:|]\s*/, "").trim();
-      rows.push({ pageLine: pageLine, witness: witness, topic: deriveTopicFromSummary(remainder), summary: remainder || "" });
+      rows.push({ pageLine, witness, topic: "", summary: remainder || "" });
       return;
     }
 

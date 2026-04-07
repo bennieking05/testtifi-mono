@@ -21,6 +21,12 @@ npm run test:api:staging
 npm run test:frontend
 ```
 
+## Automated staging runs (GitHub Actions)
+
+The workflow [`.github/workflows/staging-regression.yml`](../.github/workflows/staging-regression.yml) runs `npm run test:regression:staging` (API suite plus Playwright under `tests/regression/`) on **workflow_dispatch** (manual), on a **daily schedule** (06:00 UTC), and on **push** to the `staging` branch. Configure **Actions** secrets: `TEST_EMAIL` and `TEST_PASSWORD` (Playwright; also used by the API runner unless you override). Optionally set `TESTIFI_ADMIN_EMAIL` and `TESTIFI_ADMIN_PASSWORD` if authenticated API checks need a different account than the UI tests. Each run uploads the `test-results/` directory as a workflow artifact (including on failure). For faster PR feedback, [`.github/workflows/playwright-regression.yml`](../.github/workflows/playwright-regression.yml) still runs **Playwright only** against staging.
+
+Locally, API credentials can also come from `test-admin-login.json` at the repo root (see `.cursorrules`); the API script reads env vars first when that file is absent.
+
 ## Test Results
 
 Results are output to `test-results/` directory:
