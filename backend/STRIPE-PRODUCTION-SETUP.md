@@ -21,8 +21,8 @@
 ```bash
 # Create webhook endpoint for production
 stripe webhook_endpoints create \
-  --url="https://app.testifi.ai/api/purchase/webhook" \
-  --enabled-events="payment_intent.succeeded,payment_intent.payment_failed,checkout.session.completed"
+  --url="https://app.testifi.ai/api/purchase/stripe-webhook" \
+  --enabled-events="payment_intent.succeeded,checkout.session.completed,charge.refund.created,charge.dispute.created"
 ```
 
 ### Step 3: Update Production Secrets
@@ -34,16 +34,22 @@ stripe webhook_endpoints create \
 **Or manually update:**
 ```bash
 # Update Stripe API Key
-kubectl patch secret backend-secrets --type='json' -p='[{"op": "replace", "path": "/data/STRIPE_API_KEY", "value": "'$(echo -n "sk_live_YOUR_KEY" | base64)'"}]'
+printf "%s" "sk_live_YOUR_KEY" | gcloud secrets versions add backend-secrets-STRIPE_API_KEY \
+  --project=golden-cosmos-450417-i8 \
+  --data-file=-
 
 # Update Stripe Webhook Secret
-kubectl patch secret backend-secrets --type='json' -p='[{"op": "replace", "path": "/data/STRIPE_WEBHOOK_SECRET", "value": "'$(echo -n "whsec_YOUR_SECRET" | base64)'"}]'
+printf "%s" "whsec_YOUR_SECRET" | gcloud secrets versions add backend-secrets-STRIPE_WEBHOOK_SECRET \
+  --project=golden-cosmos-450417-i8 \
+  --data-file=-
 ```
 
 ### Step 4: Restart Deployments
 ```bash
-kubectl rollout restart deployment/backend
-kubectl rollout restart deployment/summarize-worker
+gcloud run services update testifi-backend \
+  --project=golden-cosmos-450417-i8 \
+  --region=us-central1 \
+  --update-env-vars="STRIPE_CONFIG_REFRESH=$(date +%s)"
 ```
 
 ## 📋 Environment Strategy
@@ -72,7 +78,7 @@ stripe payment_intents create \
 ### 2. Monitor Webhooks:
 ```bash
 # Listen for webhook events
-stripe listen --forward-to https://app.testifi.ai/api/purchase/webhook
+stripe listen --forward-to https://app.testifi.ai/api/purchase/stripe-webhook
 ```
 
 ### 3. Check Application Logs:
@@ -107,7 +113,7 @@ kubectl rollout status deployment/summarize-worker
 
 ### Security:
 - ✅ **Never commit live keys to git**
-- ✅ **Use Kubernetes secrets for storage**
+- ✅ **Use Secret Manager for storage**
 - ✅ **Rotate keys periodically**
 - ❌ **Don't use test keys in production**
 

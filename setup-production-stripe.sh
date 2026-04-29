@@ -4,7 +4,9 @@
 # This script helps set up production Stripe keys and webhooks
 
 PROJECT_ID="golden-cosmos-450417-i8"
-SECRET_NAME="backend-secrets"
+REGION="us-central1"
+BACKEND_SERVICE="testifi-backend"
+WEBHOOK_URL="https://app.testifi.ai/api/purchase/stripe-webhook"
 
 echo "🔐 Production Stripe Setup for Testifi AI"
 echo "Project: $PROJECT_ID"
@@ -30,8 +32,9 @@ echo "🔧 Production Stripe Setup Steps:"
 echo ""
 echo "1. Get your live Stripe API key from Stripe Dashboard"
 echo "2. Set up production webhook endpoint"
-echo "3. Update Kubernetes secrets"
-echo "4. Test production payments"
+echo "3. Update Secret Manager secrets"
+echo "4. Restart Cloud Run backend"
+echo "5. Test production payments"
 echo ""
 
 echo "📋 Step 1: Get Live Stripe Keys"
@@ -48,14 +51,14 @@ fi
 
 echo ""
 echo "📋 Step 2: Set up Production Webhook"
-echo "Setting up webhook endpoint: https://app.testifi.ai/api/purchase/webhook"
+echo "Setting up webhook endpoint: $WEBHOOK_URL"
 echo ""
 
 # Create webhook endpoint
 echo "Creating webhook endpoint..."
 WEBHOOK_ID=$(stripe webhook_endpoints create \
-  --url="https://app.testifi.ai/api/purchase/webhook" \
-  --enabled-events="payment_intent.succeeded,payment_intent.payment_failed,checkout.session.completed" \
+  --url="$WEBHOOK_URL" \
+  --enabled-events="payment_intent.succeeded,checkout.session.completed,charge.refund.created,charge.dispute.created" \
   --api-key="$live_api_key" \
   --format="json" | jq -r '.id')
 
@@ -77,25 +80,31 @@ else
 fi
 
 echo ""
-echo "📋 Step 3: Update Kubernetes Secrets"
+echo "📋 Step 3: Update Secret Manager Secrets"
 echo "Updating production secrets..."
 
 # Update Stripe API key
-kubectl patch secret $SECRET_NAME --type='json' -p='[{"op": "replace", "path": "/data/STRIPE_API_KEY", "value": "'$(echo -n "$live_api_key" | base64)'"}]'
+printf "%s" "$live_api_key" | gcloud secrets versions add backend-secrets-STRIPE_API_KEY \
+  --project="$PROJECT_ID" \
+  --data-file=-
 
 # Update Stripe webhook secret
-kubectl patch secret $SECRET_NAME --type='json' -p='[{"op": "replace", "path": "/data/STRIPE_WEBHOOK_SECRET", "value": "'$(echo -n "$webhook_secret" | base64)'"}]'
+printf "%s" "$WEBHOOK_SECRET" | gcloud secrets versions add backend-secrets-STRIPE_WEBHOOK_SECRET \
+  --project="$PROJECT_ID" \
+  --data-file=-
 
-echo "✅ Kubernetes secrets updated"
+echo "✅ Secret Manager secrets updated"
 
 echo ""
-echo "📋 Step 4: Restart Deployments"
-echo "Restarting backend and worker deployments..."
+echo "📋 Step 4: Restart Cloud Run Backend"
+echo "Restarting backend service..."
 
-kubectl rollout restart deployment/backend
-kubectl rollout restart deployment/summarize-worker
+gcloud run services update "$BACKEND_SERVICE" \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --update-env-vars="STRIPE_CONFIG_REFRESH=$(date +%s)"
 
-echo "✅ Deployments restarted"
+echo "✅ Backend service restarted"
 
 echo ""
 echo "📋 Step 5: Verify Deployment"
@@ -110,8 +119,8 @@ echo ""
 echo "📊 Summary:"
 echo "✅ Live API Key: Updated"
 echo "✅ Webhook Secret: Updated"
-echo "✅ Webhook Endpoint: https://app.testifi.ai/api/purchase/webhook"
-echo "✅ Deployments: Restarted"
+echo "✅ Webhook Endpoint: $WEBHOOK_URL"
+echo "✅ Backend: Restarted"
 echo ""
 echo "🧪 Next Steps:"
 echo "1. Test a small payment in production"
@@ -119,8 +128,8 @@ echo "2. Check Stripe Dashboard for transactions"
 echo "3. Monitor application logs"
 echo ""
 echo "📊 Monitor Commands:"
-echo "kubectl get pods"
-echo "kubectl logs -l app=backend"
+echo "gcloud run services describe $BACKEND_SERVICE --project=$PROJECT_ID --region=$REGION"
+echo "gcloud logging read 'resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$BACKEND_SERVICE\" AND textPayload:(\"stripe\" OR \"payment\" OR \"webhook\")' --project=$PROJECT_ID --limit=50"
 echo "stripe events list --limit=10"
 echo ""
 echo "⚠️  Important:"

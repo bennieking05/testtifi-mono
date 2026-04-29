@@ -1,8 +1,8 @@
 # 🚀 Final Production Stripe Setup
 
 ## Current Status
-- ✅ **Stripe CLI**: Logged in and configured
-- ✅ **Test Webhook**: Created (whsec_2WVSLVIeDLcs2Og1XcBKKWc6IA4pUmN1)
+- ✅ **Stripe CLI**: Previously configured during setup
+- ✅ **Test Webhook**: Created (signing secret redacted)
 - ❌ **Live Webhook**: Needs to be created via Dashboard
 - ❌ **Production Keys**: Need to be updated
 
@@ -19,7 +19,7 @@ Since the Stripe CLI has permission issues with live mode, let's set up producti
 ### Step 2: Create Live Webhook via Dashboard
 1. Go to [Stripe Dashboard > Webhooks](https://dashboard.stripe.com/webhooks)
 2. Click **"Add endpoint"**
-3. **Endpoint URL**: `https://app.testifi.ai/api/purchase/webhook`
+3. **Endpoint URL**: `https://app.testifi.ai/api/purchase/stripe-webhook`
 4. **Events to send**:
    - `payment_intent.succeeded`
    - `payment_intent.payment_failed`
@@ -27,19 +27,25 @@ Since the Stripe CLI has permission issues with live mode, let's set up producti
 5. Click **"Add endpoint"**
 6. Copy the **Signing secret** (starts with `whsec_`)
 
-### Step 3: Update Kubernetes Secrets
+### Step 3: Update Secret Manager Secrets
 ```bash
 # Update Stripe API Key (replace with your actual live key)
-kubectl patch secret backend-secrets --type='json' -p='[{"op": "replace", "path": "/data/STRIPE_API_KEY", "value": "'$(echo -n "sk_live_YOUR_ACTUAL_KEY" | base64)'"}]'
+printf "%s" "sk_live_YOUR_ACTUAL_KEY" | gcloud secrets versions add backend-secrets-STRIPE_API_KEY \
+  --project=golden-cosmos-450417-i8 \
+  --data-file=-
 
 # Update Stripe Webhook Secret (replace with your actual webhook secret)
-kubectl patch secret backend-secrets --type='json' -p='[{"op": "replace", "path": "/data/STRIPE_WEBHOOK_SECRET", "value": "'$(echo -n "whsec_YOUR_ACTUAL_SECRET" | base64)'"}]'
+printf "%s" "whsec_YOUR_ACTUAL_SECRET" | gcloud secrets versions add backend-secrets-STRIPE_WEBHOOK_SECRET \
+  --project=golden-cosmos-450417-i8 \
+  --data-file=-
 ```
 
-### Step 4: Restart Deployments
+### Step 4: Restart Cloud Run Backend
 ```bash
-kubectl rollout restart deployment/backend
-kubectl rollout restart deployment/summarize-worker
+gcloud run services update testifi-backend \
+  --project=golden-cosmos-450417-i8 \
+  --region=us-central1 \
+  --update-env-vars="STRIPE_CONFIG_REFRESH=$(date +%s)"
 ```
 
 ### Step 5: Verify Setup
@@ -79,7 +85,7 @@ kubectl logs -l app=backend | grep -i "stripe\|payment\|webhook"
 
 ### Staging Environment:
 - **Stripe Keys**: Test keys (`sk_test_...`)
-- **Webhook**: Test webhook (whsec_2WVSLVIeDLcs2Og1XcBKKWc6IA4pUmN1)
+- **Webhook**: Test webhook signing secret stored in Secret Manager
 - **Purpose**: Development and testing
 
 ### Production Environment:
@@ -102,15 +108,16 @@ kubectl get secret backend-secrets -o jsonpath='{.data.STRIPE_WEBHOOK_SECRET}' |
 kubectl get pods
 
 # Check deployment status
-kubectl rollout status deployment/backend
-kubectl rollout status deployment/summarize-worker
+gcloud run services describe testifi-backend \
+  --project=golden-cosmos-450417-i8 \
+  --region=us-central1
 ```
 
 ## 🚨 Important Notes
 
 ### Security:
 - ✅ **Never commit live keys to git**
-- ✅ **Use Kubernetes secrets for storage**
+- ✅ **Use Secret Manager for storage**
 - ✅ **Rotate keys periodically**
 - ❌ **Don't use test keys in production**
 
