@@ -84,7 +84,11 @@ app.get("/api/emergency/job-status", async (_req, res) => {
 });
 
 /* ─────────────── MIDDLEWARE ─────────────────── */
-app.use(cors());
+app.use(
+  cors({
+    exposedHeaders: ["Content-Disposition"],
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

@@ -11,7 +11,8 @@ import {
 } from "../utils/summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
 import { splitDepositionOverview } from "../utils/summaryOverviewDelimiter";
-import { sanitizeSummaryMetaLanguage } from "../utils/summarySanitize";
+import { sanitizeSummaryMetaLanguage, isNonSubstantiveSummary } from "../utils/summarySanitize";
+import { stripRedundantFullPageLineSuffix } from "../utils/pageLineDisplay";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -83,14 +84,13 @@ router.get(
           ? Number(job.file.pages)
           : undefined) || undefined;
       const boundedRows = enforcePageBounds(rows, { maxPage });
-      const PLACEHOLDER_STUB =
-        "No summary generated for this page range; see transcript.";
-      const displayRows = boundedRows.map((r) => ({
-        ...r,
-        summary: sanitizeSummaryMetaLanguage(
-          (r.summary || "").trim() === "—" ? PLACEHOLDER_STUB : r.summary || ""
-        ),
-      }));
+      const displayRows = boundedRows
+        .filter((r) => !isNonSubstantiveSummary(r.summary))
+        .map((r) => ({
+          ...r,
+          pageLine: stripRedundantFullPageLineSuffix(r.pageLine),
+          summary: sanitizeSummaryMetaLanguage(r.summary || ""),
+        }));
       const hasMultipleWitnesses =
         new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
 
@@ -259,9 +259,22 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+/** Skip markdown table header rows that would otherwise render as a bogus "Topic" line in preview. */
+function shouldSkipLeadingMetaTableLine(line: string): boolean {
+  const t = line.trim();
+  if (/^page\s*\/?\s*line\s*\|/i.test(t)) return true;
+  if (/^page\s*\(s\)\s*\|\s*testimony/i.test(t)) return true;
+  if (/^page\s*number\s*\|\s*testimony/i.test(t)) return true;
+  if (t.includes("|") && /\bpage\s*\/?\s*line\b/i.test(t) && /\btopic\b/i.test(t)) return true;
+  if (t.includes("|") && /\bpage\s*\(s\)\b/i.test(t) && /\btopic\b/i.test(t)) return true;
+  return false;
+}
+
 function parseToRows(mdText: string, witness: string = "Not Specified"): { meta: string[]; rows: PreviewSummaryRow[] } {
   const clean = (s: string) => s.replace(/```[\s\S]*?```/g, "").replace(/<br\s*\/?>/gi, "\n").replace(/\*\*(.*?)\*\*/g, "$1").replace(/__(.*?)__/g, "$1").replace(/\*(.*?)\*/g, "$1").trim();
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
+  const isMarkdownTableSeparator = (s: string) =>
+    /^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(s.trim());
   const pageRegex = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
 
   const meta: string[] = [];
@@ -282,7 +295,7 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
   mdText.split(/\r?\n/).forEach((raw) => {
     let trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith("```")) return;
-    if (isRule(trimmed)) return;
+    if (isRule(trimmed) || isMarkdownTableSeparator(trimmed)) return;
     trimmed = clean(trimmed);
     if (!trimmed) return;
 
@@ -328,7 +341,7 @@ function parseToRows(mdText: string, witness: string = "Not Specified"): { meta:
       return;
     }
 
-    if (!seenRow) meta.push(trimmed);
+    if (!seenRow && !shouldSkipLeadingMetaTableLine(trimmed)) meta.push(trimmed);
   });
 
   return { meta, rows };

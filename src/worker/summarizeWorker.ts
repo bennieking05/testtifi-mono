@@ -28,7 +28,11 @@ import {
   renderMetadataMarkdown,
   saveSummaryMetadata,
 } from "../utils/summaryMetadata";
-import { sanitizeSummaryMetaLanguage } from "../utils/summarySanitize";
+import { sanitizeSummaryMetaLanguage, isNonSubstantiveSummary } from "../utils/summarySanitize";
+import {
+  isRedundantLineNumberSuffix,
+  stripRedundantFullPageLineSuffix,
+} from "../utils/pageLineDisplay";
 import { DEPOSITION_OVERVIEW_END } from "../utils/summaryOverviewDelimiter";
 import {
   runAllJudges,
@@ -1128,6 +1132,7 @@ RULES:
 1. Cover ALL pages from ${firstPage} to ${lastPage} with NO GAPS
 2. Each row: | Page/Line cell | Summary cell | — no Topic column
 3. 3-8 sentences per row where substantive
+4. For pages with no substantive testimony only, use | p.X | __SKIP__ | (literal __SKIP__ in Summary) — do not describe OCR, blanks, illegibility, or procedural pages in prose
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1139,6 +1144,8 @@ PAGES: ${pagesList}
 *** ALL pages must be covered - NO GAPS ***
 
 FORMAT: | p.X-Y | Summary | (2 columns only; add line range only for partial pages)
+
+RULES: Use | p.X | __SKIP__ | for non-substantive pages only (literal __SKIP__); do not narrate illegible/empty/minimal content.
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1183,7 +1190,7 @@ OUTPUT FORMAT - 2 COLUMNS ONLY:
 
 INSTRUCTIONS:
 - First column: Prefer p.X or p.X-Y for full pages; use p.X:lines only for partial-page coverage when lines are visible (e.g. compared to "${pagesRangeStr}")
-- Second column: 3-6 sentences: names, dates, exhibits, key facts
+- Second column: 3-6 sentences: names, dates, exhibits, key facts — or exactly __SKIP__ for non-substantive pages only (no prose about illegible/empty/minimal content)
 - NO Topic column
 - SKIP any Index, Errata, Concordance, or Certificate sections
 
@@ -1199,7 +1206,7 @@ Continue summarizing.
 THIS CHUNK CONTAINS TRANSCRIPT PAGES: ${pagesListStr}
 You MUST summarize content from EACH of these pages.
 
-FORMAT: | p.X-Y | Summary | (2 columns; lines only if partial page)
+FORMAT: | p.X-Y | Summary | (2 columns; lines only if partial page; use | p.X | __SKIP__ | for non-substantive pages only)
 
 Transcript:
 ${chunk.text}
@@ -1560,15 +1567,6 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
  * @returns Markdown table rows sorted by page number, with ranges preserved
  */
 
-function shouldDropFullPageLineSuffix(lineSuffix: string): boolean {
-  if (!lineSuffix) return false;
-  const m = lineSuffix.match(/^:(\d+)-(\d+)$/);
-  if (!m) return false;
-  const ls = parseInt(m[1], 10);
-  const le = parseInt(m[2], 10);
-  return ls === 1 && le >= 22 && le <= 28;
-}
-
 function assembleSortedSummary(
   llmOutputs: string[],
   expectedPages: number[],
@@ -1710,7 +1708,7 @@ function assembleSortedSummary(
     }
 
     const candidateSuffix = lineNum ? lineNum : '';
-    const lineSuffix = shouldDropFullPageLineSuffix(candidateSuffix) ? '' : candidateSuffix;
+    const lineSuffix = isRedundantLineNumberSuffix(candidateSuffix) ? '' : candidateSuffix;
     return e.startPage === e.endPage
       ? `| p.${e.startPage}${lineSuffix} | ${e.summary} |`
       : `| p.${e.startPage}-${e.endPage}${lineSuffix} | ${e.summary} |`;
@@ -2383,8 +2381,13 @@ async function work() {
             try {
               console.log(`[${job.id}] 📄 Generating DOCX and PDF attachments...`);
               const { rows, depositionOverview } = parseMarkdown(merged);
-              // Exclude placeholder-only rows from attachments
-              const displayRows = rows.filter((r) => (r.summary || "").trim() !== "—");
+              // Exclude placeholder, __SKIP__, and meta-commentary rows from attachments
+              const displayRows = rows
+                .filter((r) => !isNonSubstantiveSummary(r.summary))
+                .map((r) => ({
+                  ...r,
+                  pageLine: stripRedundantFullPageLineSuffix(r.pageLine),
+                }));
               const filePages =
                 typeof job.file?.pages === "number" && !Number.isNaN(job.file.pages)
                   ? String(job.file.pages)

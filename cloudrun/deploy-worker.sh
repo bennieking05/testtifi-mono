@@ -17,7 +17,8 @@ SA_EMAIL="testifi-cloudrun@${PROJECT_ID}.iam.gserviceaccount.com"
 # Build and push worker image
 echo "🔨 Building worker image..."
 cd ../backend
-gcloud builds submit --tag gcr.io/$PROJECT_ID/summarize-worker:latest --target summarize-worker .
+gcloud builds submit \
+    --config=backend-build-worker.yaml .
 
 cd ../cloudrun
 

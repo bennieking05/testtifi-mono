@@ -12,6 +12,7 @@ import {
   resolveSummaryMetadata,
   renderMetadataMarkdown,
 } from "../utils/summaryMetadata";
+import { stripRedundantFullPageLineSuffix } from "../utils/pageLineDisplay";
 import { resolveFrontendBaseUrl } from "../utils/frontendUrl";
 import {
   claimCompletionEmailSend,
@@ -170,7 +171,12 @@ router.post(
                     : undefined) || undefined;
                 const boundedRows = enforcePageBounds(rows, { maxPage });
                 // Exclude placeholder-only rows (e.g. "p.16-18  General Testimony  —") from output
-                const displayRows = boundedRows.filter((r) => (r.summary || "").trim() !== "—");
+                const displayRows = boundedRows
+                  .filter((r) => (r.summary || "").trim() !== "—")
+                  .map((r) => ({
+                    ...r,
+                    pageLine: stripRedundantFullPageLineSuffix(r.pageLine),
+                  }));
 
                 // Convert job to match JobData interface (pages needs to be string)
                 const jobData = {

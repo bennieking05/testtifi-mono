@@ -22,6 +22,8 @@ import { loadLogo } from "../utils/logo";
 import { normalizeUnknownString, resolveSummaryMetadata } from "../utils/summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
 import { splitDepositionOverview } from "../utils/summaryOverviewDelimiter";
+import { stripRedundantFullPageLineSuffix } from "../utils/pageLineDisplay";
+import { isNonSubstantiveSummary } from "../utils/summarySanitize";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -101,6 +103,8 @@ export function parseMarkdown(md: string, witness: string = "Not Specified"): {
       .trim();
 
   const isRule = (s: string) => /^(?:-{3,}|_{3,}|\*{3,})$/.test(s.trim());
+  const isMarkdownTableSeparator = (s: string) =>
+    /^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(s.trim());
   const pageLineToken = /^(?:p(?:age)?\.?)?\s*\d+(?::\d+)?(?:\s*[-–]\s*\d+(?::\d+)?)?/i;
 
   const meta: string[] = [];
@@ -122,7 +126,7 @@ export function parseMarkdown(md: string, witness: string = "Not Specified"): {
   mdForTableParsing.split(/\r?\n/).forEach((raw) => {
     let trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith("```")) return;
-    if (isRule(trimmed)) return;
+    if (isRule(trimmed) || isMarkdownTableSeparator(trimmed)) return;
 
     trimmed = clean(trimmed);
     if (!trimmed) return;
@@ -179,6 +183,8 @@ export function parseMarkdown(md: string, witness: string = "Not Specified"): {
       if (/^page\s*\/?\s*line\s*\|/i.test(trimmed)) return;
       if (/^page\s*\(s\)\s*\|\s*testimony/i.test(trimmed)) return;
       if (/^page\s*number\s*\|\s*testimony/i.test(trimmed)) return;
+      if (trimmed.includes("|") && /\bpage\s*\/?\s*line\b/i.test(trimmed) && /\btopic\b/i.test(trimmed)) return;
+      if (trimmed.includes("|") && /\bpage\s*\(s\)\b/i.test(trimmed) && /\btopic\b/i.test(trimmed)) return;
       meta.push(trimmed);
     }
   });
@@ -297,8 +303,13 @@ router.get(
       const boundedRows = enforcePageBounds(rows, {
         maxPage: normalizedPages || metadata.totalPages || undefined,
       });
-      // Exclude placeholder-only rows (e.g. "p.16-18  General Testimony  —") from output
-      const displayRows = boundedRows.filter((r) => (r.summary || "").trim() !== "—");
+      // Exclude placeholder, __SKIP__, and meta-commentary rows from output
+      const displayRows = boundedRows
+        .filter((r) => !isNonSubstantiveSummary(r.summary))
+        .map((r) => ({
+          ...r,
+          pageLine: stripRedundantFullPageLineSuffix(r.pageLine),
+        }));
       const hasMultipleWitnesses =
         new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
 
@@ -621,11 +632,30 @@ router.get(
           console.warn(`[Download] Skipping tracking: userId=${req.user?.userId}, fileId=${job.fileId}`);
         }
         
-        const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
-        const pass = new stream.PassThrough();
-        pdf.pipe(pass).pipe(res);
         res.setHeader("Content-Type", "application/pdf");
         setAttachmentFilename(res, uploadedTitle, "pdf");
+
+        const pdf = new PDFDocument({ margin: 40, size: "LETTER" });
+        const pass = new stream.PassThrough();
+        pdf.on("error", (pdfErr) => {
+          console.error("[Download] PDF stream error:", pdfErr);
+          if (!res.headersSent) {
+            res.status(500).json({ error: "Failed to generate PDF." });
+          } else {
+            try {
+              res.end();
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+        pass.on("error", (passErr) => {
+          console.error("[Download] PDF pass-through error:", passErr);
+        });
+        res.on("error", (resErr) => {
+          console.error("[Download] Response error during PDF:", resErr);
+        });
+        pdf.pipe(pass).pipe(res);
         const lm = pdf.page.margins.left;
         const rm = pdf.page.margins.right;
         const full = pdf.page.width - lm - rm;

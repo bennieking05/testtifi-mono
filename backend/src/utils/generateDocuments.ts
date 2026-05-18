@@ -17,6 +17,8 @@ import PDFDocument from "pdfkit";
 import { loadLogo } from "./logo";
 import { normalizeUnknownString, SummaryMetadata } from "./summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "./dateTime";
+import { stripRedundantFullPageLineSuffix } from "./pageLineDisplay";
+import { isNonSubstantiveSummary } from "./summarySanitize";
 
 interface JobData {
   id: string;
@@ -73,8 +75,14 @@ export async function generateDocxBuffer(
   _summaryContent: string
 ): Promise<Buffer> {
   const { rows, depositionOverview } = documentData;
+  const displayRows = rows
+    .filter((r) => !isNonSubstantiveSummary(r.summary))
+    .map((row) => ({
+      ...row,
+      pageLine: stripRedundantFullPageLineSuffix(row.pageLine),
+    }));
   const hasMultipleWitnesses =
-    new Set(rows.map((r) => r.witness).filter(Boolean)).size > 1;
+    new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
   const depositionOverviewText =
     (depositionOverview && depositionOverview.trim()) ||
     (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
@@ -262,7 +270,7 @@ export async function generateDocxBuffer(
                       new TableCell({ width: { size: 82, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
                     ],
               }),
-              ...rows.map((row) =>
+              ...displayRows.map((row) =>
                 new TableRow({
                   children: hasMultipleWitnesses
                     ? [
@@ -296,8 +304,14 @@ export async function generatePdfBuffer(
   _summaryContent: string
 ): Promise<Buffer> {
   const { rows, depositionOverview } = documentData;
+  const displayRows = rows
+    .filter((r) => !isNonSubstantiveSummary(r.summary))
+    .map((row) => ({
+      ...row,
+      pageLine: stripRedundantFullPageLineSuffix(row.pageLine),
+    }));
   const hasMultipleWitnesses =
-    new Set(rows.map((r) => r.witness).filter(Boolean)).size > 1;
+    new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
   const depositionOverviewText =
     (depositionOverview && depositionOverview.trim()) ||
     (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
@@ -369,7 +383,7 @@ export async function generatePdfBuffer(
       const displayPages =
         (metadata.totalPages && metadata.totalPages > 0
           ? metadata.totalPages
-          : deriveMaxPageFromRows(rows)) || 0;
+          : deriveMaxPageFromRows(displayRows)) || 0;
       const hasPages = displayPages > 0;
       if (hasPages) contentH += pdf.heightOfString(`Pages: ${displayPages}`, lineOpts) + 10;
 
@@ -481,7 +495,7 @@ export async function generatePdfBuffer(
     const pageHeight = pdf.page.height;
     const bottomMargin = 60;
 
-    rows.forEach((row) => {
+    displayRows.forEach((row) => {
       pdf.font("Times-Roman").fontSize(9);
       const h1 = pdf.heightOfString(row.pageLine, { width: col1Width - 2 * pad });
       const h2 = hasMultipleWitnesses

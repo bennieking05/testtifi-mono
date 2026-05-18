@@ -2,6 +2,7 @@
 import React from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { MainContent } from "@/components/layout/MainContent";
+import { DisclaimerNotice } from "@/components/layout/DisclaimerNotice";
 
 const Terms = () => {
   return (
@@ -35,6 +36,7 @@ const Terms = () => {
 
             <section>
               <h2 className="text-2xl font-semibold mb-3">3. Disclaimer</h2>
+              <DisclaimerNotice className="mb-3 text-gray-700" />
               <p className="text-gray-700">
                 The materials on Testifi AI's website are provided on an 'as is' basis. Testifi AI makes no warranties, expressed or implied, and hereby disclaims and negates all other warranties including, without limitation, implied warranties or conditions of merchantability, fitness for a particular purpose, or non-infringement of intellectual property or other violation of rights.
               </p>

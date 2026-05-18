@@ -41,7 +41,6 @@ export function normalizeUnknownString(value?: string | null): string | null {
 export function renderMetadataMarkdown(meta: SummaryMetadata): string {
   const depositionDate = normalizeUnknownString(meta.depositionDate);
   return [
-    `Case Caption: ${meta.caseCaption}`,
     `Title of Document: Transcript Summary of ${meta.deponent}`,
     ...(depositionDate ? [`Date of Deposition: ${depositionDate}`] : []),
   ].join("\n");

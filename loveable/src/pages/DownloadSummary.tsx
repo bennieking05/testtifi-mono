@@ -103,7 +103,9 @@ const DownloadSummary: React.FC = () => {
         if (raw) filename = raw;
       }
       if (!filename) {
-        const safeTitle = summaryData.title.replace(/\s+/g, "-").toLowerCase();
+        const safeTitle = (summaryData.fileTitle || "deposition-summary")
+          .replace(/\s+/g, "-")
+          .toLowerCase();
         filename = `${safeTitle}.${selectedFormat}`;
       }
 
@@ -119,7 +121,24 @@ const DownloadSummary: React.FC = () => {
       toast.success(`Downloaded as ${selectedFormat.toUpperCase()}`);
     } catch (err: any) {
       console.error(err);
-      toast.error(err.response?.data?.error || "Download failed");
+      let message = "Download failed";
+      const data = err.response?.data;
+      if (typeof data?.error === "string") {
+        message = data.error;
+      } else if (data instanceof Blob) {
+        try {
+          const text = await data.text();
+          try {
+            const parsed = JSON.parse(text) as { error?: string };
+            if (parsed?.error) message = parsed.error;
+          } catch {
+            if (text.trim()) message = text.slice(0, 200);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      toast.error(message);
     } finally {
       setIsDownloading(false);
     }
