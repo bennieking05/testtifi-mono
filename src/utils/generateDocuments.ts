@@ -18,7 +18,12 @@ import { loadLogo } from "./logo";
 import { normalizeUnknownString, SummaryMetadata } from "./summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "./dateTime";
 import { stripRedundantFullPageLineSuffix } from "./pageLineDisplay";
-import { isNonSubstantiveSummary } from "./summarySanitize";
+import {
+  isNonSubstantiveSummary,
+  sanitizeDepositionOverviewProse,
+  sanitizeSummaryMetaLanguage,
+  stripInCaseOfInternalTitle,
+} from "./summarySanitize";
 
 interface JobData {
   id: string;
@@ -83,10 +88,20 @@ export async function generateDocxBuffer(
     }));
   const hasMultipleWitnesses =
     new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
-  const depositionOverviewText =
+  const depositionOverviewRaw =
     (depositionOverview && depositionOverview.trim()) ||
     (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
     "";
+  const internalDocTitle =
+    (job.file?.title && String(job.file.title).trim()) ||
+    (job.fileName || "").replace(/\.[^.]+$/, "").trim() ||
+    "";
+  const depositionOverviewText = depositionOverviewRaw
+    ? stripInCaseOfInternalTitle(
+        sanitizeDepositionOverviewProse(sanitizeSummaryMetaLanguage(depositionOverviewRaw)),
+        internalDocTitle
+      )
+    : "";
   // Use caseCaption (extracted from document) for Case Title, fallback to user-provided title
   const coverTitle =
     metadata.caseCaption || metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
@@ -312,10 +327,20 @@ export async function generatePdfBuffer(
     }));
   const hasMultipleWitnesses =
     new Set(displayRows.map((r) => r.witness).filter(Boolean)).size > 1;
-  const depositionOverviewText =
+  const depositionOverviewRaw =
     (depositionOverview && depositionOverview.trim()) ||
     (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
     "";
+  const internalDocTitle =
+    (job.file?.title && String(job.file.title).trim()) ||
+    (job.fileName || "").replace(/\.[^.]+$/, "").trim() ||
+    "";
+  const depositionOverviewText = depositionOverviewRaw
+    ? stripInCaseOfInternalTitle(
+        sanitizeDepositionOverviewProse(sanitizeSummaryMetaLanguage(depositionOverviewRaw)),
+        internalDocTitle
+      )
+    : "";
   const coverTitle =
     metadata.caseCaption || metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";

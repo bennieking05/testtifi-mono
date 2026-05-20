@@ -11,7 +11,7 @@ import {
 } from "../utils/summaryMetadata";
 import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
 import { splitDepositionOverview } from "../utils/summaryOverviewDelimiter";
-import { sanitizeSummaryMetaLanguage, isNonSubstantiveSummary } from "../utils/summarySanitize";
+import { sanitizeSummaryMetaLanguage, isNonSubstantiveSummary, sanitizeDepositionOverviewProse, stripInCaseOfInternalTitle } from "../utils/summarySanitize";
 import { stripRedundantFullPageLineSuffix } from "../utils/pageLineDisplay";
 
 const router = express.Router();
@@ -67,10 +67,20 @@ router.get(
       const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
 
       const { mdForTableParsing, depositionOverview: overviewFromMd } = splitDepositionOverview(cleaned);
-      const depositionOverviewText =
+      const depositionOverviewRaw =
         (overviewFromMd && overviewFromMd.trim()) ||
         (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
         "";
+      const internalDocTitle =
+        (job.file?.title && String(job.file.title).trim()) ||
+        (job.fileName || "").replace(/\.[^.]+$/, "").trim() ||
+        "";
+      const depositionOverviewText = depositionOverviewRaw
+        ? stripInCaseOfInternalTitle(
+            sanitizeDepositionOverviewProse(sanitizeSummaryMetaLanguage(depositionOverviewRaw)),
+            internalDocTitle
+          )
+        : "";
 
       const { meta, rows } = parseToRows(mdForTableParsing, deponentName);
       const metadataMarkdown = renderMetadataMarkdown(metadata);

@@ -161,6 +161,44 @@ async function request(method, endpoint, options = {}) {
   }
 }
 
+/** GET binary/text response with header inspection (for /api/download). */
+async function requestDownloadWithHeaders(endpoint, headers, timeoutMs = 120000) {
+  const url = `${BASE}${endpoint}`;
+  const start = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: { ...headers },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const elapsed = Date.now() - start;
+    const contentDisposition = resp.headers.get('content-disposition') || '';
+    const contentType = resp.headers.get('content-type') || '';
+    const buf = await resp.arrayBuffer();
+    return {
+      status: resp.status,
+      elapsed,
+      contentDisposition,
+      contentType,
+      bytes: buf.byteLength,
+      error: null,
+    };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return {
+      status: 0,
+      elapsed: Date.now() - start,
+      contentDisposition: '',
+      contentType: '',
+      bytes: 0,
+      error: err.message,
+    };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -392,6 +430,44 @@ async function testDownloadEndpoints(token) {
     headers,
     expectedStatus: 404,
   });
+
+  // Happy path: first "active" summary (complete job) should return 200 + Content-Disposition: attachment
+  const summariesRes = await request('GET', '/api/summaries', { headers });
+  let activeJobId = null;
+  if (summariesRes.status === 200 && Array.isArray(summariesRes.data)) {
+    const row = summariesRes.data.find((s) => s && s.id && s.status === 'active');
+    if (row) activeJobId = row.id;
+  }
+  process.stdout.write(`  GET    /api/download?jobId=<active>&format=txt (headers) ... `);
+  if (activeJobId) {
+    const dl = await requestDownloadWithHeaders(
+      `/api/download?jobId=${encodeURIComponent(activeJobId)}&format=txt`,
+      headers
+    );
+    const cdOk = /attachment/i.test(dl.contentDisposition);
+    const ok = dl.status === 200 && cdOk && dl.bytes > 10;
+    recordResult(
+      '/api/download (active job + Content-Disposition)',
+      'GET',
+      dl.status,
+      '200+attachment+body',
+      ok,
+      dl.elapsed,
+      ok ? '' : `cd=${dl.contentDisposition} ct=${dl.contentType} bytes=${dl.bytes} err=${dl.error || ''}`
+    );
+    console.log(ok ? `✅ ${dl.status} (${dl.elapsed}ms)` : `❌ ${dl.status} ...`);
+  } else {
+    recordResult(
+      '/api/download (active job + Content-Disposition)',
+      'GET',
+      0,
+      'skip',
+      true,
+      0,
+      'no active summary in /api/summaries for this account'
+    );
+    console.log(`⏭️  skip (no active summary)`);
+  }
 }
 
 async function testUploadEndpoints(token) {

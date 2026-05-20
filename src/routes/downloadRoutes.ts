@@ -23,7 +23,7 @@ import { normalizeUnknownString, resolveSummaryMetadata } from "../utils/summary
 import { formatDateInTimeZoneMDY, parseLooseDate } from "../utils/dateTime";
 import { splitDepositionOverview } from "../utils/summaryOverviewDelimiter";
 import { stripRedundantFullPageLineSuffix } from "../utils/pageLineDisplay";
-import { isNonSubstantiveSummary } from "../utils/summarySanitize";
+import { isNonSubstantiveSummary, sanitizeDepositionOverviewProse, sanitizeSummaryMetaLanguage, stripInCaseOfInternalTitle } from "../utils/summarySanitize";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -277,10 +277,20 @@ router.get(
       const metadata = await resolveSummaryMetadata(bucket, job);
       let deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
       const { meta, rows, depositionOverview: overviewFromMd } = parseMarkdown(data, deponentName);
-      const depositionOverviewText =
+      const depositionOverviewRaw =
         (overviewFromMd && overviewFromMd.trim()) ||
         (metadata.depositionOverview && String(metadata.depositionOverview).trim()) ||
         "";
+      const internalDocTitleDl =
+        (job.file?.title && String(job.file.title).trim()) ||
+        (job.fileName || "").replace(/\.[^.]+$/, "").trim() ||
+        "";
+      const depositionOverviewText = depositionOverviewRaw
+        ? stripInCaseOfInternalTitle(
+            sanitizeDepositionOverviewProse(sanitizeSummaryMetaLanguage(depositionOverviewRaw)),
+            internalDocTitleDl
+          )
+        : "";
       sourceFileName = metadata.sourceFileName || sourceFileName;
       // Use caseCaption (extracted from document) for Case Title, fallback to user-provided title
       coverTitle = metadata.caseCaption || metadata.caseTitle || coverTitle;

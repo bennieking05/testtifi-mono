@@ -105,7 +105,9 @@ timestamp,target,total_tests,passed,failed,pass_rate,api_passed,api_failed,front
 ### Download (`/api/download`)
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/download?jobId=X&format=Y` | Yes | Download summary (pdf/docx/txt/csv) |
+| GET | `/api/download?jobId=X&format=Y` | Yes | Download summary (pdf/docx/txt/csv). Response must include `Content-Disposition: attachment` (CORS exposes this header for browser filename). |
+
+API regression (when credentials are present): after listing `/api/summaries`, uses the first **active** (completed) job to assert `GET /api/download?jobId=…&format=txt` returns **200**, a non-empty body, and an `attachment` content disposition.
 
 ### Upload (`/api/upload`)
 | Method | Endpoint | Auth | Description |
@@ -129,7 +131,7 @@ timestamp,target,total_tests,passed,failed,pass_rate,api_passed,api_failed,front
 ### Preview (`/api/preview`)
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/preview?id=X` | Yes | Get summary preview HTML (cover metadata; body omits duplicate Case Caption/Title/Date lines; unfilled page ranges show stub text) |
+| GET | `/api/preview?id=X` | Yes | Get summary preview HTML (cover metadata; body omits duplicate Case Caption/Title/Date lines; non-substantive / meta table rows omitted; deposition overview sanitized) |
 
 ### Snapshots (`/api/snapshots`)
 | Method | Endpoint | Auth | Description |

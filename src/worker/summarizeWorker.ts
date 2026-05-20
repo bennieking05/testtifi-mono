@@ -28,7 +28,7 @@ import {
   renderMetadataMarkdown,
   saveSummaryMetadata,
 } from "../utils/summaryMetadata";
-import { sanitizeSummaryMetaLanguage, isNonSubstantiveSummary } from "../utils/summarySanitize";
+import { sanitizeSummaryMetaLanguage, isNonSubstantiveSummary, sanitizeDepositionOverviewProse, stripInCaseOfInternalTitle } from "../utils/summarySanitize";
 import {
   isRedundantLineNumberSuffix,
   stripRedundantFullPageLineSuffix,
@@ -1784,10 +1784,25 @@ async function withRetry<T>(
 
 const OVERVIEW_TABLE_INPUT_CAP = 120_000;
 
+/** True when caption text plausibly came from a transcript header, not an upload title fallback. */
+function looksLikeTranscriptCaseCaption(caption: string | null | undefined): boolean {
+  const t = (caption || "").trim();
+  if (!t) return false;
+  if (/\bv\.|vs\.|versus\b/i.test(t)) return true;
+  if (/^Civil Action No\./i.test(t)) return true;
+  if (t.length >= 36) return true;
+  return false;
+}
+
 async function generateDepositionOverview(
   jobId: string,
   rowsMarkdown: string,
-  ctx: { deponent: string; caseCaption: string; totalPages: number }
+  ctx: {
+    deponent: string;
+    transcriptCaption: string;
+    internalDocumentTitle: string;
+    totalPages: number;
+  }
 ): Promise<string> {
   let tableInput = rowsMarkdown;
   if (tableInput.length > OVERVIEW_TABLE_INPUT_CAP) {
@@ -1797,11 +1812,15 @@ async function generateDepositionOverview(
       "\n\n[... middle of page-line summary omitted for length ...]\n\n" +
       tableInput.slice(-half);
   }
+  const captionBlock = ctx.transcriptCaption
+    ? `- Case caption (from transcript header): ${ctx.transcriptCaption}`
+    : `- Case caption: Not identified in the transcript header — do not invent a court or party caption.`;
   const userMsg = `Write a one-page deposition overview for attorneys.
 
 Case context:
 - Deponent: ${ctx.deponent}
-- Case caption: ${ctx.caseCaption}
+${captionBlock}
+- Internal document title (for file identification only — NOT a court caption; never write "in the case of" or similar using this title): ${ctx.internalDocumentTitle}
 - Transcript pages summarized: ${ctx.totalPages}
 
 Input: the full page-line summary table below (markdown). Produce ONE cohesive overview (max ~500 words, about one printed page).
@@ -1811,6 +1830,8 @@ Rules:
 - Summarize who testified, high-level subject matter, and the arc of the examination. Do NOT re-list every page range.
 - No Q&A format. Do NOT cite specific page or line numbers in the overview.
 - Do NOT mention OCR, scanned documents, or text extraction.
+- If no real case caption was provided above, refer to the matter neutrally (e.g. "this deposition", "the examination") — do not treat the internal document title as a case name.
+- Never use the phrase "in the case of" followed by the internal document title or any upload-only name.
 - Output plain paragraphs only (no markdown headings, no table, no pipe characters).
 
 --- PAGE-LINE SUMMARY TABLE ---
@@ -1825,7 +1846,7 @@ ${tableInput}`;
             {
               role: "system",
               content:
-                "You write concise deposition overviews for litigation professionals. Follow instructions exactly.",
+                "You write concise deposition overviews for litigation professionals. Follow instructions exactly. Never misrepresent an internal upload title as a court case caption.",
             },
             { role: "user", content: userMsg },
           ],
@@ -1835,7 +1856,10 @@ ${tableInput}`;
       { retries: 3, minDelayMs: 2000, maxDelayMs: 20000 }
     );
     const raw = String(resp?.choices?.[0]?.message?.content || "").trim();
-    return sanitizeSummaryMetaLanguage(raw);
+    let out = sanitizeSummaryMetaLanguage(raw);
+    out = sanitizeDepositionOverviewProse(out);
+    out = stripInCaseOfInternalTitle(out, ctx.internalDocumentTitle);
+    return out;
   } catch (e: any) {
     console.warn(`[${jobId}] Deposition overview generation failed:`, e?.message || e);
     return "";
@@ -2292,9 +2316,14 @@ async function work() {
       // Update metadata with judge results
       let depositionOverviewText = "";
       try {
+        const transcriptCaption =
+          looksLikeTranscriptCaseCaption(legalMeta.caseCaption) && legalMeta.caseCaption
+            ? legalMeta.caseCaption.trim()
+            : "";
         depositionOverviewText = await generateDepositionOverview(job.id, rowsOnly, {
           deponent: legalMeta.deponent || "Not Specified",
-          caseCaption: legalMeta.caseCaption || displayTitle,
+          transcriptCaption,
+          internalDocumentTitle: displayTitle,
           totalPages: totalTranscriptPages,
         });
       } catch (ovErr: any) {
