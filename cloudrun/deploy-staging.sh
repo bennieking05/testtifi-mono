@@ -73,7 +73,7 @@ gcloud run deploy testifi-backend-staging \
     --memory 512Mi \
     --cpu 1 \
     --timeout 300 \
-    --set-env-vars "NODE_ENV=staging,BASE_URL=https://staging.app.testifi.ai,BACKEND_URL=https://staging.app.testifi.ai,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o,AZURE_API_VERSION=2025-01-01-preview,EMAIL_USER=admin@testifi.ai" \
+    --set-env-vars "NODE_ENV=staging,BASE_URL=https://staging.app.testifi.ai,BACKEND_URL=https://staging.app.testifi.ai,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.5-testifi,AZURE_API_VERSION=2025-01-01-preview,EMAIL_USER=admin@testifi.ai" \
     --set-secrets "DATABASE_URL=backend-secrets-staging-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=backend-secrets-staging-SENDGRID_API_KEY:latest,JWT_SECRET=backend-secrets-staging-JWT_SECRET:latest,STRIPE_API_KEY=backend-secrets-staging-STRIPE_API_KEY:latest,STRIPE_WEBHOOK_SECRET=backend-secrets-staging-STRIPE_WEBHOOK_SECRET:latest,AZURE_OPENAI_API_KEY=backend-secrets-staging-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=backend-secrets-staging-AZURE_OPENAI_ENDPOINT:latest"
 
 # Deploy Summarize Worker (Staging)
@@ -91,7 +91,7 @@ gcloud run deploy testifi-summarize-worker-staging \
     --cpu 2 \
     --timeout 3600 \
     --no-cpu-throttling \
-    --set-env-vars "NODE_ENV=staging,BASE_URL=https://staging.app.testifi.ai,WORKER_CONCURRENCY=1,PAGE_RANGE_SIZE=5,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o,AZURE_API_VERSION=2025-01-01-preview,EMAIL_USER=admin@testifi.ai" \
+    --set-env-vars "NODE_ENV=staging,BASE_URL=https://staging.app.testifi.ai,WORKER_CONCURRENCY=1,PAGE_RANGE_SIZE=5,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.5-testifi,AZURE_API_VERSION=2025-01-01-preview,EMAIL_USER=admin@testifi.ai" \
     --set-secrets "DATABASE_URL=backend-secrets-staging-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=backend-secrets-staging-SENDGRID_API_KEY:latest,AZURE_OPENAI_API_KEY=backend-secrets-staging-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=backend-secrets-staging-AZURE_OPENAI_ENDPOINT:latest"
 
 # Deploy Frontend (Staging)

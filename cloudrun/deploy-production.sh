@@ -63,7 +63,7 @@ gcloud run deploy testifi-backend \
     --memory 512Mi \
     --cpu 1 \
     --timeout 300 \
-    --set-env-vars "NODE_ENV=production,BASE_URL=https://app.testifi.ai,BACKEND_URL=https://app.testifi.ai,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5-testifi,AZURE_API_VERSION=2025-01-01-preview" \
+    --set-env-vars "NODE_ENV=production,BASE_URL=https://app.testifi.ai,BACKEND_URL=https://app.testifi.ai,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.5-testifi,AZURE_API_VERSION=2025-01-01-preview" \
     --set-secrets "DATABASE_URL=backend-secrets-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=backend-secrets-SENDGRID_API_KEY:latest,JWT_SECRET=backend-secrets-JWT_SECRET:latest,STRIPE_API_KEY=backend-secrets-STRIPE_API_KEY:latest,STRIPE_WEBHOOK_SECRET=backend-secrets-STRIPE_WEBHOOK_SECRET:latest,AZURE_OPENAI_API_KEY=backend-secrets-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=backend-secrets-AZURE_OPENAI_ENDPOINT:latest"
 
 # Deploy Frontend (Production)

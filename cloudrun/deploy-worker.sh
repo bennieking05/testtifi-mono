@@ -36,7 +36,7 @@ gcloud run deploy testifi-summarize-worker \
     --memory 2Gi \
     --cpu 2 \
     --timeout 3600 \
-    --set-env-vars "NODE_ENV=production,WORKER_CONCURRENCY=1,PAGE_RANGE_SIZE=5,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5-testifi,AZURE_API_VERSION=2025-01-01-preview,BASE_URL=https://app.testifi.ai" \
+    --set-env-vars "NODE_ENV=production,WORKER_CONCURRENCY=1,PAGE_RANGE_SIZE=5,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.5-testifi,AZURE_API_VERSION=2025-01-01-preview,BASE_URL=https://app.testifi.ai" \
     --set-secrets "DATABASE_URL=backend-secrets-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=backend-secrets-SENDGRID_API_KEY:latest,AZURE_OPENAI_API_KEY=backend-secrets-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=backend-secrets-AZURE_OPENAI_ENDPOINT:latest"
 
 echo ""

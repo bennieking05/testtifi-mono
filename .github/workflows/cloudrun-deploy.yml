@@ -35,14 +35,14 @@ jobs:
             echo "IMAGE_TAG=latest" >> $GITHUB_ENV
             echo "SERVICE_NAME=testifi-backend" >> $GITHUB_ENV
             echo "BASE_URL=https://app.testifi.ai" >> $GITHUB_ENV
-            echo "AZURE_MODEL=gpt-5-testifi" >> $GITHUB_ENV
+            echo "AZURE_MODEL=gpt-5.5-testifi" >> $GITHUB_ENV
             echo "SECRETS_PREFIX=backend-secrets" >> $GITHUB_ENV
           else
             echo "ENV_NAME=staging" >> $GITHUB_ENV
             echo "IMAGE_TAG=staging" >> $GITHUB_ENV
             echo "SERVICE_NAME=testifi-backend-staging" >> $GITHUB_ENV
             echo "BASE_URL=https://staging.app.testifi.ai" >> $GITHUB_ENV
-            echo "AZURE_MODEL=gpt-4o" >> $GITHUB_ENV
+            echo "AZURE_MODEL=gpt-5.5-testifi" >> $GITHUB_ENV
             echo "SECRETS_PREFIX=backend-secrets-staging" >> $GITHUB_ENV
           fi
 
