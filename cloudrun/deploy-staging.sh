@@ -1,6 +1,7 @@
 #!/bin/bash
 # Deploy TestifiAI to Cloud Run (Staging Environment)
 set -e
+cd "$(dirname "$0")"
 
 PROJECT_ID="golden-cosmos-450417-i8"
 REGION="us-central1"

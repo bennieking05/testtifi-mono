@@ -1,7 +1,7 @@
 // File: src/components/checkout/Checkout.tsx
 
 import React, { useState, useEffect } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements } from "@stripe/react-stripe-js";
 import { Button } from "@/components/ui/button";
@@ -213,13 +213,23 @@ const Checkout: React.FC = () => {
     <AuthenticatedLayout>
       <main className="flex-1 px-5 pb-8 pt-16 lg:pt-6">
         <header className="mb-8">
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/payment")}
-            className="mb-4"
-          >
-            <ArrowLeft className="mr-2 h-4 w-4" /> Back to Plans
-          </Button>
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <Button
+              variant="ghost"
+              onClick={() => navigate("/payment")}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back to Plans
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/dashboard">Dashboard</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/summaries">Summaries</Link>
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">
+            You can leave checkout anytime using Dashboard or Summaries — your cart is not saved until payment completes.
+          </p>
           <h1 className="text-3xl font-bold mb-2">Checkout Summary Credits</h1>
           <p className="text-slate-600 mb-6">
             Select your quantity and complete your purchase.

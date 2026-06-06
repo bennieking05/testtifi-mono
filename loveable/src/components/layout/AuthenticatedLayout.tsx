@@ -18,7 +18,7 @@ export const AuthenticatedLayout: React.FC<AuthenticatedLayoutProps> = ({ childr
       <div className="fixed inset-0 pattern-grid-black dark:pattern-grid-white opacity-30 pointer-events-none" />
       
       {/* Mobile menu button - fixed position */}
-      <div className="lg:hidden fixed top-4 left-4 z-50">
+      <div className="lg:hidden fixed top-4 left-4 z-[10060]">
         <Button
           variant="outline"
           size="sm"

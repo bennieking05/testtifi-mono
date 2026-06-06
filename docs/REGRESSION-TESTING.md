@@ -196,7 +196,7 @@ API regression (when credentials are present): after listing `/api/summaries`, u
 | `/preview/:id` | SummaryPreview | Preview summary |
 | `/download/:id` | DownloadSummary | Download summary |
 | `/payment` | Payment | Purchase credits |
-| `/checkout` | Checkout | Stripe checkout |
+| `/checkout` | Checkout | Stripe checkout; Dashboard / Summaries links to leave without paying |
 | `/account/billing` | Billing | Billing history |
 | `/success` | Success | Payment success |
 | `/help` | Help | Help center |

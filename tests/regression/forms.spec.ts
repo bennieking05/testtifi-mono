@@ -242,6 +242,14 @@ test.describe('Checkout Form', () => {
     await snap(page, 'form-checkout-page');
   });
 
+  test('should navigate to Dashboard from checkout via escape links', async ({ page }) => {
+    await page.goto('/checkout');
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
+    await page.getByRole('link', { name: 'Dashboard' }).click();
+    await expect(page).toHaveURL(/\/dashboard/);
+  });
+
   test('should show Stripe elements if configured', async ({ page }) => {
     await page.goto('/checkout');
     // Use domcontentloaded instead of networkidle - Stripe elements continuously poll

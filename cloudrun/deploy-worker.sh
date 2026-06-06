@@ -2,6 +2,7 @@
 # Deploy the summarize worker as a Cloud Run service (always-on)
 # This is simpler than Cloud Run Jobs for a polling worker
 set -e
+cd "$(dirname "$0")"
 
 PROJECT_ID="golden-cosmos-450417-i8"
 REGION="us-central1"

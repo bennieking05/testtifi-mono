@@ -248,6 +248,12 @@ ${chunk.text}
 
 // ─── Azure OpenAI ────────────────────────────────────────────────────────────
 
+function azureChatUsesMaxCompletionTokens(): boolean {
+  if (process.env.AZURE_OPENAI_USE_MAX_COMPLETION_TOKENS === "true") return true;
+  const dep = (process.env.AZURE_OPENAI_DEPLOYMENT_NAME || "").toLowerCase();
+  return dep.includes("gpt-5");
+}
+
 async function azureChatCompletion(
   messages: any[],
   maxTokens: number = AZURE_MAX_TOKENS,
@@ -257,18 +263,18 @@ async function azureChatCompletion(
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME
   }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
 
+  const payload = azureChatUsesMaxCompletionTokens()
+    ? { messages, max_completion_tokens: maxTokens, temperature }
+    : { messages, max_tokens: maxTokens, temperature };
+
   try {
-    const { data } = await axios.post(
-      url,
-      { messages, max_tokens: maxTokens, temperature },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "api-key": process.env.AZURE_OPENAI_API_KEY!,
-        },
-        timeout: 120000,
-      }
-    );
+    const { data } = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": process.env.AZURE_OPENAI_API_KEY!,
+      },
+      timeout: 120000,
+    });
     return data;
   } catch (err: any) {
     // Log full Azure error response for debugging

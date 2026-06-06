@@ -592,6 +592,35 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
 }
 
 /**
+ * When total transcript page count (from PDF / page-count logic) exceeds the highest
+ * page extracted from OCR anchors, add synthetic pages so the summarizer still visits
+ * the tail (common when final pages lack "Page N" markers).
+ */
+function extendTranscriptPageMapToKnownTotal(
+  pageMap: Map<number, string>,
+  totalPages: number,
+  jobId: string
+): void {
+  if (!totalPages || totalPages < 1) return;
+  let maxKey = 0;
+  for (const k of pageMap.keys()) {
+    if (k > maxKey) maxKey = k;
+  }
+  if (maxKey >= totalPages) return;
+  for (let p = maxKey + 1; p <= totalPages; p++) {
+    if (!pageMap.has(p)) {
+      pageMap.set(
+        p,
+        `[Page ${p} - transcript page header not detected in OCR; summarize any examination text for this page if present.]`
+      );
+      console.log(
+        `[${jobId}] Extended pageMap: synthetic page ${p} (totalPages=${totalPages}, previousMax=${maxKey})`
+      );
+    }
+  }
+}
+
+/**
  * Page Sequence Verification Result
  */
 interface PageSequenceResult {
@@ -1725,6 +1754,13 @@ function assembleSortedSummary(
   };
 }
 
+/** GPT-5 family deployments on Azure reject `max_tokens`; use `max_completion_tokens` instead. */
+function azureChatUsesMaxCompletionTokens(): boolean {
+  if (process.env.AZURE_OPENAI_USE_MAX_COMPLETION_TOKENS === "true") return true;
+  const dep = (process.env.AZURE_OPENAI_DEPLOYMENT_NAME || "").toLowerCase();
+  return dep.includes("gpt-5");
+}
+
 async function azureChatCompletion(
   messages: any[],
   maxTokens: number = AZURE_MAX_TOKENS,
@@ -1736,17 +1772,16 @@ async function azureChatCompletion(
   )}/openai/deployments/${
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME
   }/chat/completions?api-version=${process.env.AZURE_API_VERSION}`;
-  const { data } = await axios.post(
-    url,
-    { messages, max_tokens: maxTokens, temperature },
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": process.env.AZURE_OPENAI_API_KEY!,
-      },
-      timeout: 120000,
-    }
-  );
+  const payload = azureChatUsesMaxCompletionTokens()
+    ? { messages, max_completion_tokens: maxTokens, temperature }
+    : { messages, max_tokens: maxTokens, temperature };
+  const { data } = await axios.post(url, payload, {
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": process.env.AZURE_OPENAI_API_KEY!,
+    },
+    timeout: 120000,
+  });
   return data;
 }
 
@@ -2079,6 +2114,7 @@ async function work() {
       
       // Step 1: Extract transcript pages by "Page X" anchors
       const transcriptPageMap = extractTranscriptPagesFromText(transcript);
+      extendTranscriptPageMapToKnownTotal(transcriptPageMap, totalTranscriptPages, job.id);
       const extractedPageNumbers = Array.from(transcriptPageMap.keys()).sort((a, b) => a - b);
       
       console.log(`[${job.id}] Transcript Page Extraction: found ${transcriptPageMap.size} pages`);
@@ -2938,6 +2974,16 @@ function chooseTotalTranscriptPages(opts: {
 
   // If it's effectively 1:1, use the PDF count.
   if (Math.abs(tr - pdf) <= 2) return pdf;
+
+  // Transcript max slightly *below* PDF count: late pages often lack "Page N" anchors in OCR/text
+  // (indexes, exhibits, errata). Prefer PDF depth for 1:1 scans so we do not drop the tail.
+  const tailSlack = Math.min(30, Math.max(5, Math.ceil(pdf * 0.05)));
+  if (tr > 0 && tr < pdf && pdf - tr <= tailSlack) {
+    console.log(
+      `[PageCount] transcriptMax (${tr}) < pdf (${pdf}) by ${pdf - tr} (<= ${tailSlack} slack); using pdf as transcript total`
+    );
+    return pdf;
+  }
 
   // If transcript count is only modestly larger than the PDF (e.g. +10-20%),
   // it's usually a false-positive rather than true multi-up transcript pages.

@@ -79,13 +79,13 @@ export const Sidebar: React.FC<{
     <>
       {show && (
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden"
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10040] lg:hidden"
           onClick={onClose}
         />
       )}
 
       <aside
-        className={`fixed top-0 left-0 z-50 h-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-r border-[rgba(86,116,188,0.5)] dark:border-slate-700 transition-transform duration-300 ease-in-out ${
+        className={`fixed top-0 left-0 z-[10050] h-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-r border-[rgba(86,116,188,0.5)] dark:border-slate-700 transition-transform duration-300 ease-in-out ${
           show ? "translate-x-0" : "-translate-x-full"
         } lg:translate-x-0 flex flex-col ${collapsed ? "w-16" : "w-[286px]"}`}
       >
