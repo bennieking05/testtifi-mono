@@ -1,0 +1,158 @@
+# Staging deploy for the testtifi-mono monorepo.
+#
+# Builds backend, summarize-worker, and frontend from their respective
+# sub-directory contexts (backend/, loveable/) and deploys all three to the
+# staging Cloud Run services. This mirrors cloudrun/deploy-staging.sh so a push
+# to the `staging` branch rebuilds and redeploys everything automatically.
+#
+# Staging only — contains no production service names, so it cannot affect prod.
+
+steps:
+  # ── Build images ──────────────────────────────────────────────────────────
+  # Backend API (backend/Dockerfile, target "backend", context backend/)
+  - id: "build-backend"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:staging"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+      - "--target=backend"
+      - "backend"
+
+  # Summarize worker (same Dockerfile, target "summarize-worker")
+  - id: "build-worker"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/summarize-worker:staging"
+      - "--target=summarize-worker"
+      - "backend"
+
+  # Frontend SPA (loveable/Dockerfile.cloudrun, context loveable/, build-time env)
+  - id: "build-frontend"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:staging"
+      - "-t"
+      - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+      - "-f"
+      - "loveable/Dockerfile.cloudrun"
+      - "--build-arg=VITE_API_URL=https://testifi-backend-staging-748916208557.us-central1.run.app"
+      - "--build-arg=VITE_STRIPE_PUBLISHABLE_KEY=pk_test_51SPyHb1PKdcq2R5zdlTdxGxpj8Lc6AFNbeBfGNkJ5QmMC6IOOE8osz3KqQ3a04RCUsbSPhl694U5p35JAmOuYT0w00PXMi588j"
+      - "loveable"
+
+  # ── Push images ───────────────────────────────────────────────────────────
+  - id: "push-backend-staging"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:staging"]
+  - id: "push-backend-buildid"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"]
+  - id: "push-worker-staging"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/summarize-worker:staging"]
+  - id: "push-frontend-staging"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-frontend:staging"]
+  - id: "push-frontend-buildid"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"]
+
+  # ── Deploy to Cloud Run (staging) ─────────────────────────────────────────
+  - id: "deploy-backend-staging"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        gcloud run deploy testifi-backend-staging \
+          --image gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID \
+          --region us-central1 \
+          --platform managed \
+          --add-cloudsql-instances golden-cosmos-450417-i8:us-central1:testifi \
+          --service-account testifi-cloudrun@golden-cosmos-450417-i8.iam.gserviceaccount.com \
+          --allow-unauthenticated \
+          --min-instances 0 \
+          --max-instances 2 \
+          --memory 512Mi \
+          --cpu 1 \
+          --timeout 300 \
+          --port 4000 \
+          --set-env-vars "NODE_ENV=staging,BASE_URL=https://staging.app.testifi.ai,BACKEND_URL=https://staging.app.testifi.ai,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.4-testifi,AZURE_API_VERSION=2025-01-01-preview,EMAIL_USER=admin@testifi.ai" \
+          --set-secrets "DATABASE_URL=backend-secrets-staging-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=backend-secrets-staging-SENDGRID_API_KEY:latest,JWT_SECRET=backend-secrets-staging-JWT_SECRET:latest,STRIPE_API_KEY=backend-secrets-staging-STRIPE_API_KEY:latest,STRIPE_WEBHOOK_SECRET=backend-secrets-staging-STRIPE_WEBHOOK_SECRET:latest,AZURE_OPENAI_API_KEY=backend-secrets-staging-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=backend-secrets-staging-AZURE_OPENAI_ENDPOINT:latest"
+
+  - id: "deploy-worker-staging"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        gcloud run deploy testifi-summarize-worker-staging \
+          --image gcr.io/golden-cosmos-450417-i8/summarize-worker:staging \
+          --region us-central1 \
+          --platform managed \
+          --add-cloudsql-instances golden-cosmos-450417-i8:us-central1:testifi \
+          --service-account testifi-cloudrun@golden-cosmos-450417-i8.iam.gserviceaccount.com \
+          --no-allow-unauthenticated \
+          --min-instances 1 \
+          --max-instances 1 \
+          --memory 2Gi \
+          --cpu 2 \
+          --timeout 3600 \
+          --no-cpu-throttling \
+          --set-env-vars "NODE_ENV=staging,BASE_URL=https://staging.app.testifi.ai,WORKER_CONCURRENCY=1,PAGE_RANGE_SIZE=5,AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.4-testifi,AZURE_API_VERSION=2025-01-01-preview,EMAIL_USER=admin@testifi.ai" \
+          --set-secrets "DATABASE_URL=backend-secrets-staging-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=backend-secrets-staging-SENDGRID_API_KEY:latest,AZURE_OPENAI_API_KEY=backend-secrets-staging-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=backend-secrets-staging-AZURE_OPENAI_ENDPOINT:latest"
+
+  - id: "deploy-frontend-staging"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        gcloud run deploy testifi-frontend-staging \
+          --image gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID \
+          --region us-central1 \
+          --platform managed \
+          --allow-unauthenticated \
+          --min-instances 0 \
+          --max-instances 2 \
+          --memory 256Mi \
+          --cpu 1
+
+  # ── Verify backend health ─────────────────────────────────────────────────
+  - id: "verify-backend-health"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        URL=$$(gcloud run services describe testifi-backend-staging --region us-central1 --format 'value(status.url)')
+        echo "Health check: $${URL}/health"
+        for i in $$(seq 1 10); do
+          if curl -sf "$${URL}/health"; then echo "" && echo "Health OK" && exit 0; fi
+          echo "attempt $$i failed; retry in 5s"; sleep 5
+        done
+        echo "Health check failed"; exit 1
+
+images:
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:staging"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-backend:$BUILD_ID"
+  - "gcr.io/golden-cosmos-450417-i8/summarize-worker:staging"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:staging"
+  - "gcr.io/golden-cosmos-450417-i8/testifi-frontend:$BUILD_ID"
+
+timeout: "2400s"
+
+options:
+  machineType: "E2_HIGHCPU_8"
+  logging: CLOUD_LOGGING_ONLY
+  default_logs_bucket_behavior: REGIONAL_USER_OWNED_BUCKET
