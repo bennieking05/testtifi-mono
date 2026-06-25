@@ -813,8 +813,147 @@ function createTranscriptBatches(
       lineRanges,
     });
   }
-  
+
   return batches;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Condensed ("multi-up") transcript handling
+//
+// Many court-reporter transcripts (Veritext et al.) are produced 4-up: a single
+// scanned PDF page contains 4 transcript pages in a 2x2 grid. OCR reads the grid
+// column-by-column, so the per-transcript-page "Page N" headers get clustered and
+// the text of the 4 pages is interleaved. Position-based anchor slicing
+// (extractTranscriptPagesFromText) therefore mis-attributes content and leaves
+// many transcript pages — especially the tail — empty.
+//
+// The reliable signal in these layouts is the per-physical-page footer
+// "<physicalPage> (Pages <start>-<end>)". We use it to map each physical PDF page
+// to the exact range of transcript pages it covers, then hand the LLM the full
+// (complete, if jumbled) physical-page text labelled with that page range. This
+// guarantees every transcript page — including the final pages — is summarized.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parse a "(Pages X - Y)" / "(Pages X Y)" footer range out of a single physical
+ * page's text. Returns null when no credible range footer is present.
+ * Handles dash- and space-separated forms ("234-237", "238 239", "230 - 233").
+ */
+export function parsePhysicalPageFooterRange(
+  pageText: string
+): { start: number; end: number } | null {
+  let best: { start: number; end: number } | null = null;
+  const re = /\(\s*Pages?\s+(\d{1,5})\s*(?:[-–—]+|\s)\s*(\d{1,5})\s*\)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(pageText))) {
+    const start = Number.parseInt(m[1], 10);
+    const end = Number.parseInt(m[2], 10);
+    // A single physical sheet rarely holds more than ~6 transcript pages.
+    if (Number.isFinite(start) && Number.isFinite(end) && start >= 1 && end >= start && end - start <= 8) {
+      // Prefer the last (footer) occurrence — earlier ones can be body references.
+      best = { start, end };
+    }
+  }
+  return best;
+}
+
+/**
+ * Build LLM batches for a condensed/multi-up transcript directly from physical
+ * pages and their footer page-ranges. Each batch = one physical page, carrying
+ * the full physical-page text and the exact transcript page numbers it covers.
+ *
+ * Returns the batches plus the full ordered list of transcript pages that the
+ * footers say exist (used as the coverage target so gaps are surfaced/filled).
+ */
+export function buildCondensedBatches(
+  pages: { page: number; text: string }[]
+): { batches: TranscriptBatch[]; expectedPages: number[]; footerCount: number } {
+  const batches: TranscriptBatch[] = [];
+  const expected = new Set<number>();
+  let footerCount = 0;
+
+  // Track the highest transcript page seen so footer-less pages (cover/appearance
+  // sheets before the numbering settles) can be inferred to sit just after it.
+  let lastEnd = 0;
+
+  for (const phys of pages) {
+    const range = parsePhysicalPageFooterRange(phys.text);
+    let start: number;
+    let end: number;
+    if (range) {
+      footerCount++;
+      start = range.start;
+      end = range.end;
+    } else {
+      // No footer: fall back to a single explicit "Page N" marker if present,
+      // otherwise assume this sheet continues one page past the previous range.
+      const pageMarkers = [...phys.text.matchAll(/\bPage\s+(\d{1,5})\b/gi)]
+        .map((mm) => Number.parseInt(mm[1], 10))
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5000);
+      if (pageMarkers.length) {
+        start = Math.min(...pageMarkers);
+        end = Math.max(...pageMarkers);
+        // Guard against index/exhibit pages spraying many page numbers.
+        if (end - start > 8) {
+          start = lastEnd + 1;
+          end = lastEnd + 1;
+        }
+      } else {
+        start = lastEnd + 1;
+        end = lastEnd + 1;
+      }
+    }
+
+    const pageNumbers: number[] = [];
+    for (let p = start; p <= end; p++) {
+      pageNumbers.push(p);
+      expected.add(p);
+    }
+    lastEnd = Math.max(lastEnd, end);
+
+    // Line ranges per sub-page can't be reliably recovered from the jumbled grid,
+    // so we leave them undetected and let the LLM cite partial lines where it can.
+    const lineRanges = new Map<number, { start: number; end: number; detected: boolean }>();
+    for (const p of pageNumbers) lineRanges.set(p, { start: 1, end: 25, detected: false });
+
+    const lineLabel = pageNumbers.length > 1 ? `transcript pages ${start}-${end}` : `transcript page ${start}`;
+    batches.push({
+      pageNumbers,
+      text: `=== ${lineLabel.toUpperCase()} ===\n${phys.text}`,
+      start,
+      end,
+      lineRanges,
+    });
+  }
+
+  // Coverage target is the contiguous 1..max range (not just pages that produced a
+  // batch) so a single missed footer still surfaces the page as a gap to fill rather
+  // than silently dropping it.
+  const maxPage = expected.size ? Math.max(...expected) : 0;
+  const expectedPages: number[] = [];
+  for (let p = 1; p <= maxPage; p++) expectedPages.push(p);
+  return { batches, expectedPages, footerCount };
+}
+
+/**
+ * Heuristic: is this a condensed/multi-up transcript that needs footer-based
+ * physical-page batching rather than per-transcript-page anchor slicing?
+ *
+ * Triggers when (a) a meaningful share of physical pages carry "(Pages X-Y)"
+ * footers, or (b) the transcript page count is well above the PDF page count
+ * (classic N-up scan).
+ */
+export function isCondensedTranscript(opts: {
+  pages: { page: number; text: string }[];
+  pdfPageCount: number;
+  totalTranscriptPages: number;
+  footerCount: number;
+}): boolean {
+  const { pdfPageCount, totalTranscriptPages, footerCount } = opts;
+  const footerShare = pdfPageCount > 0 ? footerCount / pdfPageCount : 0;
+  if (footerCount >= 3 && footerShare >= 0.3) return true;
+  if (pdfPageCount > 0 && totalTranscriptPages >= pdfPageCount * 1.8) return true;
+  return false;
 }
 
 // Legacy function - kept for backwards compatibility with existing code paths
@@ -1596,7 +1735,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
  * @returns Markdown table rows sorted by page number, with ranges preserved
  */
 
-function assembleSortedSummary(
+export function assembleSortedSummary(
   llmOutputs: string[],
   expectedPages: number[],
   detectedLineRanges?: Map<number, { start: number; end: number; detected: boolean }>
@@ -1723,12 +1862,17 @@ function assembleSortedSummary(
 
     const isPlaceholder = e.summary === '—' || e.summary.includes('[LLM did not summarize');
 
-    if (!isPlaceholder && detectedLineRanges) {
-      const detected = detectedLineRanges.get(e.startPage);
-      if (detected?.detected) {
-        lineNum = `:${detected.start}-${detected.end}`;
-      } else {
-        lineNum = '';
+    if (!isPlaceholder) {
+      // Prefer the line numbers the LLM actually cited (precise, content-aware,
+      // e.g. ":16-25"). Only fall back to OCR-detected ranges when the model gave
+      // none. The previous behaviour discarded the LLM's citation and substituted
+      // detectLineRange's output — which, on scrambled multi-up OCR, produced
+      // inconsistent/meaningless ranges and dropped line numbers on many rows.
+      if (e.lineNumbers) {
+        lineNum = e.lineNumbers;
+      } else if (detectedLineRanges) {
+        const detected = detectedLineRanges.get(e.startPage);
+        lineNum = detected?.detected ? `:${detected.start}-${detected.end}` : '';
       }
     }
 
@@ -2116,20 +2260,39 @@ async function work() {
       const transcriptPageMap = extractTranscriptPagesFromText(transcript);
       extendTranscriptPageMapToKnownTotal(transcriptPageMap, totalTranscriptPages, job.id);
       const extractedPageNumbers = Array.from(transcriptPageMap.keys()).sort((a, b) => a - b);
-      
+
       console.log(`[${job.id}] Transcript Page Extraction: found ${transcriptPageMap.size} pages`);
       if (extractedPageNumbers.length > 0) {
         console.log(`[${job.id}]   Range: ${extractedPageNumbers[0]} to ${extractedPageNumbers[extractedPageNumbers.length - 1]}`);
       }
-      
+
+      // Step 1b: Detect condensed/multi-up transcripts (e.g. 4-up Veritext scans).
+      // For these, per-anchor slicing scrambles page content and drops the tail, so we
+      // batch by physical page using the "(Pages X-Y)" footers instead.
+      const condensed = buildCondensedBatches(pages);
+      const isCondensed = isCondensedTranscript({
+        pages,
+        pdfPageCount,
+        totalTranscriptPages,
+        footerCount: condensed.footerCount,
+      });
+      if (isCondensed) {
+        console.log(
+          `[${job.id}] Condensed transcript detected (footers=${condensed.footerCount}/${pdfPageCount}, ` +
+            `transcriptMax=${totalTranscriptPages}); using footer-based physical-page batching ` +
+            `(${condensed.batches.length} batches covering ${condensed.expectedPages.length} pages).`
+        );
+      }
+
       // Step 2: Run Page Count Judge (verification before processing)
       const pageVerification = verifyPageSequence(transcriptPageMap, totalTranscriptPages);
       console.log(formatPageSequenceResult(pageVerification, job.id));
-      
+
       // If page extraction found meaningful data, use it; otherwise fall back to legacy chunking
       // Lower threshold: use new pipeline if we found at least 20% of pages (will still log warnings)
-      const useNewPipeline = transcriptPageMap.size >= 5 && pageVerification.coveragePercent >= 20;
-      console.log(`[${job.id}] Pipeline selection: useNewPipeline=${useNewPipeline} (size=${transcriptPageMap.size}, coverage=${pageVerification.coveragePercent}%)`);
+      // Condensed transcripts always use the (new) page-keyed assembly with footer batches.
+      const useNewPipeline = isCondensed || (transcriptPageMap.size >= 5 && pageVerification.coveragePercent >= 20);
+      console.log(`[${job.id}] Pipeline selection: useNewPipeline=${useNewPipeline} (size=${transcriptPageMap.size}, coverage=${pageVerification.coveragePercent}%, condensed=${isCondensed})`);
       
       // Log warning if coverage is low but we're still using new pipeline
       if (useNewPipeline && pageVerification.coveragePercent < 80) {
@@ -2205,9 +2368,21 @@ async function work() {
         // NEW PIPELINE: Page-keyed batching with strict output format
         // ─────────────────────────────────────────────────────────────────────
         console.log(`[${job.id}] Using NEW page-keyed pipeline (${transcriptPageMap.size} transcript pages)`);
-        
-        // Create batches of 5 transcript pages each (allows topic-based grouping)
-        const batches = createTranscriptBatches(transcriptPageMap, 5);
+
+        // Condensed/multi-up transcripts batch by physical page (footer page-ranges);
+        // single-up transcripts batch 5 transcript pages each (topic-based grouping).
+        const batches = isCondensed ? condensed.batches : createTranscriptBatches(transcriptPageMap, 5);
+        // Coverage target: footer-derived page list for condensed; anchor pages otherwise.
+        // Extend to the detected transcript total so the tail is never silently dropped.
+        let expectedPages = extractedPageNumbers;
+        if (isCondensed && condensed.expectedPages.length) {
+          const maxExpected = Math.max(
+            condensed.expectedPages[condensed.expectedPages.length - 1],
+            totalTranscriptPages || 0
+          );
+          expectedPages = [];
+          for (let p = 1; p <= maxExpected; p++) expectedPages.push(p);
+        }
         const batchOutputs: string[] = new Array(batches.length).fill("");
         
         // Collect all detected line ranges from all batches
@@ -2260,12 +2435,12 @@ async function work() {
         
         // Assemble sorted summary using the new function
         // Pass detected line ranges so assembly can use actual line numbers
-        const assemblyResult = assembleSortedSummary(batchOutputs, extractedPageNumbers, allDetectedLineRanges);
+        const assemblyResult = assembleSortedSummary(batchOutputs, expectedPages, allDetectedLineRanges);
         rowsOnly = assemblyResult.markdown;
-        
+
         // Log coverage statistics
-        const coveragePercent = Math.round((assemblyResult.coveredPages.length / extractedPageNumbers.length) * 100);
-        console.log(`[${job.id}] Summary assembly: ${assemblyResult.coveredPages.length}/${extractedPageNumbers.length} pages covered (${coveragePercent}%)`);
+        const coveragePercent = Math.round((assemblyResult.coveredPages.length / Math.max(1, expectedPages.length)) * 100);
+        console.log(`[${job.id}] Summary assembly: ${assemblyResult.coveredPages.length}/${expectedPages.length} pages covered (${coveragePercent}%)`);
         if (assemblyResult.missingPages.length > 0) {
           const missingStr = assemblyResult.missingPages.length <= 20
             ? assemblyResult.missingPages.join(', ')
