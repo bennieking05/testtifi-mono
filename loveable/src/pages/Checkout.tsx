@@ -9,6 +9,8 @@ import { ArrowLeft, Plus, Minus } from "lucide-react";
 import { AuthenticatedLayout } from "@/components/layout/AuthenticatedLayout";
 import { StripeCheckoutForm } from "@/components/payment/StripeCheckoutForm";
 import { Toaster } from "@/components/ui/toaster";
+import axios from "axios";
+import api from "@/lib/axios";
 
 // Tiered pricing helper
 const getTierPricing = (quantity: number) => {
@@ -41,8 +43,12 @@ const getTaxRuleForLocation = (state?: string, zip?: string) => {
   return null;
 };
 
-// Stripe publishable key loaded from environment at build time
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY!);
+// Stripe publishable key loaded from environment at build time. Guard against a missing
+// key (misconfigured build) so checkout fails with a clear message instead of silently.
+const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as
+  | string
+  | undefined;
+const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 const Checkout: React.FC = () => {
   const location = useLocation() as { state?: any };
@@ -90,28 +96,18 @@ const Checkout: React.FC = () => {
     setSecretError(null);
     (async () => {
       try {
-        const apiBase = import.meta.env.VITE_API_URL || "";
-        const res = await fetch(`${apiBase}/api/purchase/purchase-credits`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-          body: JSON.stringify({
+        const res = await api.post(
+          "/api/purchase/purchase-credits",
+          {
             amountCents: Math.round(totalPrice * 100), // Include tax in payment intent
             credits: quantity,
             taxCents: Math.round(salesTax * 100),
             taxLabel,
-          }),
-          signal: controller.signal,
-        });
-        
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => ({ error: "Failed to parse error" }));
-          throw new Error(errorData.error || `HTTP ${res.status}: ${res.statusText}`);
-        }
-        
-        const data = await res.json();
+          },
+          { signal: controller.signal }
+        );
+
+        const data = res.data;
         if (data.clientSecret) {
           setClientSecret(data.clientSecret);
           setPaymentIntentId(data.paymentIntentId || null);
@@ -122,9 +118,11 @@ const Checkout: React.FC = () => {
           setSecretError("Missing clientSecret in response");
           console.error("Missing clientSecret in response:", data);
         }
-      } catch (err) {
-        if ((err as any).name !== "AbortError") {
-          const errorMessage = (err as Error).message || "Failed to initialize payment";
+      } catch (err: any) {
+        // Ignore aborts from the AbortController (plan/quantity changed mid-request).
+        if (!axios.isCancel(err) && err?.name !== "AbortError") {
+          const errorMessage =
+            err?.response?.data?.error || err?.message || "Failed to initialize payment";
           setSecretError(errorMessage);
           console.error("Failed to fetch clientSecret:", err);
         }
@@ -153,29 +151,15 @@ const Checkout: React.FC = () => {
     // Debounce updates - only update after user stops changing quantity/tax for 300ms
     const timeoutId = setTimeout(async () => {
       try {
-        const apiBase = import.meta.env.VITE_API_URL || "";
-        const res = await fetch(`${apiBase}/api/purchase/update-payment-intent`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-          body: JSON.stringify({
-            paymentIntentId,
-            amountCents: newAmountCents,
-            credits: quantity, // Update credits in payment intent metadata
-            taxCents: Math.round(salesTax * 100),
-            taxLabel,
-          }),
+        const res = await api.post("/api/purchase/update-payment-intent", {
+          paymentIntentId,
+          amountCents: newAmountCents,
+          credits: quantity, // Update credits in payment intent metadata
+          taxCents: Math.round(salesTax * 100),
+          taxLabel,
         });
-        
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => ({ error: "Failed to parse error" }));
-          console.warn("Failed to update payment intent:", errorData.error);
-          return;
-        }
-        
-        const data = await res.json();
+
+        const data = res.data;
         if (data.clientSecret) {
           // Update client secret - Elements will handle this without clearing form
           // because we're using a stable key (paymentIntentId)
@@ -307,12 +291,22 @@ const Checkout: React.FC = () => {
               Retry
             </Button>
           </div>
+        ) : !stripePromise ? (
+          <div className="max-w-2xl mx-auto p-6 bg-card rounded-lg shadow text-center">
+            <p className="text-destructive font-medium">
+              Payments are temporarily unavailable.
+            </p>
+            <p className="text-muted-foreground mt-2">
+              The payment system is not configured. Please contact support so we can help you
+              complete your purchase.
+            </p>
+          </div>
         ) : clientSecret ? (
           <div className="max-w-2xl mx-auto p-6 bg-card rounded-lg shadow">
             {/* Use paymentIntentId as stable key to prevent remounting when clientSecret updates */}
             <Elements
-              key={paymentIntentId || "initial"} 
-              stripe={stripePromise} 
+              key={paymentIntentId || "initial"}
+              stripe={stripePromise}
               options={{ clientSecret }}
             >
               <StripeCheckoutForm

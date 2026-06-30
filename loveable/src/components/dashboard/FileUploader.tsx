@@ -5,6 +5,8 @@ import { Upload, File, X, CheckCircle, FileText, AlertCircle } from "lucide-reac
 
 interface FileUploaderProps {
   onFileUpload?: (file: File) => void;
+  /** Called when the last selected file is removed, so the parent can clear its state. */
+  onFileRemoved?: () => void;
   initialFile?: File;
   disabled?: boolean;
   acceptExtensions?: string[];
@@ -13,6 +15,7 @@ interface FileUploaderProps {
 
 const FileUploader: React.FC<FileUploaderProps> = ({
   onFileUpload,
+  onFileRemoved,
   initialFile,
   disabled = false,
   acceptExtensions = [".pdf", ".doc", ".docx", ".txt"],
@@ -50,13 +53,8 @@ const FileUploader: React.FC<FileUploaderProps> = ({
         return;
       }
 
-      console.log("File selected:", newFile.name);
       setSelectedFiles([newFile]);
-      
-      if (onFileUpload) {
-        console.log("Calling onFileUpload with file:", newFile.name);
-        onFileUpload(newFile);
-      }
+      onFileUpload?.(newFile);
     }
   };
 
@@ -94,11 +92,9 @@ const FileUploader: React.FC<FileUploaderProps> = ({
         return;
       }
 
-      console.log("File dropped:", newFile.name);
       setSelectedFiles([newFile]);
-      
+
       if (onFileUpload) {
-        console.log("Calling onFileUpload with dropped file:", newFile.name);
         onFileUpload(newFile);
       }
     }
@@ -109,12 +105,10 @@ const FileUploader: React.FC<FileUploaderProps> = ({
     
     const newFiles = selectedFiles.filter((_, i) => i !== index);
     setSelectedFiles(newFiles);
-    
-    // If removing the only file, call onFileUpload with null or undefined
-    if (newFiles.length === 0 && onFileUpload) {
-      console.log("All files removed, calling onFileUpload with null");
-      // We can't call onFileUpload with null, so we'll just leave it
-      // The parent should handle the case where no file is selected
+
+    // When the last file is removed, notify the parent so it can clear its stale reference.
+    if (newFiles.length === 0) {
+      onFileRemoved?.();
     }
   };
 

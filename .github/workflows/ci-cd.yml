@@ -1,8 +1,11 @@
-name: backend-ci-cd
+name: backend-ci-cd (VM — manual only)
 
+# Cloud Run (cloudrun-deploy.yml) is the authoritative deploy target for backend, frontend,
+# and the summarize worker. This legacy VM/docker-compose path is kept for manual use only
+# (workflow_dispatch) so it no longer auto-deploys on push — that previously produced a
+# SECOND worker polling the same Cloud SQL database in parallel with Cloud Run.
 on:
-  push:
-    branches: ["main", "staging"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,7 +28,9 @@ jobs:
       - name: Build and push to GHCR
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./backend
+          file: ./backend/Dockerfile
+          target: backend
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -35,7 +40,9 @@ jobs:
       - name: Build VM loadable tar
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./backend
+          file: ./backend/Dockerfile
+          target: backend
           push: false
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           outputs: type=docker,dest=backend-image.tar

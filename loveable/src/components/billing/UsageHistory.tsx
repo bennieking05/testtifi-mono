@@ -20,6 +20,7 @@ import {
 import { CalendarIcon, ExternalLink, FileText, Download } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import api from "@/lib/axios";
 
 export const UsageHistory: React.FC = () => {
   const navigate = useNavigate();
@@ -168,33 +169,19 @@ export const UsageHistory: React.FC = () => {
     try {
       setDownloadError(null);
       setExporting(true);
-      const token = localStorage.getItem("token");
-      if (!token) {
-        setDownloadError("No authentication token");
-        return;
-      }
+      // Shared axios client: adds the Bearer token and 401-refresh automatically.
+      const params: Record<string, string> = {};
+      if (typeFilter && typeFilter !== "all") params.type = typeFilter;
+      if (fromDate) params.from = fromDate.toISOString();
+      if (toDate) params.to = toDate.toISOString();
 
-      const params = new URLSearchParams();
-      if (typeFilter && typeFilter !== "all") params.append("type", typeFilter);
-      if (fromDate) params.append("from", fromDate.toISOString());
-      if (toDate) params.append("to", toDate.toISOString());
-
-      const baseUrl = import.meta.env.VITE_API_URL ?? "";
-      const normalizedBase = baseUrl ? baseUrl.replace(/\/$/, "") : "";
-      const url = `${normalizedBase}/api/billing/history${params.toString() ? `?${params.toString()}` : ""}`;
-
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "text/csv",
-        },
+      const response = await api.get("/api/billing/history", {
+        params,
+        headers: { Accept: "text/csv" },
+        responseType: "blob",
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to download CSV");
-      }
-
-      const blob = await response.blob();
+      const blob = response.data as Blob;
       const downloadUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = downloadUrl;

@@ -255,6 +255,12 @@ router.get(
       res.status(404).json({ error: "Summary job not found." });
       return;
     }
+    // Ownership check: a user may only download their own summaries (admins may download any).
+    // Return 404 (not 403) so a job's existence is not disclosed to non-owners.
+    if (job.userId !== req.user?.userId && req.user?.role !== "admin") {
+      res.status(404).json({ error: "Summary job not found." });
+      return;
+    }
 
     const key = job.summaryCsvUrl
       ? objectKey(job.summaryCsvUrl)

@@ -34,6 +34,9 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Unit regressions (summary pipeline + billing/credit)
+        run: npm run test:units
+
       - name: Run full staging regression
         run: npm run test:regression:staging
         env:

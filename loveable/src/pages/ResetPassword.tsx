@@ -12,8 +12,6 @@ const ResetPassword = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  console.log("Reset token:", token); // Verify the token is retrieved
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 

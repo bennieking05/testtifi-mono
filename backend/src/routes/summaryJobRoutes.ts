@@ -51,6 +51,15 @@ router.get(
         res.status(404).json({ error: "Not found" });
         return;
       }
+      // Ownership check: only the owner (or an admin) may read a job's status.
+      // Return 404 to avoid disclosing the existence of other users' jobs.
+      const requester = (req as any).user as
+        | { userId?: string; role?: string }
+        | undefined;
+      if (job.userId !== requester?.userId && requester?.role !== "admin") {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
       res.json({
         status: job.status,
         lastPageProcessed: job.lastPageProcessed,

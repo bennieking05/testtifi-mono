@@ -27,6 +27,7 @@ import {
   SummaryMetadata,
   renderMetadataMarkdown,
   saveSummaryMetadata,
+  normalizeUnknownString,
 } from "../utils/summaryMetadata";
 import { sanitizeSummaryMetaLanguage, isNonSubstantiveSummary, sanitizeDepositionOverviewProse, stripInCaseOfInternalTitle } from "../utils/summarySanitize";
 import {
@@ -49,6 +50,12 @@ const depositionBucket = storage.bucket("deposition-files");
 const summaryBucket = storage.bucket("deposition-summaries");
 const visionClient = new vision.ImageAnnotatorClient();
 
+// The job currently being processed, so a graceful shutdown (Cloud Run SIGTERM on
+// redeploy/scale-down) can release it back to "queued" for immediate re-claim instead of
+// leaving it stuck in "processing" until the ~2h stuck-job reset.
+let currentProcessingJobId: string | null = null;
+let shuttingDown = false;
+
 // Health check HTTP server required by Cloud Run
 const HEALTH_PORT = Number(process.env.PORT) || 8080;
 let workerHealthy = true;
@@ -56,9 +63,41 @@ const healthServer = http.createServer((_req, res) => {
   res.writeHead(workerHealthy ? 200 : 503, { "Content-Type": "text/plain" });
   res.end(workerHealthy ? "OK" : "UNHEALTHY");
 });
-healthServer.listen(HEALTH_PORT, "0.0.0.0", () => {
-  console.log(`[WORKER] Health check server listening on port ${HEALTH_PORT}`);
-});
+// Only bind the port and run the worker loop when executed directly (not when the
+// module is imported, e.g. by unit tests).
+if (require.main === module) {
+  healthServer.listen(HEALTH_PORT, "0.0.0.0", () => {
+    console.log(`[WORKER] Health check server listening on port ${HEALTH_PORT}`);
+  });
+
+  // Graceful shutdown: on SIGTERM/SIGINT (Cloud Run redeploy/scale-down), release the
+  // in-flight job back to "queued" so the next worker revision re-claims it immediately
+  // rather than waiting for the stuck-job reset.
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    workerHealthy = false;
+    console.log(`[WORKER] Received ${signal}; shutting down gracefully...`);
+    const jobId = currentProcessingJobId;
+    if (jobId) {
+      try {
+        const released = await prisma.summaryJob.updateMany({
+          where: { id: jobId, status: "processing" },
+          data: { status: "queued" },
+        });
+        console.log(`[WORKER] Released in-flight job ${jobId} back to queued (count=${released.count})`);
+      } catch (e: any) {
+        console.error(`[WORKER] Failed to release in-flight job ${jobId}: ${e?.message || e}`);
+      }
+    }
+    try {
+      healthServer.close();
+    } catch {}
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+}
 
 console.log(
   "🔥 summarizeWorker.ts – brand-new build: " + new Date().toISOString()
@@ -71,6 +110,12 @@ const frontendUrl = resolveFrontendBaseUrl();
 const DETAIL_MODE = (process.env.SUMMARY_DETAIL_MODE || "high").toLowerCase();
 // Process 1 PDF page at a time to ensure complete coverage (each PDF page has ~4 transcript pages)
 const PAGES_PER_CHUNK = Number(process.env.PAGE_RANGE_SIZE) || 1;
+// Target transcript pages per assembled summary block (5:1 grouping; may extend to +1 to absorb a 1-page remainder)
+const PAGE_BLOCK_SIZE = Number(process.env.PAGE_BLOCK_SIZE) || 5;
+// Sanity ceiling for a single parsed page range. Guards against hallucinated ranges
+// (e.g. p.1-9999) without silently truncating legitimate ranges — batches are ≤8 pages
+// and even legacy chunks rarely exceed this. Clamping is logged, never silent.
+const MAX_PARSED_RANGE_SPAN = Number(process.env.MAX_PARSED_RANGE_SPAN) || 50;
 const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS) || (DETAIL_MODE === "high" ? 4000 : 3200);
 const WORKER_CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY) || 1); // Reduced from 3 to 1 to avoid rate limits
 const WORKER_ID = process.env.WORKER_ID || os.hostname();
@@ -78,7 +123,7 @@ const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // keep email payloads <25MB
 // Jobs in "processing" longer than this are reset to "queued" so they can be retried (e.g. after worker crash)
 const STUCK_JOB_THRESHOLD_MS = Number(process.env.STUCK_JOB_THRESHOLD_MS) || 2 * 60 * 60 * 1000; // 2 hours
 
-async function extractFullText(
+export async function extractFullText(
   buffer: Buffer,
   filename: string,
   gcsUri: string,
@@ -204,7 +249,7 @@ async function extractTextWithVision(
 
   let combined = "";
   let globalPageIndex = 1;
-  
+
   for (const f of jsonFiles) {
     const [raw] = await f.download();
     const parsed = JSON.parse(raw.toString());
@@ -212,8 +257,15 @@ async function extractTextWithVision(
     // But GCS output might chunk differently, so we iterate responses
     for (const r of parsed.responses) {
        const pageText = r.fullTextAnnotation?.text || "";
-       combined += `---PAGE ${globalPageIndex}---` + "\n" + pageText + "\n";
-       globalPageIndex++;
+       // Prefer the true source page number Vision reports (context.pageNumber). The old
+       // sequential counter drifts if Vision skips a page or returns responses out of order,
+       // which misaligns ---PAGE N--- markers from the actual PDF/transcript pages.
+       const truePage =
+         typeof r?.context?.pageNumber === "number" && r.context.pageNumber >= 1
+           ? r.context.pageNumber
+           : globalPageIndex;
+       combined += `---PAGE ${truePage}---` + "\n" + pageText + "\n";
+       globalPageIndex = truePage + 1;
     }
   }
   // best-effort cleanup of temporary Vision output
@@ -596,7 +648,7 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
  * page extracted from OCR anchors, add synthetic pages so the summarizer still visits
  * the tail (common when final pages lack "Page N" markers).
  */
-function extendTranscriptPageMapToKnownTotal(
+export function extendTranscriptPageMapToKnownTotal(
   pageMap: Map<number, string>,
   totalPages: number,
   jobId: string
@@ -777,7 +829,7 @@ interface TranscriptBatch {
   lineRanges: Map<number, { start: number; end: number; detected: boolean }>; // Detected line ranges per page
 }
 
-function createTranscriptBatches(
+export function createTranscriptBatches(
   pageMap: Map<number, string>,
   pagesPerBatch: number = 3
 ): TranscriptBatch[] {
@@ -995,7 +1047,11 @@ function looksLikePerson(value: string): boolean {
   if (hasNumber) return false;
   const words = value.split(/\s+/).filter(Boolean);
   if (words.length < 2) return false;
-  
+  // A real person's name is short. Several deponent matchers use case-insensitive
+  // [A-Z\s.]+ groups that can greedily capture a whole sentence; bounding the word
+  // count here stops sentence-length garbage from being accepted as a name.
+  if (words.length > 5) return false;
+
   // Explicitly blacklist common address/entity terms
   const blacklist = [
     "north", "south", "east", "west",
@@ -1014,7 +1070,7 @@ function looksLikePerson(value: string): boolean {
   return words.every((w) => /^[A-Za-z.'-]+$/.test(w));
 }
 
-function extractLegalMetadata(
+export function extractLegalMetadata(
   tr: string,
   fileData?: { title?: string; deponent?: string }
 ): LegalMetadataFields {
@@ -1245,12 +1301,14 @@ function extractLegalMetadata(
  * NEW: Create prompt for transcript batch processing.
  * Uses strict page-keyed format to ensure 100% coverage.
  */
-function makePromptForBatch(
+export function makePromptForBatch(
   batch: TranscriptBatch,
   isFirst: boolean,
   metaSection: string,
-  systemInstruction: string
+  systemInstruction: string,
+  caseContext: string = ""
 ) {
+  const caseContextBlock = caseContext ? `${caseContext}\n\n` : "";
   const pagesList = batch.pageNumbers.join(", ");
   const pagesCount = batch.pageNumbers.length;
   const firstPage = batch.pageNumbers[0];
@@ -1269,7 +1327,7 @@ Summarize this deposition transcript section.
 
 ${metaSection}
 
-=== COMPLETE COVERAGE REQUIRED - NO GAPS ALLOWED ===
+${caseContextBlock}=== COMPLETE COVERAGE REQUIRED - NO GAPS ALLOWED ===
 This batch contains ${pagesCount} transcript pages: ${pagesList}
 
 *** MANDATORY: Your output MUST cover ALL of these pages: ${pagesList} ***
@@ -1285,15 +1343,17 @@ PAGE/LINE COLUMN:
 - Include :line-line ONLY for partial-page coverage when line numbers are visible in the transcript.
 
 GROUPING:
-- You may group up to 5 consecutive pages per row when the same subject continues; start a new row when the subject changes.
+- Start a NEW row at each clear change of subject. Use p.X-Y for consecutive pages that share one continuous subject; use a single-page row (p.X) when that page's subject stands alone. Keep any single row within ~6 consecutive pages. Do NOT pad rows to a fixed size, and do NOT omit testimony to make a row shorter.
+
+WITNESS REFERENCE:
+- Refer to the deponent by last name (see the Title above) or as "the witness". Never use he/she/his/her/him for the deponent.
 
 TONE:
 - Factual: "testified", "stated", "confirmed", "denied"
 - Do NOT mention OCR, scanned text, or page header markers
 
 VALID EXAMPLES:
-| p.8-10 | The witness testified about his employment at ABC Corp from 2015-2020. He described his role as regional sales manager. |
-| p.11-13 | Exhibit 3 was introduced showing the employment contract dated March 2015. The witness confirmed his signature. |
+| p.8-13 | Smith testified about employment at ABC Corp from 2015-2020 and described the role of regional sales manager. Exhibit 3, the March 2015 employment contract, was introduced and Smith confirmed the signature. |
 | p.14:3-22 | On page 14, the witness addressed only the fee schedule; lines 3-22 covered commission percentages. |
 
 RULES:
@@ -1308,12 +1368,12 @@ ${batch.text}
         : `
 Continue summarizing.
 
-PAGES: ${pagesList}
+${caseContextBlock}PAGES: ${pagesList}
 *** ALL pages must be covered - NO GAPS ***
 
-FORMAT: | p.X-Y | Summary | (2 columns only; add line range only for partial pages)
+FORMAT: | p.X-Y | Summary | (2 columns only; start a new row at each clear subject change — single-page rows are fine; use p.X-Y for consecutive same-subject pages, max ~6 pages per row; add line range only for partial pages)
 
-RULES: Use | p.X | __SKIP__ | for non-substantive pages only (literal __SKIP__); do not narrate illegible/empty/minimal content.
+RULES: Use | p.X | __SKIP__ | for non-substantive pages only (literal __SKIP__); do not narrate illegible/empty/minimal content. Refer to the deponent by last name or "the witness"; never use he/she/his/her.
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -1542,7 +1602,26 @@ interface PageRangeEntry {
  * - p.18-22 (page range without lines)
  * - p.18 (single page)
  */
-function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRangeEntry[] {
+/**
+ * Bound a parsed page range to a sane maximum span. Previously every range was hard-capped
+ * at start+10, which silently truncated legitimate long ranges (e.g. p.5-20 -> p.5-15) and the
+ * dropped tail became invisible. Now we only clamp clearly pathological ranges and we log it,
+ * so legitimate multi-page ranges survive while hallucinated ones are still bounded.
+ */
+function clampRangeEnd(startPage: number, endPage: number, debug: boolean = false): number {
+  const maxEnd = startPage + MAX_PARSED_RANGE_SPAN;
+  if (endPage > maxEnd) {
+    const msg =
+      `[parseToRangeEntries] Clamped oversized range p.${startPage}-${endPage} to p.${startPage}-${maxEnd} ` +
+      `(span exceeds MAX_PARSED_RANGE_SPAN=${MAX_PARSED_RANGE_SPAN}; possible hallucination)`;
+    if (debug) console.log(msg);
+    else console.warn(msg);
+    return maxEnd;
+  }
+  return endPage;
+}
+
+export function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRangeEntry[] {
   const entries: PageRangeEntry[] = [];
   const lines = llmOutput.split(/\r?\n/);
 
@@ -1566,7 +1645,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
           const endPage = parseInt(withLines[3], 10);
           const lineEnd = parseInt(withLines[4], 10);
           if (startPage > 0 && endPage >= startPage) {
-            const cappedEnd = Math.min(endPage, startPage + 10);
+            const cappedEnd = clampRangeEnd(startPage, endPage, debug);
             entries.push({
               startPage,
               endPage: cappedEnd,
@@ -1581,7 +1660,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
           const startPage = parseInt(noLines[1], 10);
           const endPage = parseInt(noLines[2], 10);
           if (startPage > 0 && endPage >= startPage) {
-            const cappedEnd = Math.min(endPage, startPage + 10);
+            const cappedEnd = clampRangeEnd(startPage, endPage, debug);
             entries.push({ startPage, endPage: cappedEnd, lineNumbers: '', summary });
             if (debug) console.log(`[parseToRangeEntries] Matched 2-col range ${startPage}-${endPage}`);
             continue;
@@ -1594,7 +1673,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
           const lineStart = hasLn ? parseInt(pDot[3], 10) : 0;
           const lineEnd = hasLn ? parseInt(pDot[4], 10) : 0;
           if (startPage > 0 && endPage >= startPage) {
-            const cappedEnd = Math.min(endPage, startPage + 10);
+            const cappedEnd = clampRangeEnd(startPage, endPage, debug);
             const lineNumbers = hasLn ? `:${lineStart}-${lineEnd}` : '';
             entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
             if (debug) console.log(`[parseToRangeEntries] Matched 2-col p.${startPage}-${cappedEnd}`);
@@ -1628,7 +1707,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
         const endPage = parseInt(withLines[3], 10);
         const lineEnd = parseInt(withLines[4], 10);
         if (startPage > 0 && endPage >= startPage) {
-          const cappedEnd = Math.min(endPage, startPage + 10);
+          const cappedEnd = clampRangeEnd(startPage, endPage, debug);
           entries.push({
             startPage,
             endPage: cappedEnd,
@@ -1645,7 +1724,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
         const startPage = parseInt(noLines[1], 10);
         const endPage = parseInt(noLines[2], 10);
         if (startPage > 0 && endPage >= startPage) {
-          const cappedEnd = Math.min(endPage, startPage + 10);
+          const cappedEnd = clampRangeEnd(startPage, endPage, debug);
           entries.push({
             startPage,
             endPage: cappedEnd,
@@ -1708,7 +1787,7 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
       summary = summary.replace(/\|\s*$/, '').trim();
 
       if (startPage > 0 && summary.length > 10 && endPage >= startPage) {
-        const cappedEnd = Math.min(endPage, startPage + 10);
+        const cappedEnd = clampRangeEnd(startPage, endPage, debug);
         const lineNumbers = hasLineNumbers ? `:${lineStart}-${lineEnd}` : '';
         entries.push({ startPage, endPage: cappedEnd, lineNumbers, summary });
         if (debug) {
@@ -1725,10 +1804,96 @@ function parseToRangeEntries(llmOutput: string, debug: boolean = false): PageRan
   return entries;
 }
 
+function isPlaceholderSummary(summary: string): boolean {
+  return summary === "—" || summary.includes("[LLM did not summarize");
+}
+
+/**
+ * Coverage guard (R3): find pages that ended up NON-substantive in the assembled summary
+ * (placeholder "—" / skipped) but whose SOURCE text is clearly substantive. These are pages
+ * the model likely skipped by mistake; because non-substantive rows are filtered out of the
+ * deliverable, such a misclassification silently drops real testimony. Pure + unit-tested.
+ *
+ * @param assembledMarkdown the assembled table markdown
+ * @param expectedPages the coverage target
+ * @param pageTextLength (page) => non-whitespace char count of that page's source text
+ * @param minChars threshold above which a page's source text is considered substantive
+ */
+export function findSkippedSubstantivePages(
+  assembledMarkdown: string,
+  expectedPages: number[],
+  pageTextLength: (page: number) => number,
+  minChars: number = 200
+): number[] {
+  const substantiveCovered = new Set<number>();
+  for (const e of parseToRangeEntries(assembledMarkdown)) {
+    if (!isPlaceholderSummary(e.summary)) {
+      for (let p = e.startPage; p <= e.endPage; p++) substantiveCovered.add(p);
+    }
+  }
+  return expectedPages.filter(
+    (p) => !substantiveCovered.has(p) && pageTextLength(p) >= minChars
+  );
+}
+
+/**
+ * Topic-driven row assembly. Each substantive entry is kept as its own row so the
+ * page/line boundaries the model chose at subject changes survive (down to single pages),
+ * and single-page entries retain their cited line numbers. Only runs of consecutive,
+ * adjacent placeholder ("—") pages are collapsed into a single range (capped at blockSize
+ * pages) to keep gap rows tidy; those rows are filtered out of the deliverable downstream
+ * by the non-substantive filter, so their grouping is cosmetic.
+ */
+export function regroupIntoBlocks(
+  entries: PageRangeEntry[],
+  blockSize: number
+): PageRangeEntry[] {
+  if (entries.length === 0) return [];
+  const sorted = [...entries].sort((a, b) => a.startPage - b.startPage);
+
+  const blocks: PageRangeEntry[] = [];
+  let placeholderRun: PageRangeEntry[] = [];
+
+  const flushPlaceholders = () => {
+    // Merge only truly adjacent placeholder pages; cap each merged row at blockSize pages.
+    let i = 0;
+    while (i < placeholderRun.length) {
+      const start = placeholderRun[i];
+      let endPage = start.endPage;
+      let j = i + 1;
+      while (
+        j < placeholderRun.length &&
+        placeholderRun[j].startPage === endPage + 1 &&
+        placeholderRun[j].endPage - start.startPage + 1 <= blockSize
+      ) {
+        endPage = placeholderRun[j].endPage;
+        j++;
+      }
+      blocks.push({ startPage: start.startPage, endPage, lineNumbers: "", summary: "—" });
+      i = j;
+    }
+    placeholderRun = [];
+  };
+
+  for (const e of sorted) {
+    if (isPlaceholderSummary(e.summary)) {
+      placeholderRun.push(e);
+    } else {
+      flushPlaceholders();
+      // Keep substantive entries intact — preserves topic boundaries and line citations.
+      blocks.push(e);
+    }
+  }
+  flushPlaceholders();
+
+  blocks.sort((a, b) => a.startPage - b.startPage);
+  return blocks;
+}
+
 /**
  * Assemble final sorted summary from all LLM outputs.
  * Preserves page range groupings from smart topic merging.
- * 
+ *
  * @param llmOutputs - Array of raw LLM output strings
  * @param expectedPages - Array of expected page numbers (from pageMap keys)
  * @param detectedLineRanges - Optional map of detected line ranges per page (from OCR)
@@ -1755,6 +1920,27 @@ export function assembleSortedSummary(
       }
     }
     allEntries.push(...parsed);
+  }
+
+  // Clamp entries to the document's actual page extent. A hallucinated oversized range
+  // (e.g. p.1-9999) would otherwise claim coverage of pages it never summarized and
+  // suppress real content during overlap dedup below. Trimming to [min,max] of the
+  // expected pages is safe — it never removes pages inside the real document.
+  if (expectedPages.length > 0) {
+    let minExpected = expectedPages[0];
+    let maxExpected = expectedPages[0];
+    for (const p of expectedPages) {
+      if (p < minExpected) minExpected = p;
+      if (p > maxExpected) maxExpected = p;
+    }
+    for (const e of allEntries) {
+      if (e.startPage < minExpected) e.startPage = minExpected;
+      if (e.endPage > maxExpected) e.endPage = maxExpected;
+    }
+    // Drop entries that fell entirely outside the document extent.
+    for (let i = allEntries.length - 1; i >= 0; i--) {
+      if (allEntries[i].endPage < allEntries[i].startPage) allEntries.splice(i, 1);
+    }
   }
 
   // Sort by start page
@@ -1855,36 +2041,31 @@ export function assembleSortedSummary(
   // Combine original entries with placeholder entries
   const allFinalEntries = [...dedupedEntries, ...placeholderEntries];
   allFinalEntries.sort((a, b) => a.startPage - b.startPage);
-  
-  // Build output with range notation and line numbers preserved
-  const outputRows = allFinalEntries.map(e => {
-    let lineNum = e.lineNumbers;
 
+  // Regroup into consistent ~PAGE_BLOCK_SIZE-page blocks so the Page/Line column
+  // shows steady multi-page designations (e.g. p.12-16) rather than many single-page
+  // rows. Coverage is unaffected — only row boundaries change.
+  const blocks = regroupIntoBlocks(allFinalEntries, PAGE_BLOCK_SIZE);
+
+  // Build output with range notation; line numbers are kept only for single-page blocks.
+  const outputRows = blocks.map(e => {
     const isPlaceholder = e.summary === '—' || e.summary.includes('[LLM did not summarize');
 
-    if (!isPlaceholder) {
+    let lineSuffix = '';
+    if (!isPlaceholder && e.startPage === e.endPage) {
       // Prefer the line numbers the LLM actually cited (precise, content-aware,
-      // e.g. ":16-25"). Only fall back to OCR-detected ranges when the model gave
-      // none. The previous behaviour discarded the LLM's citation and substituted
-      // detectLineRange's output — which, on scrambled multi-up OCR, produced
-      // inconsistent/meaningless ranges and dropped line numbers on many rows.
-      if (e.lineNumbers) {
-        lineNum = e.lineNumbers;
-      } else if (detectedLineRanges) {
+      // e.g. ":16-25"); fall back to OCR-detected ranges only when the model gave none.
+      let lineNum = e.lineNumbers;
+      if (!lineNum && detectedLineRanges) {
         const detected = detectedLineRanges.get(e.startPage);
         lineNum = detected?.detected ? `:${detected.start}-${detected.end}` : '';
       }
+      lineSuffix = isRedundantLineNumberSuffix(lineNum) ? '' : lineNum;
     }
 
-    if (isPlaceholder) {
-      lineNum = '';
-    }
-
-    const candidateSuffix = lineNum ? lineNum : '';
-    const lineSuffix = isRedundantLineNumberSuffix(candidateSuffix) ? '' : candidateSuffix;
     return e.startPage === e.endPage
       ? `| p.${e.startPage}${lineSuffix} | ${e.summary} |`
-      : `| p.${e.startPage}-${e.endPage}${lineSuffix} | ${e.summary} |`;
+      : `| p.${e.startPage}-${e.endPage} | ${e.summary} |`;
   });
   
   // Now all pages should be covered
@@ -1898,6 +2079,80 @@ export function assembleSortedSummary(
   };
 }
 
+/** Emphatic prompt for the coverage-recovery pass: these pages were skipped but DO contain testimony. */
+function makeRecoveryPrompt(
+  batch: TranscriptBatch,
+  metaSection: string,
+  systemInstruction: string,
+  caseContext: string
+) {
+  const caseContextBlock = caseContext ? `${caseContext}\n\n` : "";
+  const pagesList = batch.pageNumbers.join(", ");
+  return [
+    { role: "system", content: systemInstruction },
+    {
+      role: "user",
+      content: `
+These transcript pages were previously SKIPPED but they contain real testimony. Summarize them now.
+
+${metaSection ? metaSection + "\n\n" : ""}${caseContextBlock}PAGES TO SUMMARIZE: ${pagesList}
+
+IMPORTANT:
+- These pages were already determined to contain substantive transcript text. Do NOT return __SKIP__ unless a page is genuinely blank/illegible.
+- Cover EVERY listed page with NO gaps.
+
+FORMAT: | p.X-Y | Summary | (2 columns only; start a new row at each clear subject change — single-page rows are fine; use p.X-Y for consecutive same-subject pages; add line range only for partial pages). Refer to the deponent by last name or "the witness"; never use he/she/his/her.
+
+TRANSCRIPT TEXT:
+${batch.text}
+      `.trim(),
+    },
+  ];
+}
+
+/**
+ * Coverage-recovery re-ask (R3): for pages flagged by findSkippedSubstantivePages, re-batch
+ * just those pages and re-summarize them with an emphatic prompt. Returns the additional raw
+ * LLM outputs to be merged back through assembleSortedSummary. Best-effort: failures are
+ * swallowed so a recovery problem never fails the whole job.
+ */
+export async function recoverSkippedPages(opts: {
+  jobId: string;
+  skippedPages: number[];
+  transcriptPageMap: Map<number, string>;
+  metaMarkdown: string;
+  caseContextRef: string;
+  cfg: { system: string; maxTokens: number; temperature: number };
+  limit: <T>(fn: () => Promise<T>) => Promise<T>;
+}): Promise<string[]> {
+  const { jobId, skippedPages, transcriptPageMap, metaMarkdown, caseContextRef, cfg, limit } = opts;
+  const subMap = new Map<number, string>();
+  for (const p of skippedPages) {
+    const t = transcriptPageMap.get(p);
+    if (t) subMap.set(p, t);
+  }
+  if (subMap.size === 0) return [];
+  const batches = createTranscriptBatches(subMap, 5);
+  const outputs: string[] = new Array(batches.length).fill("");
+  await Promise.all(
+    batches.map((batch, i) =>
+      limit(async () => {
+        try {
+          const resp = await azureChatCompletion(
+            makeRecoveryPrompt(batch, metaMarkdown, cfg.system, caseContextRef),
+            typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
+            typeof cfg.temperature === "number" ? cfg.temperature : 0.0
+          );
+          outputs[i] = String(resp?.choices?.[0]?.message?.content || "").trim();
+        } catch (e: any) {
+          console.warn(`[${jobId}] Recovery batch ${i + 1} failed: ${e?.message || e}`);
+        }
+      })
+    )
+  );
+  return outputs.filter(Boolean);
+}
+
 /** GPT-5 family deployments on Azure reject `max_tokens`; use `max_completion_tokens` instead. */
 function azureChatUsesMaxCompletionTokens(): boolean {
   if (process.env.AZURE_OPENAI_USE_MAX_COMPLETION_TOKENS === "true") return true;
@@ -1905,7 +2160,7 @@ function azureChatUsesMaxCompletionTokens(): boolean {
   return dep.includes("gpt-5");
 }
 
-async function azureChatCompletion(
+export async function azureChatCompletion(
   messages: any[],
   maxTokens: number = AZURE_MAX_TOKENS,
   temperature: number = 0.0
@@ -1964,7 +2219,7 @@ async function withRetry<T>(
 const OVERVIEW_TABLE_INPUT_CAP = 120_000;
 
 /** True when caption text plausibly came from a transcript header, not an upload title fallback. */
-function looksLikeTranscriptCaseCaption(caption: string | null | undefined): boolean {
+export function looksLikeTranscriptCaseCaption(caption: string | null | undefined): boolean {
   const t = (caption || "").trim();
   if (!t) return false;
   if (/\bv\.|vs\.|versus\b/i.test(t)) return true;
@@ -2095,6 +2350,9 @@ async function work() {
       // Raced with another worker; try again.
       continue;
     }
+
+    // Track the in-flight job so a graceful shutdown can release it back to "queued".
+    currentProcessingJobId = candidate.id;
 
     const job = await prisma.summaryJob.findUnique({
       where: { id: candidate.id },
@@ -2346,6 +2604,27 @@ async function work() {
       await saveSummaryMetadata(summaryBucket, metadata);
       const metaMarkdown = renderMetadataMarkdown(metadata);
 
+      // Case-reference block anchored into EVERY batch prompt (not just the first) so the
+      // spelling of the deponent, case caption, and case number stays consistent across
+      // parallel batches. It is a reference only — the prompt instructs the model not to
+      // copy it into the output.
+      const caseContextLines: string[] = [];
+      const ctxDeponent = normalizeUnknownString(metadata.deponent);
+      const ctxCaption = normalizeUnknownString(metadata.caseCaption);
+      const ctxNumber = normalizeUnknownString(metadata.caseNumber);
+      // Only anchor the deponent when it looks like an actual name (single line, short).
+      // Guards against poisoning every batch prompt if name detection returns garbage.
+      const ctxDeponentIsName =
+        !!ctxDeponent && !/[\r\n]/.test(ctxDeponent) && ctxDeponent.split(/\s+/).length <= 6;
+      if (ctxDeponentIsName) caseContextLines.push(`Deponent (witness): ${ctxDeponent}`);
+      if (ctxCaption && looksLikeTranscriptCaseCaption(ctxCaption)) {
+        caseContextLines.push(`Case caption: ${ctxCaption}`);
+      }
+      if (ctxNumber) caseContextLines.push(`Case number: ${ctxNumber}`);
+      const caseContextRef = caseContextLines.length
+        ? `CASE REFERENCE (use these exact spellings when these names appear in the testimony; do NOT copy this block into your output):\n${caseContextLines.join("\n")}`
+        : "";
+
       // Persist totalPages early for better UI progress feedback
       try {
         const pageCount = totalTranscriptPages;
@@ -2406,7 +2685,7 @@ async function work() {
                 () => {
                   const cfg = loadPromptConfig();
                   return azureChatCompletion(
-                    makePromptForBatch(batch, i === 0, metaMarkdown, cfg.system),
+                    makePromptForBatch(batch, i === 0, metaMarkdown, cfg.system, caseContextRef),
                     typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
                     typeof cfg.temperature === "number" ? cfg.temperature : 0.0
                   );
@@ -2435,8 +2714,61 @@ async function work() {
         
         // Assemble sorted summary using the new function
         // Pass detected line ranges so assembly can use actual line numbers
-        const assemblyResult = assembleSortedSummary(batchOutputs, expectedPages, allDetectedLineRanges);
+        let assemblyResult = assembleSortedSummary(batchOutputs, expectedPages, allDetectedLineRanges);
         rowsOnly = assemblyResult.markdown;
+
+        // Coverage guard (R3): recover pages skipped by the model that actually have
+        // substantive source text. Non-condensed only — for the new pipeline transcriptPageMap
+        // gives clean per-page text. Bounded by RECOVERY_MAX_PAGES to cap cost.
+        if (!isCondensed && transcriptPageMap.size > 0) {
+          const pageLen = (p: number) =>
+            (transcriptPageMap.get(p) || "").replace(/\s/g, "").length;
+          const skipped = findSkippedSubstantivePages(assemblyResult.markdown, expectedPages, pageLen);
+          const RECOVERY_CAP = Number(process.env.RECOVERY_MAX_PAGES) || 40;
+          if (skipped.length > 0 && skipped.length <= RECOVERY_CAP) {
+            console.warn(
+              `[${job.id}] Coverage guard: ${skipped.length} substantive page(s) were skipped ` +
+                `(${skipped.slice(0, 20).join(", ")}${skipped.length > 20 ? "..." : ""}); attempting recovery re-ask`
+            );
+            try {
+              const cfg = loadPromptConfig();
+              const extra = await recoverSkippedPages({
+                jobId: job.id,
+                skippedPages: skipped,
+                transcriptPageMap,
+                metaMarkdown,
+                caseContextRef,
+                cfg: {
+                  system: cfg.system,
+                  maxTokens: typeof cfg.maxTokens === "number" ? cfg.maxTokens : AZURE_MAX_TOKENS,
+                  temperature: typeof cfg.temperature === "number" ? cfg.temperature : 0.0,
+                },
+                limit,
+              });
+              if (extra.length > 0) {
+                const merged = assembleSortedSummary(
+                  [...batchOutputs, ...extra],
+                  expectedPages,
+                  allDetectedLineRanges
+                );
+                const recoveredPages = findSkippedSubstantivePages(merged.markdown, skipped, pageLen);
+                const recoveredCount = skipped.length - recoveredPages.length;
+                console.log(
+                  `[${job.id}] Coverage guard: recovered ${recoveredCount}/${skipped.length} skipped page(s)`
+                );
+                assemblyResult = merged;
+                rowsOnly = assemblyResult.markdown;
+              }
+            } catch (e: any) {
+              console.warn(`[${job.id}] Coverage recovery failed; keeping original assembly: ${e?.message || e}`);
+            }
+          } else if (skipped.length > RECOVERY_CAP) {
+            console.warn(
+              `[${job.id}] Coverage guard: ${skipped.length} substantive page(s) skipped — exceeds ` +
+                `RECOVERY_MAX_PAGES=${RECOVERY_CAP}; not auto-recovering (logged for review)`
+            );
+          }
+        }
 
         // Log coverage statistics
         const coveragePercent = Math.round((assemblyResult.coveredPages.length / Math.max(1, expectedPages.length)) * 100);
@@ -2782,6 +3114,9 @@ You're receiving this because you have an account on Testifi AI.`;
       } catch (refundError: any) {
         console.error(`[${job.id}] Failed to refund credit:`, refundError?.message || refundError);
       }
+    } finally {
+      // Job reached a terminal state (complete/error); no longer in-flight for shutdown.
+      currentProcessingJobId = null;
     }
   }
 }
@@ -2914,7 +3249,7 @@ function trimOutOfRangeRows(mdRows: string, maxPage: number): string {
   return out.join("\n").trim();
 }
 
-function detectTranscriptMaxPage(transcript: string): number {
+export function detectTranscriptMaxPage(transcript: string): number {
   // We want the *transcript* page count, not the PDF scan page count.
   // Many scanned depositions contain multiple transcript pages per PDF page and include markers like '(Pages 2 - 5)'.
   // Heuristics (in priority order):
@@ -3131,7 +3466,7 @@ function detectTranscriptMaxPage(transcript: string): number {
   return 0;
 }
 
-function chooseTotalTranscriptPages(opts: {
+export function chooseTotalTranscriptPages(opts: {
   pdfPageCount: number;
   transcriptMaxPage: number;
 }): number {
@@ -3178,7 +3513,9 @@ function chooseTotalTranscriptPages(opts: {
   return tr;
 }
 
-work().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+if (require.main === module) {
+  work().catch((err) => {
+    console.error("Fatal error:", err);
+    process.exit(1);
+  });
+}

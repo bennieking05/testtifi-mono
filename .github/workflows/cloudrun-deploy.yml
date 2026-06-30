@@ -116,11 +116,15 @@ jobs:
             echo "IMAGE_TAG=latest" >> $GITHUB_ENV
             echo "SERVICE_NAME=testifi-frontend" >> $GITHUB_ENV
             echo "BACKEND_URL=https://testifi-backend-748916208557.us-central1.run.app" >> $GITHUB_ENV
+            # Production uses the LIVE Stripe publishable key (non-secret, public by design).
+            echo "STRIPE_PUBLISHABLE_KEY=pk_live_51SPyHb1PKdcq2R5zOc8C1xjv53gfqNDmPYTLTvXWxOXVdP06nFPT6pEPzFlOVLGbA4vJEkE5Kj1Dwy17bh59QZMM00AxKdgUMY" >> $GITHUB_ENV
           else
             echo "ENV_NAME=staging" >> $GITHUB_ENV
             echo "IMAGE_TAG=staging" >> $GITHUB_ENV
             echo "SERVICE_NAME=testifi-frontend-staging" >> $GITHUB_ENV
             echo "BACKEND_URL=https://testifi-backend-staging-748916208557.us-central1.run.app" >> $GITHUB_ENV
+            # Staging uses the TEST Stripe publishable key.
+            echo "STRIPE_PUBLISHABLE_KEY=pk_test_51SPyHb1PKdcq2R5zdlTdxGxpj8Lc6AFNbeBfGNkJ5QmMC6IOOE8osz3KqQ3a04RCUsbSPhl694U5p35JAmOuYT0w00PXMi588j" >> $GITHUB_ENV
           fi
 
       - name: Authenticate to Google Cloud
@@ -143,6 +147,7 @@ jobs:
             -t gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ github.sha }} \
             -f loveable/Dockerfile.cloudrun \
             --build-arg VITE_API_URL=${{ env.BACKEND_URL }} \
+            --build-arg VITE_STRIPE_PUBLISHABLE_KEY=${{ env.STRIPE_PUBLISHABLE_KEY }} \
             ./loveable
           docker push gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ env.IMAGE_TAG }}
           docker push gcr.io/${{ env.PROJECT_ID }}/testifi-frontend:${{ github.sha }}
@@ -183,3 +188,82 @@ jobs:
           echo "Environment: ${{ env.ENV_NAME }}"
           echo "Frontend: ${FRONTEND_URL}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  # The summarize worker is built from the SAME backend/ tree as the API (--target
+  # summarize-worker). It MUST be deployed alongside backend/frontend, otherwise a
+  # pipeline fix in summarizeWorker.ts silently never reaches prod (the old gotcha where
+  # only deploy-worker.sh updated it). Runs in parallel with the backend/frontend jobs.
+  build-and-deploy-worker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ] || [ "${{ github.event.inputs.environment }}" = "production" ]; then
+            echo "ENV_NAME=production" >> $GITHUB_ENV
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+            echo "SERVICE_NAME=testifi-summarize-worker" >> $GITHUB_ENV
+            echo "BASE_URL=https://app.testifi.ai" >> $GITHUB_ENV
+            echo "AZURE_MODEL=gpt-5.4-testifi" >> $GITHUB_ENV
+            echo "SECRETS_PREFIX=backend-secrets" >> $GITHUB_ENV
+          else
+            echo "ENV_NAME=staging" >> $GITHUB_ENV
+            echo "IMAGE_TAG=staging" >> $GITHUB_ENV
+            echo "SERVICE_NAME=testifi-summarize-worker-staging" >> $GITHUB_ENV
+            echo "BASE_URL=https://staging.app.testifi.ai" >> $GITHUB_ENV
+            echo "AZURE_MODEL=gpt-5.4-testifi" >> $GITHUB_ENV
+            echo "SECRETS_PREFIX=backend-secrets-staging" >> $GITHUB_ENV
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io --quiet
+
+      - name: Build and push worker image
+        run: |
+          docker build \
+            -t gcr.io/${{ env.PROJECT_ID }}/summarize-worker:${{ env.IMAGE_TAG }} \
+            -t gcr.io/${{ env.PROJECT_ID }}/summarize-worker:${{ github.sha }} \
+            --target summarize-worker \
+            ./backend
+          docker push gcr.io/${{ env.PROJECT_ID }}/summarize-worker:${{ env.IMAGE_TAG }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/summarize-worker:${{ github.sha }}
+
+      - name: Deploy worker to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image gcr.io/${{ env.PROJECT_ID }}/summarize-worker:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --add-cloudsql-instances ${{ env.PROJECT_ID }}:${{ env.REGION }}:testifi \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --no-allow-unauthenticated \
+            --min-instances 1 \
+            --max-instances 1 \
+            --memory 2Gi \
+            --cpu 2 \
+            --no-cpu-throttling \
+            --timeout 3600 \
+            --set-env-vars "NODE_ENV=${{ env.ENV_NAME }},WORKER_CONCURRENCY=1,PAGE_RANGE_SIZE=5,AZURE_OPENAI_DEPLOYMENT_NAME=${{ env.AZURE_MODEL }},AZURE_API_VERSION=2025-01-01-preview,BASE_URL=${{ env.BASE_URL }}" \
+            --set-secrets "DATABASE_URL=${{ env.SECRETS_PREFIX }}-DATABASE_URL_CLOUDRUN:latest,SENDGRID_API_KEY=${{ env.SECRETS_PREFIX }}-SENDGRID_API_KEY:latest,AZURE_OPENAI_API_KEY=${{ env.SECRETS_PREFIX }}-AZURE_OPENAI_API_KEY:latest,AZURE_OPENAI_ENDPOINT=${{ env.SECRETS_PREFIX }}-AZURE_OPENAI_ENDPOINT:latest"
+
+      - name: Verify worker revision deployed
+        run: |
+          # Worker is private (--no-allow-unauthenticated), so verify via revision + logs,
+          # not a public health probe. Mutable :latest/:staging tags hide redeploys, so the
+          # revision name is the only reliable "did it actually deploy" signal.
+          REV=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --format 'value(status.latestReadyRevisionName)')
+          echo "✅ Worker ${{ env.SERVICE_NAME }} now serving revision: ${REV}"

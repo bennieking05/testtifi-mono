@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import FileUploader from "@/components/dashboard/FileUploader";
 import { EmailNotificationDialog } from "@/components/dialogs/EmailNotificationDialog";
+import api from "@/lib/axios";
 
 interface SummaryFormProps {
   file?: File | null;
@@ -52,25 +53,27 @@ const SummaryForm: React.FC<SummaryFormProps> = ({
     setIsUploading(true);
     setUploadMsg("Preparing upload…");
 
-    const apiBase = import.meta.env.VITE_API_URL || "";
-    const authHeader = { Authorization: `Bearer ${localStorage.getItem("token")}` };
-
     try {
-      /* ── Step 1: reserve credit & get a GCS signed URL ── */
-      const initRes = await fetch(`${apiBase}/api/upload/init`, {
-        method: "POST",
-        headers: { ...authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({
+      /* ── Step 1: reserve credit & get a GCS signed URL ──
+         Backend calls go through the shared axios client (Bearer + 401-refresh). */
+      let initData: {
+        reservationId: string;
+        objectKey: string;
+        signedUrl: string;
+        fileName: string;
+      };
+      try {
+        const initRes = await api.post("/api/upload/init", {
           fileName: file.name,
           contentType: file.type || "application/octet-stream",
           summaryName,
           deponent,
-        }),
-      });
-
-      if (!initRes.ok) {
-        const { error = "" } = await initRes.json().catch(() => ({}));
-        if (initRes.status === 402 || /not enough credits/i.test(error)) {
+        });
+        initData = initRes.data;
+      } catch (err: any) {
+        const status = err?.response?.status;
+        const error: string = err?.response?.data?.error || "";
+        if (status === 402 || /not enough credits/i.test(error)) {
           navigate("/payment", {
             state: {
               returnTo: "/create-summary",
@@ -82,9 +85,11 @@ const SummaryForm: React.FC<SummaryFormProps> = ({
         throw new Error(error || "Failed to prepare upload");
       }
 
-      const { reservationId, objectKey, signedUrl, fileName: safeName } = await initRes.json();
+      const { reservationId, objectKey, signedUrl, fileName: safeName } = initData;
 
-      /* ── Step 2: upload the file directly to GCS (bypasses Cloud Run) ── */
+      /* ── Step 2: upload the file directly to GCS (bypasses Cloud Run) ──
+         IMPORTANT: this is a signed URL on storage.googleapis.com — it must use raw fetch,
+         NOT the api client (no Authorization header, different host). */
       setUploadMsg("Uploading file…");
       const gcsRes = await fetch(signedUrl, {
         method: "PUT",
@@ -98,25 +103,21 @@ const SummaryForm: React.FC<SummaryFormProps> = ({
 
       /* ── Step 3: tell the backend the upload is done ── */
       setUploadMsg("Finalizing…");
-      const completeRes = await fetch(`${apiBase}/api/upload/complete`, {
-        method: "POST",
-        headers: { ...authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let jobId: string;
+      try {
+        const completeRes = await api.post("/api/upload/complete", {
           reservationId,
           objectKey,
           fileName: safeName,
           summaryName,
           deponent,
           notifyOnComplete: false,
-        }),
-      });
-
-      if (!completeRes.ok) {
-        const { error = "" } = await completeRes.json().catch(() => ({}));
-        throw new Error(error || "Failed to finalize upload");
+        });
+        jobId = completeRes.data.jobId;
+      } catch (err: any) {
+        throw new Error(err?.response?.data?.error || "Failed to finalize upload");
       }
 
-      const { jobId } = await completeRes.json();
       setRecentId(jobId);
       // Immediately go to processing tab on Summaries
       navigate("/summaries", {
@@ -183,6 +184,7 @@ const SummaryForm: React.FC<SummaryFormProps> = ({
           </label>
           <FileUploader
             onFileUpload={handleFileSelect}
+            onFileRemoved={() => setFile(null)}
             initialFile={file || undefined}
             disabled={isUploading}
           />

@@ -84,10 +84,16 @@ BACKEND_URL=$(gcloud run services describe testifi-backend --region $REGION --fo
 FRONTEND_URL=$(gcloud run services describe testifi-frontend --region $REGION --format 'value(status.url)')
 
 echo ""
-echo "✅ Production deployment complete!"
+echo "✅ Production deployment complete! (backend + frontend)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Backend URL:  $BACKEND_URL"
 echo "Frontend URL: $FRONTEND_URL"
+echo ""
+echo "⚠️  This script does NOT deploy the summarize worker."
+echo "   If your change touches the summary pipeline (backend/src/worker/**),"
+echo "   you MUST also run:  ./deploy-worker.sh"
+echo "   Otherwise the prod worker keeps running the OLD image."
+echo "   (The cloudrun-deploy.yml GitHub workflow deploys all three automatically.)"
 echo ""
 echo "📝 Next steps:"
 echo "   1. Map custom domain: gcloud run domain-mappings create --service testifi-frontend --domain app.testifi.ai --region $REGION"

@@ -74,13 +74,17 @@ const Billing: React.FC = () => {
         if (historyResponse.ok) {
           const historyData = await historyResponse.json();
           setPurchases(historyData);
-        } else if (historyResponse.status === 404) {
-          // Endpoint doesn't exist yet, show empty state
-          console.log("Purchase history endpoint not found, showing empty state");
-          setPurchases([]);
         } else {
-          console.error("Failed to fetch purchase history:", historyResponse.status, historyResponse.statusText);
-          // Don't throw error, just show empty state
+          // /api/purchase/user-history is a real backend route, so a 404 here indicates a
+          // routing/base-URL mismatch, not "no history" — surface it instead of masking it.
+          console.error(
+            "Failed to fetch purchase history:",
+            historyResponse.status,
+            historyResponse.statusText
+          );
+          if (historyResponse.status !== 404) {
+            toast.error("Could not load purchase history");
+          }
           setPurchases([]);
         }
       } catch (error) {

@@ -26,6 +26,8 @@
     "test:e2e": "npx playwright test",
     "test:evidence": "npx playwright test tests/evidence/",
     "test:summary-output": "node scripts/summary-output-regression.mjs",
+    "test:billing": "node scripts/billing-regression.mjs",
+    "test:units": "npm run build -w backend && node scripts/summary-output-regression.mjs && node scripts/billing-regression.mjs",
     "watch:summary": "npx ts-node scripts/watch-local-summary.ts",
     "watch:summary:once": "npx ts-node scripts/watch-local-summary.ts --once"
   },

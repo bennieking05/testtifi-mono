@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import api from "@/lib/axios";
 
 export interface LedgerEntry {
   id: string;
@@ -46,36 +47,19 @@ export const useBillingLedger = (options: UseBillingLedgerOptions = {}) => {
       const { refreshKey, ...queryOptions } = options;
       try {
         setLoading(true);
-        const token = localStorage.getItem("token");
-        if (!token) {
-          setError("No authentication token");
-          return;
-        }
 
-        const params = new URLSearchParams();
-        if (queryOptions.type && queryOptions.type !== "all") params.append("type", queryOptions.type);
-        if (queryOptions.from) params.append("from", queryOptions.from);
-        if (queryOptions.to) params.append("to", queryOptions.to);
-        if (queryOptions.cursor) params.append("cursor", queryOptions.cursor);
+        // Use the shared axios client so requests get the Bearer token and 401-refresh
+        // behaviour automatically (previously this used raw fetch and missed token refresh).
+        const params: Record<string, string> = {};
+        if (queryOptions.type && queryOptions.type !== "all") params.type = queryOptions.type;
+        if (queryOptions.from) params.from = queryOptions.from;
+        if (queryOptions.to) params.to = queryOptions.to;
+        if (queryOptions.cursor) params.cursor = queryOptions.cursor;
 
-        const queryString = params.toString();
-        const baseUrl = import.meta.env.VITE_API_URL ?? "";
-        const normalizedBase = baseUrl ? baseUrl.replace(/\/$/, "") : "";
-        const url = `${normalizedBase}/api/billing/history${queryString ? `?${queryString}` : ""}`;
+        const response = await api.get("/api/billing/history", { params });
 
-        const response = await fetch(url, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch billing history");
-        }
-
-        const result = await response.json();
         if (!cancelled) {
-          setData(result);
+          setData(response.data);
           setError(null);
         }
       } catch (err) {
