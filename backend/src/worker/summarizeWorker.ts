@@ -1343,7 +1343,7 @@ PAGE/LINE COLUMN:
 - Include :line-line ONLY for partial-page coverage when line numbers are visible in the transcript.
 
 GROUPING:
-- Start a NEW row at each clear change of subject. Use p.X-Y for consecutive pages that share one continuous subject; use a single-page row (p.X) when that page's subject stands alone. Keep any single row within ~6 consecutive pages. Do NOT pad rows to a fixed size, and do NOT omit testimony to make a row shorter.
+- Produce consistent rows that each cover ~5-6 consecutive transcript pages (e.g. p.8-13, p.14-19). Do NOT emit 1-2 page or single-page rows. Keep the page/line designations consistent across the whole summary. Do NOT omit testimony to make a row shorter.
 
 WITNESS REFERENCE:
 - Refer to the deponent by last name (see the Title above) or as "the witness". Never use he/she/his/her/him for the deponent.
@@ -1371,7 +1371,7 @@ Continue summarizing.
 ${caseContextBlock}PAGES: ${pagesList}
 *** ALL pages must be covered - NO GAPS ***
 
-FORMAT: | p.X-Y | Summary | (2 columns only; start a new row at each clear subject change — single-page rows are fine; use p.X-Y for consecutive same-subject pages, max ~6 pages per row; add line range only for partial pages)
+FORMAT: | p.X-Y | Summary | (2 columns only; group ~5-6 consecutive pages per row, e.g. p.12-17, p.18-23 — NOT single-page rows; add line range only for partial pages)
 
 RULES: Use | p.X | __SKIP__ | for non-substantive pages only (literal __SKIP__); do not narrate illegible/empty/minimal content. Refer to the deponent by last name or "the witness"; never use he/she/his/her.
 
@@ -1837,12 +1837,13 @@ export function findSkippedSubstantivePages(
 }
 
 /**
- * Topic-driven row assembly. Each substantive entry is kept as its own row so the
- * page/line boundaries the model chose at subject changes survive (down to single pages),
- * and single-page entries retain their cited line numbers. Only runs of consecutive,
- * adjacent placeholder ("—") pages are collapsed into a single range (capped at blockSize
- * pages) to keep gap rows tidy; those rows are filtered out of the deliverable downstream
- * by the non-substantive filter, so their grouping is cosmetic.
+ * Group consecutive page entries into consistent ~blockSize-page blocks so the Page/Line
+ * column shows steady multi-page designations (e.g. p.12-17, p.18-23) at the 5:1 ratio the
+ * deposition-summary deliverable requires (UAT Round 44 Issue 1) — NOT many 1-2 page or
+ * single-page rows. Substantive summaries within a block are concatenated; a block made
+ * entirely of placeholders stays a single "—" row so downstream non-substantive filtering
+ * still drops it. A line-number suffix is preserved only when a block is a single original
+ * single-page entry (i.e. a genuine partial page).
  */
 export function regroupIntoBlocks(
   entries: PageRangeEntry[],
@@ -1851,42 +1852,50 @@ export function regroupIntoBlocks(
   if (entries.length === 0) return [];
   const sorted = [...entries].sort((a, b) => a.startPage - b.startPage);
 
-  const blocks: PageRangeEntry[] = [];
-  let placeholderRun: PageRangeEntry[] = [];
-
-  const flushPlaceholders = () => {
-    // Merge only truly adjacent placeholder pages; cap each merged row at blockSize pages.
-    let i = 0;
-    while (i < placeholderRun.length) {
-      const start = placeholderRun[i];
-      let endPage = start.endPage;
-      let j = i + 1;
-      while (
-        j < placeholderRun.length &&
-        placeholderRun[j].startPage === endPage + 1 &&
-        placeholderRun[j].endPage - start.startPage + 1 <= blockSize
-      ) {
-        endPage = placeholderRun[j].endPage;
-        j++;
-      }
-      blocks.push({ startPage: start.startPage, endPage, lineNumbers: "", summary: "—" });
-      i = j;
-    }
-    placeholderRun = [];
+  const mergeParts = (parts: PageRangeEntry[]): PageRangeEntry => {
+    const startPage = parts[0].startPage;
+    const endPage = parts[parts.length - 1].endPage;
+    const substantive = parts.filter((p) => !isPlaceholderSummary(p.summary));
+    const summary =
+      substantive.length > 0 ? substantive.map((p) => p.summary).join(" ") : "—";
+    // Keep the cited line range only when the block is one original single-page entry.
+    const lineNumbers =
+      parts.length === 1 && startPage === endPage ? parts[0].lineNumbers : "";
+    return { startPage, endPage, lineNumbers, summary };
   };
 
+  const blocks: PageRangeEntry[] = [];
+  let cur: PageRangeEntry[] = [];
   for (const e of sorted) {
-    if (isPlaceholderSummary(e.summary)) {
-      placeholderRun.push(e);
-    } else {
-      flushPlaceholders();
-      // Keep substantive entries intact — preserves topic boundaries and line citations.
-      blocks.push(e);
+    cur.push(e);
+    const span = cur[cur.length - 1].endPage - cur[0].startPage + 1;
+    if (span >= blockSize) {
+      blocks.push(mergeParts(cur));
+      cur = [];
     }
   }
-  flushPlaceholders();
+  if (cur.length > 0) blocks.push(mergeParts(cur));
 
-  blocks.sort((a, b) => a.startPage - b.startPage);
+  // Absorb a trailing lone page into the previous block to avoid a dangling p.X row,
+  // as long as the combined block stays within blockSize+1 pages.
+  if (blocks.length >= 2) {
+    const last = blocks[blocks.length - 1];
+    const prev = blocks[blocks.length - 2];
+    if (
+      last.startPage === last.endPage &&
+      last.startPage === prev.endPage + 1 &&
+      last.endPage - prev.startPage + 1 <= blockSize + 1
+    ) {
+      const subs = [prev, last]
+        .filter((b) => !isPlaceholderSummary(b.summary))
+        .map((b) => b.summary);
+      prev.endPage = last.endPage;
+      prev.summary = subs.length > 0 ? subs.join(" ") : "—";
+      prev.lineNumbers = "";
+      blocks.pop();
+    }
+  }
+
   return blocks;
 }
 

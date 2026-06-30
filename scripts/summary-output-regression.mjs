@@ -113,34 +113,39 @@ function testRangeNotSilentlyTruncated() {
   assert.equal(huge[0].endPage, 51, "pathological range clamped to start + MAX_PARSED_RANGE_SPAN(50)");
 }
 
-// R1: substantive topic rows keep their model-chosen boundaries and line citations;
-// only consecutive placeholder pages collapse.
-function testRegroupPreservesTopicRowsAndLines() {
-  const entries = [
-    { startPage: 1, endPage: 1, lineNumbers: ":3-22", summary: "Partial-page testimony about the fee schedule and commissions." },
-    { startPage: 2, endPage: 4, lineNumbers: "", summary: "Continuous testimony about the project timeline and milestones." },
-    { startPage: 5, endPage: 5, lineNumbers: "", summary: "—" },
-    { startPage: 6, endPage: 6, lineNumbers: "", summary: "—" },
-    { startPage: 7, endPage: 9, lineNumbers: "", summary: "Testimony about damages and the supporting exhibits." },
-  ];
+// UAT Round 44 Issue 1: rows must group into consistent ~5-6 page blocks (5:1 ratio),
+// NOT 1-2 page or single-page rows.
+function testRegroupMergesIntoBlocks() {
+  const entries = [];
+  for (let p = 1; p <= 12; p++) {
+    entries.push({
+      startPage: p,
+      endPage: p,
+      lineNumbers: "",
+      summary: `Testimony on page ${p} about the matter at hand.`,
+    });
+  }
   const blocks = regroupIntoBlocks(entries, 5);
 
-  const substantive = blocks.filter((b) => b.summary !== "—");
-  assert.equal(substantive.length, 3, "each substantive topic row is preserved (not force-merged)");
+  // 12 single-page entries collapse into ~2-3 grouped blocks, not 12 rows.
+  assert.ok(blocks.length <= 3, `12 pages should group into ~2-3 blocks, got ${blocks.length}`);
+  // Every non-final block is a full ~5-page group (no 1-2 page rows except a trailing remainder).
+  for (let i = 0; i < blocks.length - 1; i++) {
+    const span = blocks[i].endPage - blocks[i].startPage + 1;
+    assert.ok(span >= 5, `block p.${blocks[i].startPage}-${blocks[i].endPage} should group ~5 pages`);
+  }
+  assert.equal(blocks[0].startPage, 1, "first block starts at page 1");
+  assert.equal(blocks[blocks.length - 1].endPage, 12, "full coverage preserved through grouping");
 
-  const p1 = blocks.find((b) => b.startPage === 1 && b.endPage === 1);
-  assert.ok(p1, "single-page topic row preserved");
-  assert.equal(p1.lineNumbers, ":3-22", "line citation retained on single-page row");
-
-  assert.ok(
-    blocks.some((b) => b.startPage === 2 && b.endPage === 4),
-    "multi-page range preserved as a range"
+  // A block made entirely of placeholders stays a single "—" row (filtered downstream).
+  const phBlocks = regroupIntoBlocks(
+    [
+      { startPage: 1, endPage: 1, lineNumbers: "", summary: "—" },
+      { startPage: 2, endPage: 2, lineNumbers: "", summary: "—" },
+    ],
+    5
   );
-
-  const placeholders = blocks.filter((b) => b.summary === "—");
-  assert.equal(placeholders.length, 1, "adjacent placeholder pages merged into one gap row");
-  assert.equal(placeholders[0].startPage, 5);
-  assert.equal(placeholders[0].endPage, 6);
+  assert.ok(phBlocks.every((b) => b.summary === "—"), "placeholder-only block stays a gap row");
 }
 
 // R2: assembly clamps out-of-range pages to the document extent so a hallucinated range
@@ -154,16 +159,24 @@ function testAssemblyClampsToDocumentExtent() {
   assert.ok(Math.max(...coveredPages) <= 5, "coverage must never exceed the document extent");
 }
 
-// R1: assembled output keeps a line suffix on single-page rows and a clean range otherwise.
-function testAssemblyKeepsLineSuffixAndRanges() {
-  const { markdown } = assembleSortedSummary(
+// 5:1 grouping: consecutive entries merge into one block range; a line suffix survives
+// only when a block is a single original single-page (partial) entry.
+function testAssemblyGroupsAndKeepsLinesForSinglePageBlocks() {
+  // Two entries within one block window merge into a single grouped range row.
+  const { markdown: merged } = assembleSortedSummary(
     [
       "| p.1:3-22 | Smith testified about the engagement letter on this page only. |\n| p.2-4 | Continuous testimony about the project timeline and key milestones. |",
     ],
     [1, 2, 3, 4]
   );
-  assert.match(markdown, /\| p\.1:3-22 \|/, "single-page partial row keeps its line suffix");
-  assert.match(markdown, /\| p\.2-4 \|/, "continuous testimony rendered as a clean range");
+  assert.match(merged, /\| p\.1-4 \|/, "consecutive entries group into one block range");
+
+  // A lone partial single page (its own block) keeps its line-number suffix.
+  const { markdown: single } = assembleSortedSummary(
+    ["| p.3:5-19 | Smith addressed only the fee schedule on this page. |"],
+    [3]
+  );
+  assert.match(single, /\| p\.3:5-19 \|/, "a single-page partial block keeps its line suffix");
 }
 
 // R3: coverage guard flags pages that are non-substantive in the output but have
@@ -201,9 +214,9 @@ testPageLineDisplay();
 testSanitizeSummaryLanguage();
 testOverviewSplitAndMarkdownParsing();
 testRangeNotSilentlyTruncated();
-testRegroupPreservesTopicRowsAndLines();
+testRegroupMergesIntoBlocks();
 testAssemblyClampsToDocumentExtent();
-testAssemblyKeepsLineSuffixAndRanges();
+testAssemblyGroupsAndKeepsLinesForSinglePageBlocks();
 testFindSkippedSubstantivePages();
 
 console.log("Summary output regression checks passed.");
