@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import api from "@/lib/axios";
 
 const ResetPassword = () => {
   const [password, setPassword] = useState("");
@@ -27,23 +28,9 @@ const ResetPassword = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch("/api/auth/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, newPassword: password }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        toast({
-          title: "Error",
-          description: data.error || "An error occurred. Please try again.",
-          variant: "destructive",
-        });
-        setIsLoading(false);
-        return;
-      }
+      // Use the shared axios client so the request goes to the backend (VITE_API_URL).
+      // A relative "/api/..." URL here hit the frontend host (nginx) and returned 405.
+      await api.post("/api/auth/reset-password", { token, newPassword: password });
 
       toast({
         title: "Password reset successful",
@@ -55,7 +42,10 @@ const ResetPassword = () => {
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message || "Server error, please try again later.",
+        description:
+          error?.response?.data?.error ||
+          error?.message ||
+          "An error occurred. Please try again.",
         variant: "destructive",
       });
     } finally {
