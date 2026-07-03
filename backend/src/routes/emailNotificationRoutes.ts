@@ -365,8 +365,8 @@ router.post(
       <p>Need help or have questions? Reply to this email and our support team will be happy to assist.</p>
     </div>
     <div class="footer">
-      <p><strong>© 2025 Testifi-AI. All rights reserved.</strong></p>
-      <p>You're receiving this because you have an account on Testifi-AI.</p>
+      <p><strong>© ${new Date().getFullYear()} Testifi AI. All rights reserved.</strong></p>
+      <p>You're receiving this because you have an account on Testifi AI.</p>
     </div>
   </div>
 </body>
