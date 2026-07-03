@@ -1,17 +1,21 @@
 {
-  // Root tsconfig is no longer used to build app source (that lives in the backend/ and
-  // loveable/ workspaces, each with their own tsconfig). It now only configures `ts-node`
-  // for the helper scripts in scripts/ (e.g. npm run watch:summary).
   "compilerOptions": {
     "target": "ES6", // Use ES6 for modern JavaScript support
     "module": "CommonJS", // Use CommonJS for Node.js compatibility
-    "rootDir": ".", // scripts/ live at the repo root
+    "rootDir": "src", // Source directory for TypeScript files
     "outDir": "dist", // Output directory for compiled JavaScript files
     "strict": true, // Enable all strict type-checking options
 
     /* Module Resolution */
     "moduleResolution": "node", // Use Node.js module resolution
     "baseUrl": "./", // Base directory for resolving module imports
+    "paths": {
+      // Alias imports for cleaner paths
+      "@controllers/*": ["src/controllers/*"],
+      "@routes/*": ["src/routes/*"],
+      "@models/*": ["src/models/*"],
+      "@utils/*": ["src/utils/*"]
+    },
 
     /* JavaScript Support */
     "allowJs": true, // Allow JavaScript files in the project
@@ -36,6 +40,6 @@
     "noImplicitReturns": true, // Ensure all code paths return values
     "noFallthroughCasesInSwitch": true // Prevent fallthrough in switch statements
   },
-  "include": ["scripts"], // Helper scripts run via ts-node
-  "exclude": ["node_modules", "dist", "backend", "loveable"] // Workspaces build themselves
+  "include": ["src", "src/types"], // Include `src` and `src/types` folders
+  "exclude": ["node_modules", "dist"] // Exclude `node_modules` and `dist` folders
 }
