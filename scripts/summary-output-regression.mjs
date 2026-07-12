@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,8 +33,13 @@ const {
   splitDepositionOverview,
 } = loadBuiltModule("backend/dist/utils/summaryOverviewDelimiter.js");
 const { parseMarkdown } = loadBuiltModule("backend/dist/routes/downloadRoutes.js");
-const { parseToRangeEntries, regroupIntoBlocks, assembleSortedSummary, findSkippedSubstantivePages } =
-  loadBuiltModule("backend/dist/worker/summarizeWorker.js");
+const {
+  parseToRangeEntries,
+  regroupIntoBlocks,
+  assembleSortedSummary,
+  findSkippedSubstantivePages,
+  extractTranscriptPagesFromText,
+} = loadBuiltModule("backend/dist/worker/summarizeWorker.js");
 
 function assertNoInternalProcessLanguage(text) {
   assert.doesNotMatch(text, /\bOCR\b/i);
@@ -137,6 +143,36 @@ function testRegroupMergesIntoBlocks() {
   assert.equal(blocks[0].startPage, 1, "first block starts at page 1");
   assert.equal(blocks[blocks.length - 1].endPage, 12, "full coverage preserved through grouping");
 
+  // UAT R45 #4: NO row may exceed 6 pages.
+  for (const b of blocks) {
+    assert.ok(b.endPage - b.startPage + 1 <= 6, `block p.${b.startPage}-${b.endPage} exceeds 6 pages`);
+  }
+
+  // Two 4-page entries must NOT merge into one 8-page row (the old over-merge bug).
+  const twoFour = regroupIntoBlocks(
+    [
+      { startPage: 6, endPage: 9, lineNumbers: "", summary: "Testimony about employment." },
+      { startPage: 10, endPage: 13, lineNumbers: "", summary: "Testimony about the contract." },
+    ],
+    5
+  );
+  assert.ok(
+    twoFour.every((b) => b.endPage - b.startPage + 1 <= 6),
+    `two 4-page entries must not merge past 6 pages; got ${twoFour.map((b) => `p.${b.startPage}-${b.endPage}`).join(", ")}`
+  );
+
+  // A single oversized entry (e.g. an 8-page condensed row) is split into <=6-page rows.
+  const oversized = regroupIntoBlocks(
+    [{ startPage: 6, endPage: 13, lineNumbers: "", summary: "One condensed 8-page block." }],
+    5
+  );
+  assert.ok(oversized.length >= 2, "an 8-page entry should split into >=2 rows");
+  assert.ok(
+    oversized.every((b) => b.endPage - b.startPage + 1 <= 6),
+    "split rows must each be <=6 pages"
+  );
+  assert.equal(oversized[oversized.length - 1].endPage, 13, "split preserves full page coverage");
+
   // A block made entirely of placeholders stays a single "—" row (filtered downstream).
   const phBlocks = regroupIntoBlocks(
     [
@@ -210,6 +246,95 @@ function testFindSkippedSubstantivePages() {
   );
 }
 
+// UAT R45 #3: front matter before the first detected page anchor must NOT be dropped —
+// it is assigned to page 1 so the summary starts at p.1 (appearances/stipulations covered).
+function testHeadCoverageFromPageOne() {
+  const fullText = [
+    "APPEARANCES OF COUNSEL: Mr. Smith for Plaintiff; Ms. Jones for Defendant.",
+    "STIPULATIONS: It is hereby stipulated by and between counsel that the deposition may proceed.",
+    "Page 6",
+    "Q. Please state your name for the record. A. John Doe.",
+    "Page 7",
+    "Q. Where are you employed? A. Acme Corporation.",
+    "Page 8",
+    "Q. For how long? A. Roughly ten years.",
+  ].join("\n");
+
+  const pageMap = extractTranscriptPagesFromText(fullText);
+
+  assert.ok(pageMap.has(1), "front matter must be assigned to page 1, not dropped");
+  assert.match(
+    pageMap.get(1),
+    /APPEARANCES/,
+    "page 1 must carry the actual front-matter text (appearances/stipulations)"
+  );
+  for (let p = 2; p <= 5; p++) {
+    assert.ok(pageMap.has(p), `head page ${p} must be present so coverage starts at p.1`);
+  }
+  assert.ok(pageMap.has(6), "the first detected anchor page is still captured");
+}
+
+// UAT R46 #1/#2: the customer-facing cover page must not show a "Case Title" line or a
+// "Validation Warnings" section, and "Date of Deposition" must not repeat on the body page
+// above the narrative. Verified behaviorally on a real generated DOCX, plus string tripwires
+// on the built route files (PDF text is glyph-encoded, so it can't be asserted directly).
+async function testCoverPageCustomerView() {
+  const { generateDocxBuffer } = loadBuiltModule("backend/dist/utils/generateDocuments.js");
+  const JSZip = requireFromRoot("jszip");
+
+  const job = {
+    id: "r46-job",
+    fileName: "sackler-depo.pdf",
+    createdAt: new Date("2026-07-01T12:00:00Z"),
+    file: { title: "Sackler Depo", deponent: "Dr. Richard Sackler", pages: "12" },
+  };
+  const metadata = {
+    deponent: "Dr. Richard Sackler",
+    caseCaption: "PURDUE PHARMA L.P. v. STATE OF OKLAHOMA",
+    caseTitle: "Sackler Matter",
+    sourceFileName: "sackler-depo.pdf",
+    totalPages: 12,
+    depositionDate: "July 7, 2022",
+    // A failing judge would previously render a Validation Warnings block on the cover.
+    judgeResults: {
+      allPassed: false,
+      judges: [{ name: "Coverage", passed: false, warnings: ["Pages 3-4 may be under-summarized"] }],
+    },
+  };
+  const documentData = {
+    meta: [],
+    depositionOverview: "Sackler testified about opioid marketing decisions.",
+    rows: [
+      { pageLine: "p.1-5", witness: "Dr. Richard Sackler", topic: "", summary: "Sackler described his role at the company." },
+      { pageLine: "p.6-10", witness: "Dr. Richard Sackler", topic: "", summary: "Sackler discussed sales strategy." },
+    ],
+  };
+
+  const docxBuf = await generateDocxBuffer(job, metadata, documentData, "");
+  const zip = await JSZip.loadAsync(docxBuf);
+  const xml = await zip.file("word/document.xml").async("string");
+
+  assert.match(xml, /Source File/, "sanity: cover page still renders");
+  assert.doesNotMatch(xml, /Case Title/i, "Case Title must not appear anywhere in the DOCX");
+  assert.doesNotMatch(xml, /Validation Warning/i, "Validation Warnings must not appear in the DOCX");
+  assert.equal(
+    (xml.match(/Date of Deposition/g) || []).length,
+    0,
+    "the body-page 'Date of Deposition' line above the narrative must be gone (cover uses 'Date:')"
+  );
+
+  // Tripwires on the built HTTP-route code (download + preview render inline in the route).
+  const downloadDist = readFileSync(path.join(root, "backend/dist/routes/downloadRoutes.js"), "utf-8");
+  assert.doesNotMatch(downloadDist, /Case Title/i, "downloadRoutes must not render a Case Title line");
+  assert.doesNotMatch(downloadDist, /Validation Warning/i, "downloadRoutes must not render Validation Warnings");
+  const previewDist = readFileSync(path.join(root, "backend/dist/routes/previewRoutes.js"), "utf-8");
+  assert.doesNotMatch(previewDist, /Validation Warning/i, "previewRoutes must not render Validation Warnings");
+  assert.doesNotMatch(previewDist, /<strong>Case Title/i, "preview cover must not render a Case Title line");
+  const generateDist = readFileSync(path.join(root, "backend/dist/utils/generateDocuments.js"), "utf-8");
+  assert.doesNotMatch(generateDist, /Case Title/i, "generateDocuments must not render a Case Title line");
+}
+
+testHeadCoverageFromPageOne();
 testPageLineDisplay();
 testSanitizeSummaryLanguage();
 testOverviewSplitAndMarkdownParsing();
@@ -218,5 +343,6 @@ testRegroupMergesIntoBlocks();
 testAssemblyClampsToDocumentExtent();
 testAssemblyGroupsAndKeepsLinesForSinglePageBlocks();
 testFindSkippedSubstantivePages();
+await testCoverPageCustomerView();
 
 console.log("Summary output regression checks passed.");

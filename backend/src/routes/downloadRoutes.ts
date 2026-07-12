@@ -298,7 +298,6 @@ router.get(
           )
         : "";
       sourceFileName = metadata.sourceFileName || sourceFileName;
-      // Use caseCaption (extracted from document) for Case Title, fallback to user-provided title
       coverTitle = metadata.caseCaption || metadata.caseTitle || coverTitle;
       const depositionDateRaw: string | null = normalizeUnknownString(metadata.depositionDate);
       // If already in human-readable format (e.g., "July 7, 2022"), use as-is to avoid timezone shift.
@@ -361,31 +360,15 @@ router.get(
         const uploadDate = formatDateInTimeZoneMDY(metadata.uploadDate || job.createdAt || new Date());
         const downloadDate = formatDateInTimeZoneMDY(new Date());
 
-        // Build warnings section if any judge failed
-        const warningsSection: string[] = [];
-        if (metadata.judgeResults && !metadata.judgeResults.allPassed) {
-          warningsSection.push("", "⚠️ VALIDATION WARNINGS:", "-".repeat(30));
-          for (const judge of metadata.judgeResults.judges) {
-            if (!judge.passed || judge.warnings.length > 0) {
-              for (const w of judge.warnings) {
-                warningsSection.push(`• [${judge.name}] ${w}`);
-              }
-            }
-          }
-          warningsSection.push("");
-        }
-        
         const titlePage = [
           titleOfDocument || "DEPOSITION SUMMARY",
           "",
           ...(hasMultipleWitnesses ? [`Deponent: ${deponentName}`] : []),
-          `Case Title: ${coverTitle}`,
           `Source File: ${sourceFileName}`,
           ...(normalizedPages ? [`Pages: ${normalizedPages}`] : []),
           `Date of Deposition: ${depositionDateDisplay || "[Unknown]"}`,
           `Upload Date: ${uploadDate}`,
           `Download Date: ${downloadDate}`,
-          ...warningsSection,
           "",
           "=".repeat(50),
           "",
@@ -482,11 +465,6 @@ router.get(
                     ]
                   : []),
                 new Paragraph({
-                  children: [new TextRun({ text: "Case Title:", bold: true }), new TextRun(` ${coverTitle}`)],
-                  alignment: "left",
-                }),
-                new Paragraph({ children: [], spacing: { before: 80 } }),
-                new Paragraph({
                   children: [new TextRun({ text: "Source File:", bold: true }), new TextRun(` ${sourceFileName}`)],
                   alignment: "left",
                 }),
@@ -525,42 +503,7 @@ router.get(
                   ],
                   alignment: "left",
                 }),
-                // Add validation warnings if any
-                ...(() => {
-                  if (!metadata.judgeResults || metadata.judgeResults.allPassed) return [];
-                  const warningParas: Paragraph[] = [
-                    new Paragraph({ children: [], spacing: { before: 200 } }),
-                    new Paragraph({
-                      children: [
-                        new TextRun({ text: "⚠️ Validation Warnings:", bold: true, color: "856404" }),
-                      ],
-                      alignment: "left",
-                    }),
-                  ];
-                  for (const judge of metadata.judgeResults.judges) {
-                    if (!judge.passed || judge.warnings.length > 0) {
-                      for (const w of judge.warnings) {
-                        warningParas.push(
-                          new Paragraph({
-                            children: [
-                              new TextRun({ text: `• [${judge.name}] ${w}`, color: "856404" }),
-                            ],
-                            alignment: "left",
-                            spacing: { before: 60 },
-                          })
-                        );
-                      }
-                    }
-                  }
-                  return warningParas;
-                })(),
                 new Paragraph({ children: [], pageBreakBefore: true }),
-                // Body metadata — show only curated items
-                ...(() => {
-                  const paras: Paragraph[] = [];
-                  if (depositionDateDisplay) paras.push(new Paragraph(`Date of Deposition: ${depositionDateDisplay}`));
-                  return paras;
-                })(),
                 new Paragraph({ children: [], spacing: { before: 160 } }),
                 ...(depositionOverviewText
                   ? [
@@ -595,12 +538,12 @@ router.get(
                     new TableRow({
                       children: hasMultipleWitnesses
                         ? [
-                            new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
+                            new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] })] }),
                             new TableCell({ width: { size: 20, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Witness", bold: true })] })] }),
                             new TableCell({ width: { size: 65, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
                           ]
                         : [
-                            new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
+                            new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] })] }),
                             new TableCell({ width: { size: 82, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
                           ],
                     }),
@@ -712,9 +655,6 @@ router.get(
             contentH += pdf.heightOfString(deponentLine, lineOpts) + 10;
           }
           
-          const caseLine = `Case Title: ${coverTitle}`;
-          contentH += pdf.heightOfString(caseLine, lineOpts) + 10;
-          
           const fileLine = `Source File: ${sourceFileName}`;
           contentH += pdf.heightOfString(fileLine, lineOpts) + 10;
           
@@ -744,9 +684,6 @@ router.get(
             pdf.moveDown(0.5);
           }
 
-          pdf.font("Times-Roman").fontSize(14).text(`Case Title: ${coverTitle}`, { align: "left" });
-          pdf.moveDown(0.5);
-
           pdf.font("Times-Roman").fontSize(14).text(`Source File: ${sourceFileName}`, { align: "left" });
           pdf.moveDown(0.5);
 
@@ -765,33 +702,10 @@ router.get(
           pdf.font("Times-Roman").fontSize(14).text(`Upload Date: ${uploadDate}` , { align: "left" });
           pdf.moveDown(0.5);
           pdf.font("Times-Roman").fontSize(14).text(`Download Date: ${downloadDate}` , { align: "left" });
-
-          // Add validation warnings if any
-          if (metadata.judgeResults && !metadata.judgeResults.allPassed) {
-            pdf.moveDown(1);
-            pdf.font("Times-Bold").fontSize(12).fillColor("#856404").text("⚠️ Validation Warnings:", { align: "left" });
-            pdf.font("Times-Roman").fontSize(11).fillColor("#856404");
-            for (const judge of metadata.judgeResults.judges) {
-              if (!judge.passed || judge.warnings.length > 0) {
-                for (const w of judge.warnings) {
-                  pdf.moveDown(0.3);
-                  pdf.text(`• [${judge.name}] ${w}`, { align: "left" });
-                }
-              }
-            }
-            pdf.fillColor("black");
-          }
         } catch {}
 
         // New page for body
         pdf.addPage();
-
-        // Metadata — show only clean extracted items
-        pdf.font("Times-Roman").fontSize(12);
-        const details: string[] = [];
-        if (depositionDateDisplay) details.push(`Date of Deposition: ${depositionDateDisplay}`);
-        details.forEach((l) => pdf.text(l));
-        if (details.length) pdf.moveDown(0.5);
 
         if (depositionOverviewText) {
           pdf.font("Times-Bold").fontSize(12).text("Deposition overview", { align: "left" });
@@ -819,12 +733,12 @@ router.get(
           const headerH =
             (hasMultipleWitnesses
               ? Math.max(
-                  pdf.heightOfString("Page/Line", { width: col1Width - 2 * pad }),
+                  pdf.heightOfString("Page(s)", { width: col1Width - 2 * pad }),
                   pdf.heightOfString("Witness", { width: col2Width - 2 * pad }),
                   pdf.heightOfString("Summary", { width: col3Width - 2 * pad })
                 )
               : Math.max(
-                  pdf.heightOfString("Page/Line", { width: col1Width - 2 * pad }),
+                  pdf.heightOfString("Page(s)", { width: col1Width - 2 * pad }),
                   pdf.heightOfString("Summary", { width: col2Width - 2 * pad })
                 )) + pad * 2;
 
@@ -834,7 +748,7 @@ router.get(
           pdf.restore();
           pdf.fillColor('#000');
 
-          pdf.text("Page/Line", col1Left, yPos + pad, { width: col1Width - 2 * pad });
+          pdf.text("Page(s)", col1Left, yPos + pad, { width: col1Width - 2 * pad });
           if (hasMultipleWitnesses) {
             pdf.text("Witness", col2Left, yPos + pad, { width: col2Width - 2 * pad });
             pdf.text("Summary", summaryLeftMulti, yPos + pad, { width: col3Width - 2 * pad });
@@ -844,14 +758,38 @@ router.get(
           return headerH;
         };
 
+        // Rows with page overflow handling
+        const pageHeight = pdf.page.height;
+        const bottomMargin = 60; // Leave space at bottom
+
+        // Start a new page BEFORE drawing the header if the header + first row won't fit —
+        // otherwise the header orphans at the bottom of the overview page and gets redrawn on
+        // the next page (the duplicate-header bug, UAT R45 #2).
+        pdf.font("Times-Bold").fontSize(10);
+        const headerHEstimate =
+          pdf.heightOfString("Page(s)", { width: col1Width - 2 * pad }) + pad * 2;
+        let firstRowH = 0;
+        if (displayRows.length > 0) {
+          const r0 = displayRows[0];
+          pdf.font("Times-Roman").fontSize(9);
+          const a = pdf.heightOfString(r0.pageLine, { width: col1Width - 2 * pad });
+          const b = hasMultipleWitnesses
+            ? pdf.heightOfString(r0.witness, { width: col2Width - 2 * pad })
+            : pdf.heightOfString(r0.summary, { width: col2Width - 2 * pad });
+          const c = hasMultipleWitnesses
+            ? pdf.heightOfString(r0.summary, { width: col3Width - 2 * pad })
+            : 0;
+          firstRowH = Math.max(a, b, c) + pad * 2;
+        }
+        if (y + headerHEstimate + firstRowH > pageHeight - bottomMargin) {
+          pdf.addPage();
+          y = 80;
+        }
+
         const headerH = drawHeader(y);
         y += headerH;
         pdf.font("Times-Roman").fontSize(9);
 
-        // Rows with page overflow handling
-        const pageHeight = pdf.page.height;
-        const bottomMargin = 60; // Leave space at bottom
-        
         displayRows.forEach((row) => {
           pdf.font("Times-Roman").fontSize(9);
           const h1 = pdf.heightOfString(row.pageLine, { width: col1Width - 2 * pad });
@@ -897,8 +835,8 @@ router.get(
         setAttachmentFilename(res, uploadedTitle, "csv");
         const esc = (s: string) => '"' + s.replace(/"/g, '""') + '"';
         const header = hasMultipleWitnesses
-          ? '"Page/Line","Witness","Summary"'
-          : '"Page/Line","Summary"';
+          ? '"Page(s)","Witness","Summary"'
+          : '"Page(s)","Summary"';
         const lines = displayRows.map((row) =>
           hasMultipleWitnesses
             ? `${esc(row.pageLine)},${esc(row.witness)},${esc(row.summary)}`

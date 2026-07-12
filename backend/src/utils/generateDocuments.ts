@@ -102,9 +102,6 @@ export async function generateDocxBuffer(
         internalDocTitle
       )
     : "";
-  // Use caseCaption (extracted from document) for Case Title, fallback to user-provided title
-  const coverTitle =
-    metadata.caseCaption || metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
   const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
   const depositionDateRaw = normalizeUnknownString(metadata.depositionDate);
@@ -181,14 +178,6 @@ export async function generateDocxBuffer(
             : []),
           new Paragraph({
             children: [
-              new TextRun({ text: "Case Title:", bold: true }),
-              new TextRun(` ${coverTitle}`),
-            ],
-            alignment: "left",
-          }),
-          new Paragraph({ children: [], spacing: { before: 80 } }),
-          new Paragraph({
-            children: [
               new TextRun({ text: "Source File:", bold: true }),
               new TextRun(` ${sourceFileName}`),
             ],
@@ -236,12 +225,6 @@ export async function generateDocxBuffer(
             alignment: "left",
           }),
           new Paragraph({ children: [], pageBreakBefore: true }),
-          ...(() => {
-            const paras: Paragraph[] = [];
-            if (depositionDateDisplay)
-              paras.push(new Paragraph(`Date of Deposition: ${depositionDateDisplay}`));
-            return paras;
-          })(),
           new Paragraph({ children: [], spacing: { before: 160 } }),
           ...(depositionOverviewText
             ? [
@@ -276,12 +259,12 @@ export async function generateDocxBuffer(
               new TableRow({
                 children: hasMultipleWitnesses
                   ? [
-                      new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
+                      new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] })] }),
                       new TableCell({ width: { size: 20, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Witness", bold: true })] })] }),
                       new TableCell({ width: { size: 65, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
                     ]
                   : [
-                      new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page/Line", bold: true })] })] }),
+                      new TableCell({ width: { size: 18, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Page(s)", bold: true })] })] }),
                       new TableCell({ width: { size: 82, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] })] }),
                     ],
               }),
@@ -341,8 +324,6 @@ export async function generatePdfBuffer(
         internalDocTitle
       )
     : "";
-  const coverTitle =
-    metadata.caseCaption || metadata.caseTitle || job.file?.title || job.fileName?.replace(/\.[^.]+$/, "") || "Case";
   const sourceFileName = metadata.sourceFileName || job.fileName || "Unknown Source";
   const deponentName = metadata.deponent || job.file?.deponent || "Not Specified";
   const depositionDateRaw = normalizeUnknownString(metadata.depositionDate);
@@ -399,9 +380,6 @@ export async function generatePdfBuffer(
         contentH += pdf.heightOfString(deponentLine, lineOpts) + 10;
       }
 
-      const caseLine = `Case Title: ${coverTitle}`;
-      contentH += pdf.heightOfString(caseLine, lineOpts) + 10;
-
       const fileLine = `Source File: ${sourceFileName}`;
       contentH += pdf.heightOfString(fileLine, lineOpts) + 10;
 
@@ -432,9 +410,6 @@ export async function generatePdfBuffer(
         pdf.moveDown(0.5);
       }
 
-      pdf.font("Times-Roman").fontSize(14).text(`Case Title: ${coverTitle}`, { align: "left" });
-      pdf.moveDown(0.5);
-
       pdf.font("Times-Roman").fontSize(14).text(`Source File: ${sourceFileName}`, { align: "left" });
       pdf.moveDown(0.5);
 
@@ -457,12 +432,6 @@ export async function generatePdfBuffer(
 
     // New page for body
     pdf.addPage();
-
-    pdf.font("Times-Roman").fontSize(12);
-    const details: string[] = [];
-    if (depositionDateDisplay) details.push(`Date of Deposition: ${depositionDateDisplay}`);
-    details.forEach((l) => pdf.text(l));
-    if (details.length) pdf.moveDown(0.5);
 
     if (depositionOverviewText) {
       pdf.font("Times-Bold").fontSize(12).text("Deposition overview", { align: "left" });
@@ -488,12 +457,12 @@ export async function generatePdfBuffer(
       const headerH =
         (hasMultipleWitnesses
           ? Math.max(
-              pdf.heightOfString("Page/Line", { width: col1Width - 2 * pad }),
+              pdf.heightOfString("Page(s)", { width: col1Width - 2 * pad }),
               pdf.heightOfString("Witness", { width: col2Width - 2 * pad }),
               pdf.heightOfString("Summary", { width: col3Width - 2 * pad })
             )
           : Math.max(
-              pdf.heightOfString("Page/Line", { width: col1Width - 2 * pad }),
+              pdf.heightOfString("Page(s)", { width: col1Width - 2 * pad }),
               pdf.heightOfString("Summary", { width: col2Width - 2 * pad })
             )) + pad * 2;
 
@@ -503,7 +472,7 @@ export async function generatePdfBuffer(
       pdf.restore();
       pdf.fillColor("#000");
 
-      pdf.text("Page/Line", col1Left, yPos + pad, { width: col1Width - 2 * pad });
+      pdf.text("Page(s)", col1Left, yPos + pad, { width: col1Width - 2 * pad });
       if (hasMultipleWitnesses) {
         pdf.text("Witness", col2Left, yPos + pad, { width: col2Width - 2 * pad });
         pdf.text("Summary", summaryLeftMulti, yPos + pad, { width: col3Width - 2 * pad });
@@ -513,12 +482,36 @@ export async function generatePdfBuffer(
       return headerH;
     };
 
+    const pageHeight = pdf.page.height;
+    const bottomMargin = 60;
+
+    // Start a new page BEFORE drawing the header if the header + first row won't fit on the
+    // current page — otherwise the header orphans at the bottom of the overview page and gets
+    // redrawn on the next page (the duplicate-header bug, UAT R45 #2).
+    pdf.font("Times-Bold").fontSize(10);
+    const headerHEstimate =
+      pdf.heightOfString("Page(s)", { width: col1Width - 2 * pad }) + pad * 2;
+    let firstRowH = 0;
+    if (displayRows.length > 0) {
+      const r0 = displayRows[0];
+      pdf.font("Times-Roman").fontSize(9);
+      const a = pdf.heightOfString(r0.pageLine, { width: col1Width - 2 * pad });
+      const b = hasMultipleWitnesses
+        ? pdf.heightOfString(r0.witness, { width: col2Width - 2 * pad })
+        : pdf.heightOfString(r0.summary, { width: col2Width - 2 * pad });
+      const c = hasMultipleWitnesses
+        ? pdf.heightOfString(r0.summary, { width: col3Width - 2 * pad })
+        : 0;
+      firstRowH = Math.max(a, b, c) + pad * 2;
+    }
+    if (y + headerHEstimate + firstRowH > pageHeight - bottomMargin) {
+      pdf.addPage();
+      y = 80;
+    }
+
     const headerH = drawHeader(y);
     y += headerH;
     pdf.font("Times-Roman").fontSize(9);
-
-    const pageHeight = pdf.page.height;
-    const bottomMargin = 60;
 
     displayRows.forEach((row) => {
       pdf.font("Times-Roman").fontSize(9);
