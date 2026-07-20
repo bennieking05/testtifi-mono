@@ -2,7 +2,11 @@ import express, { Response } from "express";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken, type AuthRequest } from "../middlewares/authMiddleware";
 import { allocateCreditsFIFO, InsufficientCreditsError } from "../billing/fifoAllocator";
-import { expireUnusedCredits, getEffectiveCreditBalance } from "../billing/creditExpiration";
+import {
+  expireUnusedCredits,
+  getEffectiveCreditBalance,
+  LEDGER_EXPIRATION_PREFIX,
+} from "../billing/creditExpiration";
 import { stringify } from "csv-stringify/sync";
 
 let prisma: PrismaClient = new PrismaClient();
@@ -205,6 +209,57 @@ const PAGE_SIZE = 20;
 const CURSOR_SEPARATOR = "::";
 
 type LedgerEntryTypeValue = "credit" | "debit" | "adjustment";
+type LedgerFilterTypeValue = LedgerEntryTypeValue | "expired" | "refund";
+
+export const LEDGER_REFUND_PREFIX = "refund:";
+
+export type LedgerDisplayType = LedgerEntryTypeValue | "expired" | "refund";
+
+/**
+ * Expirations and refunds are stored as type "credit" rows (negative/positive
+ * amounts, distinguished only by their idempotency-key prefix). Surfacing the
+ * raw type confused UAT testers ("Credit −50"), so the API reports a display
+ * type derived from the prefix.
+ */
+export const classifyLedgerEntry = (entry: {
+  type: string;
+  idempotencyKey?: string | null;
+}): { displayType: LedgerDisplayType; expired: boolean; refund: boolean } => {
+  const key = entry.idempotencyKey ?? "";
+  const expired = entry.type === "credit" && key.startsWith(LEDGER_EXPIRATION_PREFIX);
+  const refund = entry.type === "credit" && key.startsWith(LEDGER_REFUND_PREFIX);
+  const displayType: LedgerDisplayType = expired
+    ? "expired"
+    : refund
+      ? "refund"
+      : (entry.type as LedgerEntryTypeValue);
+  return { displayType, expired, refund };
+};
+
+export const buildHistoryTypeFilter = (
+  type: LedgerFilterTypeValue | undefined
+): Prisma.LedgerEntryWhereInput => {
+  switch (type) {
+    case "expired":
+      return { type: "credit", idempotencyKey: { startsWith: LEDGER_EXPIRATION_PREFIX } };
+    case "refund":
+      return { type: "credit", idempotencyKey: { startsWith: LEDGER_REFUND_PREFIX } };
+    case "credit":
+      // Plain "Credits" means purchased/granted credits — not expirations or refunds.
+      return {
+        type: "credit",
+        NOT: [
+          { idempotencyKey: { startsWith: LEDGER_EXPIRATION_PREFIX } },
+          { idempotencyKey: { startsWith: LEDGER_REFUND_PREFIX } },
+        ],
+      };
+    case "debit":
+    case "adjustment":
+      return { type };
+    default:
+      return {};
+  }
+};
 
 const parseDate = (raw: unknown): Date | undefined => {
   if (typeof raw !== "string" || !raw.trim()) return undefined;
@@ -212,9 +267,15 @@ const parseDate = (raw: unknown): Date | undefined => {
   return Number.isNaN(parsed.valueOf()) ? undefined : parsed;
 };
 
-const parseType = (raw: unknown): LedgerEntryTypeValue | undefined => {
-  if (raw === "credit" || raw === "debit" || raw === "adjustment") {
-    return raw as LedgerEntryTypeValue;
+const parseType = (raw: unknown): LedgerFilterTypeValue | undefined => {
+  if (
+    raw === "credit" ||
+    raw === "debit" ||
+    raw === "adjustment" ||
+    raw === "expired" ||
+    raw === "refund"
+  ) {
+    return raw as LedgerFilterTypeValue;
   }
   return undefined;
 };
@@ -263,7 +324,7 @@ router.get(
     try {
       const filters: Prisma.LedgerEntryWhereInput = {
         userId,
-        type,
+        ...buildHistoryTypeFilter(type),
         createdAt: {
           gte: from,
           lte: to,
@@ -316,7 +377,7 @@ router.get(
           sliced.map((entry) => ({
             id: entry.id,
             date: entry.createdAt.toISOString(),
-            type: entry.type,
+            type: classifyLedgerEntry(entry).displayType,
             credits: entry.credits,
             description: entry.description ?? "",
             summaryId: entry.summaryId ?? "",
@@ -340,6 +401,7 @@ router.get(
         entries: sliced.map((entry) => ({
           id: entry.id,
           type: entry.type,
+          ...classifyLedgerEntry(entry),
           credits: entry.credits,
           description: entry.description,
           summaryId: entry.summaryId,

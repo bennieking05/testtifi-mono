@@ -43,6 +43,8 @@ const {
 const {
   debitCreditsForSummary,
   refundCreditsForSummary,
+  classifyLedgerEntry,
+  buildHistoryTypeFilter,
   __setPrismaClientForTests,
   __resetPrismaClientForTests,
 } = loadBuiltModule("backend/dist/routes/billingRoutes.js");
@@ -67,6 +69,63 @@ function testComputeCreditsFromLineItems() {
     0,
     "items without credits metadata contribute 0"
   );
+}
+
+// ── ledger display classification (UAT R48: expiry rows must not read "Credit −50") ──
+function testClassifyLedgerEntry() {
+  // Expiration: stored as credit + "expire:" idempotency key.
+  assert.deepEqual(
+    classifyLedgerEntry({ type: "credit", idempotencyKey: "expire:purchase_1" }),
+    { displayType: "expired", expired: true, refund: false },
+    "expiry rows classify as expired"
+  );
+  // Refund: stored as credit + "refund:" key.
+  assert.deepEqual(
+    classifyLedgerEntry({ type: "credit", idempotencyKey: "refund:sum_1" }),
+    { displayType: "refund", expired: false, refund: true },
+    "refund rows classify as refund"
+  );
+  // Genuine purchase credit.
+  assert.deepEqual(
+    classifyLedgerEntry({ type: "credit", idempotencyKey: "pi:pi_123" }),
+    { displayType: "credit", expired: false, refund: false }
+  );
+  // Debit is untouched even without a key.
+  assert.deepEqual(
+    classifyLedgerEntry({ type: "debit", idempotencyKey: null }),
+    { displayType: "debit", expired: false, refund: false }
+  );
+  // Prefixes only reclassify credit rows.
+  assert.equal(
+    classifyLedgerEntry({ type: "debit", idempotencyKey: "expire:x" }).displayType,
+    "debit",
+    "expire prefix on a non-credit row does not reclassify"
+  );
+}
+
+function testBuildHistoryTypeFilter() {
+  assert.deepEqual(
+    buildHistoryTypeFilter("expired"),
+    { type: "credit", idempotencyKey: { startsWith: "expire:" } },
+    "expired filter targets expire-prefixed credit rows"
+  );
+  assert.deepEqual(
+    buildHistoryTypeFilter("refund"),
+    { type: "credit", idempotencyKey: { startsWith: "refund:" } }
+  );
+  assert.deepEqual(
+    buildHistoryTypeFilter("credit"),
+    {
+      type: "credit",
+      NOT: [
+        { idempotencyKey: { startsWith: "expire:" } },
+        { idempotencyKey: { startsWith: "refund:" } },
+      ],
+    },
+    "credit filter excludes expirations and refunds"
+  );
+  assert.deepEqual(buildHistoryTypeFilter("debit"), { type: "debit" });
+  assert.deepEqual(buildHistoryTypeFilter(undefined), {}, "no filter -> all types");
 }
 
 // ── webhook credit-grant idempotency (recordPurchaseCredit) ───────────────────
@@ -296,6 +355,8 @@ async function testCreditConsumption() {
 const run = async () => {
   testDetermineRefundCredits();
   testComputeCreditsFromLineItems();
+  testClassifyLedgerEntry();
+  testBuildHistoryTypeFilter();
   await testWebhookCreditIdempotency();
   await testRefundLedger();
   await testCreditConsumption();
