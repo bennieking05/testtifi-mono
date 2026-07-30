@@ -18,6 +18,7 @@ export interface Summary {
   id: string;
   fileTitle: string;
   fileName: string;
+  deponentName?: string | null;
   date: string;
   pages: number;
   totalPages?: number;

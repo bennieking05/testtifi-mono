@@ -64,7 +64,6 @@ const Summaries: React.FC = () => {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [filterDeponents, setFilterDeponents] = useState<string[]>([]);
-  const [filterCases, setFilterCases] = useState<string[]>([]);
 
   const {
     data: allSummaries = [],
@@ -84,14 +83,6 @@ const Summaries: React.FC = () => {
       if (s.deponentName) names.add(s.deponentName);
     });
     return Array.from(names).sort();
-  }, [allSummaries]);
-
-  const uniqueCases = useMemo(() => {
-    const cases = new Set<string>();
-    allSummaries.forEach((s) => {
-      if (s.caseTitle) cases.add(s.caseTitle);
-    });
-    return Array.from(cases).sort();
   }, [allSummaries]);
 
   // Apply filters
@@ -126,14 +117,9 @@ const Summaries: React.FC = () => {
         return false;
       }
 
-      // Case filter
-      if (filterCases.length > 0 && !filterCases.includes(s.caseTitle || "")) {
-        return false;
-      }
-
       return true;
     });
-  }, [allSummaries, timeFilter, dateRange, filterDeponents, filterCases]);
+  }, [allSummaries, timeFilter, dateRange, filterDeponents]);
 
   const handleTimeFilterChange = (value: TimeFilter) => {
     setTimeFilter(value);
@@ -160,10 +146,9 @@ const Summaries: React.FC = () => {
 
   // CSV export
   const downloadCsv = () => {
-    const header = ["Deponent", "Case Title", "Date", "Status", "Pages"];
+    const header = ["Deponent", "Date", "Status", "Pages"];
     const rows = filteredSummaries.map((s) => [
       s.deponentName || "Unknown",
-      s.caseTitle || "",
       format(parseDateSafe(s.date), "MMM d, yyyy"),
       s.status,
       s.totalPages || s.pages || 0,
@@ -331,36 +316,6 @@ const Summaries: React.FC = () => {
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setFilterDeponents([])}>Clear</DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Case Filter */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="text-xs sm:text-sm whitespace-nowrap">
-                  Cases ({filterCases.length || "All"})
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="max-h-64 overflow-y-auto">
-                <DropdownMenuLabel>Filter by Case</DropdownMenuLabel>
-                {uniqueCases.map((c) => (
-                  <DropdownMenuCheckboxItem
-                    key={c}
-                    checked={filterCases.includes(c)}
-                    onCheckedChange={() => toggleFilter(c, filterCases, setFilterCases)}
-                  >
-                    {c}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                {uniqueCases.length === 0 && (
-                  <DropdownMenuItem disabled>No cases found</DropdownMenuItem>
-                )}
-                {filterCases.length > 0 && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setFilterCases([])}>Clear</DropdownMenuItem>
                   </>
                 )}
               </DropdownMenuContent>

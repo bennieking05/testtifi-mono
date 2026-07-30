@@ -38,6 +38,7 @@ import AIInsights from "./pages/AIInsights";
 import Collaboration from "./pages/Collaboration";
 import Billing from "./pages/Billing";
 import { DepositionFactLoader } from "@/components/ui/DepositionFactLoader";
+import CookieConsent from "@/components/CookieConsent";
 
 const queryClient = new QueryClient();
 
@@ -319,6 +320,9 @@ const App = () => {
             <Route path="*" element={<NotFound />} />
           </Routes>
             </SnapshotProvider>
+            {/* Must stay INSIDE BrowserRouter — CookieConsent renders a <Link>,
+                which throws without router context and blanks the whole app. */}
+            <CookieConsent />
           </BrowserRouter>
         </TooltipProvider>
       </ThemeProvider>

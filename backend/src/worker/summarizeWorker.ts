@@ -639,7 +639,31 @@ export function extractTranscriptPagesFromText(fullText: string): Map<number, st
   if (thinContentCount > 0) {
     console.log(`[extractTranscriptPagesFromText] ${thinContentCount} pages had minimal content`);
   }
-  
+
+  // HEAD COVERAGE (UAT R45 #3): the text BEFORE the first detected anchor (title page,
+  // appearances of counsel, stipulations, exhibits marked) is otherwise dropped, so the
+  // summary starts at the first anchor (e.g. p.6). Assign that leading text to page 1 and
+  // fill pages 2..firstPage-1 as placeholders, so the front matter is summarized and the
+  // summary begins at p.1. (regroupIntoBlocks then merges these into a single p.1-N row.)
+  if (finalAnchors.length > 0) {
+    const firstPage = finalAnchors[0].pageNum;
+    if (firstPage > 1 && !pageMap.has(1)) {
+      const leadText = fullText.slice(0, finalAnchors[0].position).trim();
+      pageMap.set(
+        1,
+        leadText.replace(/\s/g, "").length > 5
+          ? leadText
+          : `[Page 1 - front matter (title/appearances) not clearly captured in OCR]`
+      );
+      for (let p = 2; p < firstPage; p++) {
+        if (!pageMap.has(p)) pageMap.set(p, `[Page ${p} - front matter]`);
+      }
+      console.log(
+        `[extractTranscriptPagesFromText] HEAD: assigned front-matter text to pages 1..${firstPage - 1} (first anchor was p.${firstPage})`
+      );
+    }
+  }
+
   return pageMap;
 }
 
@@ -1359,7 +1383,7 @@ VALID EXAMPLES:
 RULES:
 1. Cover ALL pages from ${firstPage} to ${lastPage} with NO GAPS
 2. Each row: | Page/Line cell | Summary cell | — no Topic column
-3. 3-8 sentences per row where substantive
+3. 2-3 concise sentences per row (key facts only: who/what, figures, exhibits, objections briefly) — do NOT write long paragraphs or restate testimony verbatim
 4. For pages with no substantive testimony only, use | p.X | __SKIP__ | (literal __SKIP__ in Summary) — do not describe OCR, blanks, illegibility, or procedural pages in prose
 
 TRANSCRIPT TEXT:
@@ -1418,7 +1442,7 @@ OUTPUT FORMAT - 2 COLUMNS ONLY:
 
 INSTRUCTIONS:
 - First column: Prefer p.X or p.X-Y for full pages; use p.X:lines only for partial-page coverage when lines are visible (e.g. compared to "${pagesRangeStr}")
-- Second column: 3-6 sentences: names, dates, exhibits, key facts — or exactly __SKIP__ for non-substantive pages only (no prose about illegible/empty/minimal content)
+- Second column: 2-3 concise sentences: names, dates, exhibits, key facts — or exactly __SKIP__ for non-substantive pages only (no prose about illegible/empty/minimal content)
 - NO Topic column
 - SKIP any Index, Errata, Concordance, or Certificate sections
 
@@ -1864,9 +1888,19 @@ export function regroupIntoBlocks(
     return { startPage, endPage, lineNumbers, summary };
   };
 
+  // Hard maximum pages per row (UAT R45 #4: the 5:1 deliverable must never exceed ~6 pages).
+  const maxSpan = blockSize + 1;
+
   const blocks: PageRangeEntry[] = [];
   let cur: PageRangeEntry[] = [];
   for (const e of sorted) {
+    // Flush the current block BEFORE adding an entry that would push its span past maxSpan,
+    // so merged blocks never exceed the cap (previously a run of sub-blockSize entries could
+    // accumulate to 8 pages).
+    if (cur.length > 0 && e.endPage - cur[0].startPage + 1 > maxSpan) {
+      blocks.push(mergeParts(cur));
+      cur = [];
+    }
     cur.push(e);
     const span = cur[cur.length - 1].endPage - cur[0].startPage + 1;
     if (span >= blockSize) {
@@ -1876,27 +1910,21 @@ export function regroupIntoBlocks(
   }
   if (cur.length > 0) blocks.push(mergeParts(cur));
 
-  // Absorb a trailing lone page into the previous block to avoid a dangling p.X row,
-  // as long as the combined block stays within blockSize+1 pages.
-  if (blocks.length >= 2) {
-    const last = blocks[blocks.length - 1];
-    const prev = blocks[blocks.length - 2];
-    if (
-      last.startPage === last.endPage &&
-      last.startPage === prev.endPage + 1 &&
-      last.endPage - prev.startPage + 1 <= blockSize + 1
-    ) {
-      const subs = [prev, last]
-        .filter((b) => !isPlaceholderSummary(b.summary))
-        .map((b) => b.summary);
-      prev.endPage = last.endPage;
-      prev.summary = subs.length > 0 ? subs.join(" ") : "—";
-      prev.lineNumbers = "";
-      blocks.pop();
+  // Safety: split any block still wider than maxSpan (e.g. a single oversized model/condensed
+  // entry that couldn't be flushed) into <=maxSpan sub-rows so no row ever exceeds the cap.
+  const capped: PageRangeEntry[] = [];
+  for (const b of blocks) {
+    if (b.endPage - b.startPage + 1 <= maxSpan) {
+      capped.push(b);
+      continue;
+    }
+    for (let s = b.startPage; s <= b.endPage; s += maxSpan) {
+      const e = Math.min(s + maxSpan - 1, b.endPage);
+      capped.push({ startPage: s, endPage: e, lineNumbers: "", summary: b.summary });
     }
   }
 
-  return blocks;
+  return capped;
 }
 
 /**
@@ -2110,7 +2138,7 @@ IMPORTANT:
 - These pages were already determined to contain substantive transcript text. Do NOT return __SKIP__ unless a page is genuinely blank/illegible.
 - Cover EVERY listed page with NO gaps.
 
-FORMAT: | p.X-Y | Summary | (2 columns only; start a new row at each clear subject change — single-page rows are fine; use p.X-Y for consecutive same-subject pages; add line range only for partial pages). Refer to the deponent by last name or "the witness"; never use he/she/his/her.
+FORMAT: | p.X-Y | Summary | (2 columns only; group ~5-6 consecutive pages per row, never more than 6; 2-3 concise sentences per row). Refer to the deponent by last name or "the witness"; never use he/she/his/her.
 
 TRANSCRIPT TEXT:
 ${batch.text}
@@ -2491,6 +2519,38 @@ async function work() {
           if (ocrGuess && ocrGuess > 0) transcriptMaxPage = ocrGuess;
         } catch (e) {
           console.warn(`[${job.id}] Vision page-count probe failed; continuing without it`);
+        }
+      }
+
+      // TAIL EXTENSION (UAT R45 #6): for multi-up/condensed transcripts (transcriptMax > pdf
+      // pages), the last pages (certificate/errata) often lack "Page N" markers, so the
+      // detected max can be a few pages short (e.g. 237 vs 239). Re-read the last few PDF
+      // pages and, if they reveal a slightly higher page number/footer, extend — capped just
+      // above the detected max to reject OCR noise. (1-up transcripts are handled by tailSlack
+      // in chooseTotalTranscriptPages, so this only runs for multi-up.)
+      if (transcriptMaxPage > 0 && transcriptMaxPage > pdfPageCount) {
+        try {
+          const tailPages = Array.from({ length: 6 }, (_, i) => pdfPageCount - i).filter((n) => n >= 1);
+          const ocrTail = await extractTextWithVision(gcsUri, `${job.id}-tailmax`, { pages: tailPages });
+          const cap = Math.ceil(transcriptMaxPage * 1.1) + 2;
+          let tailMax = transcriptMaxPage;
+          const tailPatterns = [
+            /\b(?:Page|Pg\.?)\s+(\d{1,6})\b/gi,
+            /\(\s*Pages?\s+\d+\s*[-–—]\s*(\d{1,6})\s*\)/gi,
+            /\bof\s+(\d{1,6})\b/gi,
+          ];
+          for (const re of tailPatterns) {
+            for (const m of ocrTail.matchAll(re)) {
+              const n = Number.parseInt(m[1], 10);
+              if (Number.isFinite(n) && n > tailMax && n <= cap) tailMax = n;
+            }
+          }
+          if (tailMax > transcriptMaxPage) {
+            console.log(`[${job.id}] Tail probe extended transcript max ${transcriptMaxPage} -> ${tailMax}`);
+            transcriptMaxPage = tailMax;
+          }
+        } catch (e) {
+          console.warn(`[${job.id}] Tail max probe failed; continuing`);
         }
       }
 
