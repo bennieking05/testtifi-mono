@@ -152,7 +152,7 @@ router.get(
         <table>
           <thead>
             <tr>
-              <th style="width: 15%">Page/Line</th>
+              <th style="width: 15%">Page(s)</th>
               <th style="width: 20%">Witness</th>
               <th style="width: 65%">Summary</th>
             </tr>
@@ -165,7 +165,7 @@ router.get(
         <table>
           <thead>
             <tr>
-              <th style="width: 18%">Page/Line</th>
+              <th style="width: 18%">Page(s)</th>
               <th style="width: 82%">Summary</th>
             </tr>
           </thead>
@@ -206,7 +206,6 @@ router.get(
         code, pre { font-family: "Courier New", Courier, monospace; }
       `;
 
-      const coverTitle = metadata.caseCaption || metadata.caseTitle || job.file?.title || (job.file?.fileName || job.fileName).replace(/\.[^.]+$/, "");
       const coverPages = (metadata.totalPages && metadata.totalPages > 0 ? String(metadata.totalPages) : job.totalPages && job.totalPages > 0 ? String(job.totalPages) : job.file?.pages ?? "") || "";
       const logoDataUri = getLogoDataUri();
       const logoHtml = logoDataUri ? `<img src="${logoDataUri}" alt="Testifi AI Logo" />` : "";
@@ -219,17 +218,6 @@ router.get(
       const uploadDate = formatDateInTimeZoneMDY(metadata.uploadDate || job.createdAt || new Date());
       const downloadDate = formatDateInTimeZoneMDY(new Date());
 
-      let warningsHtml = "";
-      if (metadata.judgeResults && !metadata.judgeResults.allPassed) {
-        const warningsList = metadata.judgeResults.judges
-          .filter((j) => !j.passed || j.warnings.length > 0)
-          .flatMap((j) => j.warnings.map((w) => `<li><strong>${escapeHtml(j.name)}:</strong> ${escapeHtml(w)}</li>`))
-          .join("");
-        if (warningsList) {
-          warningsHtml = `<div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 12px; margin: 20px 0;"><strong style="color: #856404;">⚠️ Validation Warnings:</strong><ul style="margin: 8px 0 0 0; padding-left: 20px; color: #856404;">${warningsList}</ul></div>`;
-        }
-      }
-      
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(`<!doctype html>
 <html lang="en">
@@ -240,13 +228,12 @@ router.get(
     <h1>${titleOfDocument}</h1>
     <div style="text-align: left; margin: 20px 0;">
       ${hasMultipleWitnesses ? `<p><strong>Deponent:</strong> ${deponentName}</p>` : ""}
-      <p><strong>Case Title:</strong> ${coverTitle}</p>
       <p><strong>Source File:</strong> ${job.fileName || "Unknown"}</p>
       ${coverPages ? `<p><strong>Pages:</strong> ${coverPages}</p>` : ""}
       <p><strong>Date of Deposition:</strong> ${depositionDateDisplay || "[Unknown]"}</p>
       <p><strong>Upload Date:</strong> ${uploadDate}</p>
       <p><strong>Download Date:</strong> ${downloadDate}</p>
-    </div>${warningsHtml}
+    </div>
   </div>
   <div class="page">${htmlBody}</div>
 </body>

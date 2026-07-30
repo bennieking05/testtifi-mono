@@ -69,12 +69,33 @@ export const UsageHistory: React.FC = () => {
     return balance;
   };
 
-  const getTypeColor = (type: string) => {
+  // Expirations/refunds are stored as "credit" rows; show the derived display
+  // type so a −50 expiry never reads as "Credit −50" (UAT Round 48).
+  const getDisplayType = (entry: LedgerEntry) =>
+    entry.displayType ??
+    (entry.expired ? "expired" : entry.refund ? "refund" : entry.type);
+
+  const getTypeLabel = (entry: LedgerEntry) => {
+    const type = getDisplayType(entry);
     switch (type) {
+      case "expired":
+        return "Expired";
+      case "refund":
+        return "Refund";
+      default:
+        return type.charAt(0).toUpperCase() + type.slice(1);
+    }
+  };
+
+  const getTypeColor = (entry: LedgerEntry) => {
+    switch (getDisplayType(entry)) {
       case "credit":
+      case "refund":
         return "text-green-600";
       case "debit":
         return "text-red-600";
+      case "expired":
+        return "text-amber-600";
       case "adjustment":
         return "text-blue-600";
       default:
@@ -85,6 +106,17 @@ export const UsageHistory: React.FC = () => {
   const getCreditsDisplay = (credits: number) => {
     const displayValue = Math.abs(credits).toLocaleString();
     return credits >= 0 ? `+${displayValue}` : `-${displayValue}`;
+  };
+
+  const getDescription = (entry: LedgerEntry) => {
+    const type = getDisplayType(entry);
+    if (type === "debit") {
+      return `Summary generated: ${entry.description || "Deposition summary"}`;
+    }
+    if (type === "refund") {
+      return entry.description || "Refund for failed summary";
+    }
+    return entry.description;
   };
 
   useEffect(() => {
@@ -225,6 +257,8 @@ export const UsageHistory: React.FC = () => {
                   <SelectItem value="all">All Types</SelectItem>
                   <SelectItem value="credit">Credits</SelectItem>
                   <SelectItem value="debit">Debits</SelectItem>
+                  <SelectItem value="expired">Expired</SelectItem>
+                  <SelectItem value="refund">Refunds</SelectItem>
                   <SelectItem value="adjustment">Adjustments</SelectItem>
                 </SelectContent>
               </Select>
@@ -341,7 +375,7 @@ export const UsageHistory: React.FC = () => {
                     <th className="text-right py-3 px-4 font-medium">Credits</th>
                     <th className="text-left py-3 px-4 font-medium">Description</th>
                     <th className="text-left py-3 px-4 font-medium">Source</th>
-                    <th className="text-right py-3 px-4 font-medium">Balance</th>
+                    <th className="text-right py-3 px-4 font-medium">Balance after</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -353,22 +387,21 @@ export const UsageHistory: React.FC = () => {
                           {format(new Date(entry.createdAt), "MMM dd, yyyy HH:mm")}
                         </td>
                         <td className="py-3 px-4">
-                          <span className={cn("text-sm font-medium capitalize", getTypeColor(entry.type))}>
-                            {entry.type}
+                          <span className={cn("text-sm font-medium", getTypeColor(entry))}>
+                            {getTypeLabel(entry)}
                           </span>
                         </td>
-                        <td className={cn("py-3 px-4 text-right font-mono font-semibold", getTypeColor(entry.type))}>
+                        <td className={cn("py-3 px-4 text-right font-mono font-semibold", getTypeColor(entry))}>
                           {getCreditsDisplay(entry.credits)}
                         </td>
                         <td className="py-3 px-4 text-sm space-y-1">
-                          <div>{entry.description}</div>
-                          {entry.description?.toLowerCase().includes("expired unused credits") && (
+                          <div>{getDescription(entry)}</div>
+                          {(entry.expired ||
+                            entry.description?.toLowerCase().includes("expired unused credits")) && (
                             <Badge variant="destructive" className="text-xs">
                               Expired
                             </Badge>
                           )}
-                        </td>
-                        <td className="py-3 px-4 text-sm">
                           {entry.summaryId && (
                             <Button
                               variant="link"
@@ -380,7 +413,9 @@ export const UsageHistory: React.FC = () => {
                               View summary
                             </Button>
                           )}
-                          {entry.purchase && (
+                        </td>
+                        <td className="py-3 px-4 text-sm">
+                          {(entry.purchase || (entry.allocations?.length ?? 0) > 0) && (
                             <Button
                               variant="link"
                               size="sm"
@@ -401,6 +436,12 @@ export const UsageHistory: React.FC = () => {
                 </tbody>
               </table>
             </div>
+
+            <p className="mt-4 text-xs text-muted-foreground">
+              "Balance after" shows your credit balance immediately after each transaction
+              (newest first). Unused credits expire 3 days after purchase — expired rows
+              remove them from your balance, so once all credits expire your balance is 0.
+            </p>
 
             <div className="mt-6 flex flex-col sm:flex-row sm:justify-between gap-3 sm:items-center">
               <Button

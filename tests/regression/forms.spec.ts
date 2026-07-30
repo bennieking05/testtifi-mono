@@ -245,8 +245,10 @@ test.describe('Checkout Form', () => {
   test('should navigate to Dashboard from checkout via escape links', async ({ page }) => {
     await page.goto('/checkout');
     await page.waitForLoadState('domcontentloaded');
-    await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
-    await page.getByRole('link', { name: 'Dashboard' }).click();
+    // Scope to main content — the sidebar nav also has a "Dashboard" link.
+    const escapeLink = page.getByRole('main').getByRole('link', { name: 'Dashboard' });
+    await expect(escapeLink).toBeVisible();
+    await escapeLink.click();
     await expect(page).toHaveURL(/\/dashboard/);
   });
 

@@ -4,6 +4,10 @@ import api from "@/lib/axios";
 export interface LedgerEntry {
   id: string;
   type: "credit" | "debit" | "adjustment";
+  /** Presentation type: expirations/refunds are stored as "credit" rows but displayed distinctly. */
+  displayType?: "credit" | "debit" | "adjustment" | "expired" | "refund";
+  expired?: boolean;
+  refund?: boolean;
   credits: number;
   description: string;
   summaryId?: string;
@@ -14,11 +18,11 @@ export interface LedgerEntry {
     creditsAdded: number;
     status: string;
   };
-  creditAllocations?: Array<{
+  allocations?: Array<{
+    id: string;
+    purchaseId: string;
     creditsUsed: number;
-    purchase?: {
-      stripePaymentIntentId: string;
-    };
+    stripePaymentIntentId: string | null;
   }>;
 }
 

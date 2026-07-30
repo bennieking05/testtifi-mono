@@ -99,6 +99,7 @@ router.get(
             id: job.id,
             fileTitle: file?.title || job.fileName,
             fileName: file?.fileName || job.fileName,
+            deponentName: file?.deponent ?? null,
             summaryUrl: signedUrl,
             date: job.createdAt.toISOString(),
             pages,

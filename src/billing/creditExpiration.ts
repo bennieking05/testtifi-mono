@@ -32,6 +32,11 @@ async function expireLegacyCredits(
     type: "credit",
     purchaseId: null,
     createdAt: { lt: cutoff },
+    // Exclude refund entries and expiration entries from legacy expiration
+    NOT: [
+      { idempotencyKey: { startsWith: "refund:" } },
+      { idempotencyKey: { startsWith: LEDGER_EXPIRATION_PREFIX } },
+    ],
   };
 
   if (opts.userId) {
@@ -198,7 +203,7 @@ export async function getEffectiveCreditBalance(
     const entryCount = await prisma.ledgerEntry.count({ where: { userId } });
     const ledgerBalance = toNumber(balanceAgg._sum.credits);
     if (entryCount > 0 || ledgerBalance !== 0) {
-      return ledgerBalance;
+      return Math.max(ledgerBalance, 0);
     }
   } catch (error: any) {
     const code: string | undefined = error?.code || error?.meta?.code || error?.name;
